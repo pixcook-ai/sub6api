@@ -14,7 +14,7 @@ import (
 func TestMigrationPreservesIdentityUnknownFieldsAndTTL(t *testing.T) {
 	s := miniredis.RunT(t)
 	rdb := redis.NewClient(&redis.Options{Addr: s.Addr()})
-	t.Cleanup(func() { rdb.Close() })
+	t.Cleanup(func() { _ = rdb.Close() })
 	ctx := context.Background()
 	raw := `{"ClientID":"stable","UserAgent":"claude-cli/2.1.283 (external, cli)","UpdatedAt":123,"StainlessOS":"Windows","future":{"large":9007199254740993}}`
 	if err := rdb.Set(ctx, "fingerprint:7", raw, time.Hour).Err(); err != nil {
@@ -33,8 +33,12 @@ func TestMigrationPreservesIdentityUnknownFieldsAndTTL(t *testing.T) {
 	}
 	after, _ := s.Get("fingerprint:7")
 	var previous, updated map[string]json.RawMessage
-	json.Unmarshal([]byte(raw), &previous)
-	json.Unmarshal([]byte(after), &updated)
+	if err := json.Unmarshal([]byte(raw), &previous); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(after), &updated); err != nil {
+		t.Fatal(err)
+	}
 	for _, field := range []string{"ClientID", "UserAgent", "UpdatedAt", "future"} {
 		if string(previous[field]) != string(updated[field]) {
 			t.Fatalf("changed %s", field)

@@ -23,6 +23,8 @@ class DeployTest(unittest.TestCase):
         (self.root / 'compose.json').write_text(json.dumps({'services': {'app': {'image': 'previous'}, 'postgres': {'image': 'untouched'}}}))
         (self.root / 'MIGRATIONS_SHA256').write_text('baseline\n')
         (self.release / 'COMMIT').write_text(self.sha)
+        (self.root / 'RUNTIME_SHA256').write_text('runtime\n')
+        (self.release / 'RUNTIME_SHA256').write_text('runtime\n')
         (self.release / 'MIGRATIONS_SHA256').write_text('baseline\n')
         (self.release / 'sub2api').write_text('test executable')
         source = Path(__file__).with_name('deploy-sub6api.sh').read_text()
@@ -47,7 +49,7 @@ fi''')
         path.chmod(0o755)
 
     def checksums(self):
-        names = ['sub2api', 'deploy.sh', 'COMMIT', 'MIGRATIONS_SHA256', 'resources.tar.gz']
+        names = ['sub2api', 'deploy.sh', 'COMMIT', 'MIGRATIONS_SHA256', 'RUNTIME_SHA256', 'resources.tar.gz']
         (self.release / 'SHA256SUMS').write_text(''.join(hashlib.sha256((self.release / name).read_bytes()).hexdigest() + '  ' + name + '\n' for name in names))
 
     def run_deploy(self):
@@ -72,6 +74,12 @@ fi''')
         self.env['BACKUP_RESULT'] = 'failed'
         self.assertNotEqual(self.run_deploy().returncode, 0)
         self.assertNotIn('up -d', (self.root / 'docker.log').read_text())
+
+    def test_runtime_change_never_switches(self):
+        (self.release / 'RUNTIME_SHA256').write_text('changed\n')
+        self.checksums()
+        self.assertNotEqual(self.run_deploy().returncode, 0)
+        self.assertFalse((self.root / 'docker.log').exists())
 
     def test_schema_change_never_switches(self):
         (self.release / 'MIGRATIONS_SHA256').write_text('changed\n')

@@ -5,8 +5,8 @@
 ## 流程
 
 1. PR、`codex/**` 和 main 推送运行 CI：部署脚本、Go 单元与集成测试、前端 lint/typecheck/关键测试、Go lint。
-2. main 或手工运行 `Deploy Sub6API` 先执行相同 CI，再构建 Linux AMD64 嵌入前端二进制、资源与 SHA256 清单。部署仅允许 main。
-3. 使用 `sub6api-production` environment 的 SSH 凭据上传本次运行的固定 SHA artifact。服务器验证校验和与已部署迁移基线，成功备份后只重建应用层。
+2. main 或手工运行 `Deploy Sub6API` 先执行相同 CI，及生产依赖安全扫描，再构建 Linux AMD64 嵌入前端二进制、资源与 SHA256 清单。部署仅允许 main。
+3. 使用 `sub6api-production` environment 的 SSH 凭据上传本次运行的固定 SHA artifact。服务器验证校验和与已部署迁移、运行时基线，成功备份后只重建应用层。
 4. 等待容器健康、验证实际 PID1 二进制 SHA256 与公网 HTTPS `/health`，保存部署证据。失败恢复旧 compose/应用镜像。
 
 ## 一次性服务器配置
@@ -27,3 +27,7 @@
 ## 验收
 
 健康与二进制校验证明应用版本就绪；仍需管理员登录、静态资源、未认证拒绝和现有授权菜单回归。真实模型请求须有已配置账号与明确验收输入；不得将 `/health` 通过表述为模型推理通过。
+
+Go lint 以基座提交 `a3eaf63afc672ffedf7844e6cfc5cb6750d52a3e` 为既有问题基线，阻断新增问题；既有 84 项问题没有在本次发布中全部修复。全量单元、集成测试与安全扫描仍阻断发布。
+
+运行时基线由 `bash scripts/release/runtime-baseline.sh <verified-commit>` 生成，保存为 `/opt/sub6api/RUNTIME_SHA256`。覆盖运行时 Dockerfile 阶段、基础镜像版本和 entrypoint；编译器修补更新不要求更换运行时。

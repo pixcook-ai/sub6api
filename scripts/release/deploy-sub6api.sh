@@ -12,6 +12,7 @@ commit=$(cat COMMIT)
 [[ "$release" == "$root/releases/$commit" ]] || exit 1
 test -f "$root/MIGRATIONS_SHA256" || { echo 'Record the verified deployed migration baseline first' >&2; exit 1; }
 cmp MIGRATIONS_SHA256 "$root/MIGRATIONS_SHA256" || { echo 'Schema changed: dedicated migration/restore plan required' >&2; exit 1; }
+cmp RUNTIME_SHA256 "$root/RUNTIME_SHA256" || { echo 'Runtime changed: verified base image update required' >&2; exit 1; }
 test -f "$root/compose.json"
 mkdir -p "$root/logs"
 previous=$(docker inspect sub6api-app-1 --format '{{.Image}}')
@@ -28,9 +29,17 @@ tar -xzf resources.tar.gz -C runtime
 printf 'FROM %s\nCOPY --chown=1000:1000 sub2api /app/sub2api\nCOPY --chown=1000:1000 resources /app/resources\n' "$previous" > runtime/Dockerfile
 image="sub6api:sha-$commit"
 docker build --network=none --label "org.opencontainers.image.revision=$commit" -t "$image" runtime
+wait_healthy() {
+  for _ in $(seq 1 60); do
+    if [[ "$(docker inspect sub6api-app-1 --format '{{.State.Health.Status}}')" == healthy ]]; then return 0; fi
+    sleep 2
+  done
+  return 1
+}
 rollback() {
   cp "$release/compose.before.json" "$root/compose.json"
   docker compose -p sub6api -f "$root/compose.json" up -d --no-deps --pull never app
+  wait_healthy
 }
 switched=false
 finish() {
@@ -54,12 +63,7 @@ os.replace(tmp,p)
 PY
 switched=true
 docker compose -p sub6api -f "$root/compose.json" up -d --no-deps --pull never app
-healthy=false
-for _ in $(seq 1 60); do
-  if [[ "$(docker inspect sub6api-app-1 --format '{{.State.Health.Status}}')" == healthy ]]; then healthy=true; break; fi
-  sleep 2
-done
-[[ "$healthy" == true ]] || { echo 'App did not become healthy' >&2; exit 1; }
+wait_healthy || { echo 'App did not become healthy' >&2; exit 1; }
 expected=$(sha256sum sub2api | cut -d' ' -f1)
 actual=$(docker exec --user 1000:1000 sub6api-app-1 sha256sum /proc/1/exe | cut -d' ' -f1)
 [[ "$expected" == "$actual" ]] || { echo 'Running binary checksum mismatch' >&2; exit 1; }
@@ -68,6 +72,7 @@ python3 - "$root/logs/deployment-$commit.json" "$commit" "$image" "$expected" "$
 import json,sys,datetime
 with open(sys.argv[1],'w') as f: json.dump(dict(commit=sys.argv[2],image=sys.argv[3],binary_sha256=sys.argv[4],previous_image=sys.argv[5],verified_at=datetime.datetime.now(datetime.timezone.utc).isoformat()),f,indent=2)
 PY
+docker inspect sub6api-app-1 --format '{{.Image}}' > "$root/IMAGE_ID"
 printf '%s\n' "$commit" > "$root/SOURCE_COMMIT"
 switched=false
 echo "Deployed verified commit $commit"

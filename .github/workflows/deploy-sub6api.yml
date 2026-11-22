@@ -15,8 +15,10 @@ concurrency:
 jobs:
   checks:
     uses: ./.github/workflows/backend-ci.yml
+  security:
+    uses: ./.github/workflows/security-scan.yml
   package:
-    needs: checks
+    needs: [checks, security]
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:

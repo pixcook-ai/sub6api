@@ -62,7 +62,7 @@ func run(args []string, out io.Writer) error {
 	}
 	opts.MaxRetries = -1
 	rdb := redis.NewClient(opts)
-	defer rdb.Close()
+	defer func() { _ = rdb.Close() }()
 	failed := false
 	for _, id := range accountIDs {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -152,7 +152,7 @@ func migrate(ctx context.Context, rdb *redis.Client, id int64, profile claude.Co
 func compareAndSet(ctx context.Context, rdb *redis.Client, key, original, replacement string) error {
 	result, err := replaceProfile.Run(ctx, rdb, []string{key}, original, replacement).Int()
 	if err != nil {
-		return fmt.Errorf("Redis update failed; verify state before retrying")
+		return fmt.Errorf("redis update failed; verify state before retrying")
 	}
 	if result != 1 {
 		return fmt.Errorf("fingerprint changed, expired or lost its TTL; no update applied")

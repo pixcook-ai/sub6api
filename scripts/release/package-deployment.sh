@@ -11,5 +11,6 @@ mkdir -p "$output"
 cp scripts/release/deploy-sub6api.sh "$output/deploy.sh"
 printf '%s\n' "$commit" > "$output/COMMIT"
 git ls-tree -r HEAD backend/migrations | sha256sum | cut -d' ' -f1 > "$output/MIGRATIONS_SHA256"
+bash scripts/release/runtime-baseline.sh > "$output/RUNTIME_SHA256"
 tar -czf "$output/resources.tar.gz" -C backend resources
-(cd "$output" && sha256sum sub2api deploy.sh COMMIT MIGRATIONS_SHA256 resources.tar.gz > SHA256SUMS)
+(cd "$output" && sha256sum sub2api deploy.sh COMMIT MIGRATIONS_SHA256 RUNTIME_SHA256 resources.tar.gz > SHA256SUMS)
