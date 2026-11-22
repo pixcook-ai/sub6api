@@ -12,7 +12,7 @@
 ## 一次性服务器配置
 
 - Environment secrets：`SUB6API_DEPLOY_SSH_KEY`、`SUB6API_DEPLOY_KNOWN_HOSTS`。主机指纹必须经已信任连接核对，不能在 CI 中临时无条件接受扫描值。
-- Environment variables：`SUB6API_DEPLOY_HOST`、`SUB6API_DEPLOY_USER`。建议使用专用受限部署身份；部署脚本需要 Docker、备份 service 与 `/opt/sub6api` 写权限，不能仅授予无特权 shell 后声称部署可用。
+- Environment variables：`SUB6API_DEPLOY_HOST`、`SUB6API_DEPLOY_USER`。当前使用独立密钥和 forced-command receiver，只接受 `upload <sha>` / `deploy <sha>`，拒绝 shell、转发和非预期压缩包；部署脚本需要 Docker、备份 service 与 `/opt/sub6api` 写权限，不能仅授予无特权 shell 后声称部署可用。
 - 初次记录 `/opt/sub6api/MIGRATIONS_SHA256`：在核实服务器实际部署提交后，对该提交执行 `git ls-tree -r <commit> backend/migrations | sha256sum | cut -d' ' -f1`。与 artifact 不同则停止自动部署，先处理迁移与恢复计划。
 - 使用现有 `compose.json`、`sub6api-backup.service` 及 `sub6api-app-1`。脚本不会新建数据库或重置安装状态。
 
@@ -29,5 +29,7 @@
 健康与二进制校验证明应用版本就绪；仍需管理员登录、静态资源、未认证拒绝和现有授权菜单回归。真实模型请求须有已配置账号与明确验收输入；不得将 `/health` 通过表述为模型推理通过。
 
 Go lint 以基座提交 `a3eaf63afc672ffedf7844e6cfc5cb6750d52a3e` 为既有问题基线，阻断新增问题；既有 84 项问题没有在本次发布中全部修复。全量单元、集成测试与安全扫描仍阻断发布。
+
+`scripts/release/ssh-receiver.py` 安装至 `/usr/local/sbin/sub6api-ci-receiver`，对应 authorized_keys 行带 `restrict,command="/usr/local/sbin/sub6api-ci-receiver"`。此部署密钥可以发布应用代码，按生产部署凭据保护。
 
 运行时基线由 `bash scripts/release/runtime-baseline.sh <verified-commit>` 生成，保存为 `/opt/sub6api/RUNTIME_SHA256`。覆盖运行时 Dockerfile 阶段、基础镜像版本和 entrypoint；编译器修补更新不要求更换运行时。

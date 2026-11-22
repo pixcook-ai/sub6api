@@ -77,9 +77,8 @@ jobs:
         run: |
           test -n "$DEPLOY_HOST" && test -n "$DEPLOY_USER"
           (cd dist/deployment && sha256sum -c SHA256SUMS)
-          ssh -i ~/.ssh/sub6api -o BatchMode=yes "$DEPLOY_USER@$DEPLOY_HOST" "mkdir -p /opt/sub6api/releases/$GITHUB_SHA"
-          scp -i ~/.ssh/sub6api -o BatchMode=yes dist/deployment/* "$DEPLOY_USER@$DEPLOY_HOST:/opt/sub6api/releases/$GITHUB_SHA/"
-          ssh -i ~/.ssh/sub6api -o BatchMode=yes "$DEPLOY_USER@$DEPLOY_HOST" "bash /opt/sub6api/releases/$GITHUB_SHA/deploy.sh /opt/sub6api/releases/$GITHUB_SHA"
+          tar -cf - -C dist/deployment sub2api deploy.sh COMMIT MIGRATIONS_SHA256 RUNTIME_SHA256 resources.tar.gz SHA256SUMS | ssh -i ~/.ssh/sub6api -o BatchMode=yes "$DEPLOY_USER@$DEPLOY_HOST" "upload $GITHUB_SHA"
+          ssh -i ~/.ssh/sub6api -o BatchMode=yes "$DEPLOY_USER@$DEPLOY_HOST" "deploy $GITHUB_SHA"
       - name: Verify public HTTPS
         run: |
           curl --fail --silent --show-error --retry 3 https://sub6api.pixcook.ai/health | python3 -c 'import json,sys; assert json.load(sys.stdin)["status"] == "ok"'

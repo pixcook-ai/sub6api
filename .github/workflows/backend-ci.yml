@@ -25,6 +25,7 @@ jobs:
           /bin/bash -n scripts/release/package-deployment.sh scripts/release/deploy-sub6api.sh
           python3 scripts/release/test_release.py
           python3 scripts/release/test_deploy_sub6api.py
+          python3 scripts/release/test_ssh_receiver.py
           /bin/bash -n deploy/apple-container.sh
           /bin/bash deploy/tests/apple-container-test.sh
           /bin/sh deploy/tests/docker-compose-security-test.sh
@@ -95,6 +96,6 @@ jobs:
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.13
+          version: v2.15.0
           args: --timeout=30m --new-from-rev=a3eaf63afc672ffedf7844e6cfc5cb6750d52a3e
           working-directory: backend
