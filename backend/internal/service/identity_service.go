@@ -119,14 +119,15 @@ func floorClaudeCLIUserAgentVersion(ua string) (string, bool) {
 // defaultFingerprint uses the same captured profile as mimic headers when
 // the client provides no value. Existing client-derived cache values remain intact.
 func defaultFingerprint() Fingerprint {
+	profile := claude.DefaultCompatibilityProfile()
 	return Fingerprint{
 		UserAgent:               claude.DefaultUserAgent(),
-		StainlessLang:           "js",
-		StainlessPackageVersion: claude.StainlessPackageVersion,
-		StainlessOS:             claude.StainlessOS,
-		StainlessArch:           claude.StainlessArch,
-		StainlessRuntime:        claude.StainlessRuntime,
-		StainlessRuntimeVersion: claude.StainlessRuntimeVersion,
+		StainlessLang:           profile.Lang,
+		StainlessPackageVersion: profile.PackageVersion,
+		StainlessOS:             profile.OS,
+		StainlessArch:           profile.Arch,
+		StainlessRuntime:        profile.Runtime,
+		StainlessRuntimeVersion: profile.RuntimeVersion,
 	}
 }
 

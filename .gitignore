@@ -174,3 +174,6 @@ scripts/*
 !scripts/release/**
 __pycache__/
 *.pyc
+
+!docs/claude-compatibility-profile.md
+!docs/SUB6API_CICD.md
