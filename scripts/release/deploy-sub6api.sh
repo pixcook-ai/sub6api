@@ -22,11 +22,13 @@ chmod 600 "$release/compose.before.json"
 # Backup must complete before changing the app image.
 systemctl start sub6api-backup.service
 test "$(systemctl show sub6api-backup.service -p Result --value)" = success
+base="sub6api:runtime-${previous#sha256:}"
+docker tag "$previous" "$base"
 mkdir -p runtime
 cp sub2api runtime/sub2api
 chmod 755 runtime/sub2api
 tar -xzf resources.tar.gz -C runtime
-printf 'FROM %s\nCOPY --chown=1000:1000 sub2api /app/sub2api\nCOPY --chown=1000:1000 resources /app/resources\n' "$previous" > runtime/Dockerfile
+printf 'FROM %s\nCOPY --chown=1000:1000 sub2api /app/sub2api\nCOPY --chown=1000:1000 resources /app/resources\n' "$base" > runtime/Dockerfile
 image="sub6api:sha-$commit"
 docker build --network=none --label "org.opencontainers.image.revision=$commit" -t "$image" runtime
 wait_healthy() {

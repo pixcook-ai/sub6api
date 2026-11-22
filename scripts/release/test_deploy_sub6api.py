@@ -61,6 +61,7 @@ fi''')
         current = json.loads((self.root / 'compose.json').read_text())
         self.assertEqual(current['services']['postgres']['image'], 'untouched')
         self.assertEqual(current['services']['app']['image'], 'sub6api:sha-' + self.sha)
+        self.assertIn('tag sha256:previous sub6api:runtime-previous', (self.root / 'docker.log').read_text())
         self.assertTrue((self.root / 'logs' / ('deployment-' + self.sha + '.json')).exists())
 
     def test_failed_binary_verification_rolls_back(self):
