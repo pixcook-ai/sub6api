@@ -23,8 +23,8 @@ PYNOTES
 {
   echo "version=$version"
   echo "tag=v$version"
-  echo "ghcr=ghcr.io/${GITHUB_REPOSITORY,,}"
-  echo "dockerhub=${DOCKERHUB_USERNAME,,}/sub4api"
+  echo "ghcr=ghcr.io/$(printf '%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')"
+  echo "dockerhub=$(printf '%s' "$DOCKERHUB_USERNAME" | tr '[:upper:]' '[:lower:]')/sub4api"
   echo "date=$(git show -s --format=%cI HEAD)"
   echo "commit=$(git rev-parse HEAD)"
 } >> "$GITHUB_OUTPUT"

@@ -1,8 +1,6 @@
 name: Main release
 
 on:
-  push:
-    branches: [main]
   workflow_call:
     inputs:
       release-ref:
@@ -17,10 +15,12 @@ permissions:
 concurrency:
   group: sub4api-publish
   cancel-in-progress: false
-  queue: max
 
 jobs:
+  checks:
+    uses: ./.github/workflows/backend-ci.yml
   release:
+    needs: checks
     runs-on: ubuntu-latest
     environment: sub4api
     steps:
