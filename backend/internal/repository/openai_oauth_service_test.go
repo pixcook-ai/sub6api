@@ -203,16 +203,20 @@ func (s *OpenAIOAuthServiceSuite) TestRefreshToken_UseProvidedClientID() {
 	require.Equal(s.T(), []string{customClientID}, seenClientIDs)
 }
 
-func (s *OpenAIOAuthServiceSuite) TestNonSuccessStatus_IncludesBody() {
+func (s *OpenAIOAuthServiceSuite) TestNonSuccessStatusDoesNotExposeProviderBody() {
+	providerBody := `{"error":{"code":"unsupported_country_region_territory","message":"Country, region, or territory not supported"},"debug":"provider-secret-marker"}`
 	s.setupServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusBadRequest)
-		_, _ = io.WriteString(w, "bad")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = io.WriteString(w, providerBody)
 	}))
 
 	_, err := s.svc.ExchangeCode(s.ctx, "code", "ver", openai.DefaultRedirectURI, "", "")
 	require.Error(s.T(), err)
-	require.ErrorContains(s.T(), err, "status 400")
-	require.ErrorContains(s.T(), err, "bad")
+	require.ErrorContains(s.T(), err, "status 403")
+	require.Equal(s.T(), "OPENAI_OAUTH_REGION_UNSUPPORTED", infraerrors.Reason(err))
+	require.NotContains(s.T(), err.Error(), "unsupported_country_region_territory")
+	require.NotContains(s.T(), err.Error(), "Country, region, or territory not supported")
+	require.NotContains(s.T(), err.Error(), "provider-secret-marker")
 }
 
 func (s *OpenAIOAuthServiceSuite) TestRequestError_ClosedServer() {

@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/url"
@@ -63,7 +64,18 @@ func (s *openaiOAuthService) ExchangeCode(ctx context.Context, code, codeVerifie
 	}
 
 	if !resp.IsSuccessState() {
-		return nil, infraerrors.Newf(http.StatusBadGateway, "OPENAI_OAUTH_TOKEN_EXCHANGE_FAILED", "token exchange failed: status %d, body: %s", resp.StatusCode, resp.String())
+		reason := "OPENAI_OAUTH_TOKEN_EXCHANGE_FAILED"
+		message := "token exchange failed: provider rejected request with status %d"
+		var providerError struct {
+			Error struct {
+				Code string `json:"code"`
+			} `json:"error"`
+		}
+		if json.Unmarshal(resp.Bytes(), &providerError) == nil && providerError.Error.Code == "unsupported_country_region_territory" {
+			reason = "OPENAI_OAUTH_REGION_UNSUPPORTED"
+			message = "token exchange failed: selected network region is unsupported (status %d)"
+		}
+		return nil, infraerrors.Newf(http.StatusBadGateway, reason, message, resp.StatusCode)
 	}
 
 	return &tokenResp, nil

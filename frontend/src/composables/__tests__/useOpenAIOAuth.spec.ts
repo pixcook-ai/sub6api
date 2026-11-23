@@ -12,7 +12,9 @@ vi.mock('vue-i18n', () => ({
       const messages: Record<string, string> = {
         'admin.accounts.oauth.openai.failedToExchangeCode': 'OpenAI 授权码兑换失败',
         'admin.accounts.oauth.openai.errors.OPENAI_OAUTH_PROXY_REQUIRED':
-          '未设置代理，当前服务器无法直连 OpenAI，导致 OpenAI OAuth 请求失败。请先选择可访问 OpenAI 的代理后重试；如果授权码已失效，请重新生成授权链接。'
+          '未设置代理，当前服务器无法直连 OpenAI，导致 OpenAI OAuth 请求失败。请先选择可访问 OpenAI 的代理后重试；如果授权码已失效，请重新生成授权链接。',
+        'admin.accounts.oauth.openai.errors.OPENAI_OAUTH_REGION_UNSUPPORTED':
+          'OpenAI 拒绝了当前网络出口的地区。请改用受支持的代理出口，并重新生成授权链接后再试。'
       }
       return messages[key] ?? key
     }
@@ -90,5 +92,22 @@ describe('useOpenAIOAuth.exchangeAuthCode', () => {
     expect(oauth.error.value).toBe(
       '未设置代理，当前服务器无法直连 OpenAI，导致 OpenAI OAuth 请求失败。请先选择可访问 OpenAI 的代理后重试；如果授权码已失效，请重新生成授权链接。'
     )
+  })
+
+  it('shows a safe localized hint for region rejection instead of provider response text', async () => {
+    vi.mocked(adminAPI.accounts.exchangeCode).mockRejectedValueOnce({
+      status: 502,
+      reason: 'OPENAI_OAUTH_REGION_UNSUPPORTED',
+      message: 'token exchange failed: status 403, body: provider-secret-marker'
+    })
+    const oauth = useOpenAIOAuth()
+
+    const tokenInfo = await oauth.exchangeAuthCode('code', 'session-id', 'state')
+
+    expect(tokenInfo).toBeNull()
+    expect(oauth.error.value).toBe(
+      'OpenAI 拒绝了当前网络出口的地区。请改用受支持的代理出口，并重新生成授权链接后再试。'
+    )
+    expect(oauth.error.value).not.toContain('provider-secret-marker')
   })
 })
