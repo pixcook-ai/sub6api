@@ -35,7 +35,7 @@ func ProvideOpenAIGatewayService(
 ) *OpenAIGatewayService {
 	s := NewOpenAIGatewayService(accountRepo, usageLogRepo, usageBillingRepo, userRepo,
 		userSubRepo, userGroupRateRepo, cache, cfg, schedulerSnapshot, concurrencyService,
-		billingService, rateLimitService, billingCacheService, httpUpstream, deferredService,
+		billingService, rateLimitService, billingCacheService, coreOAuthRuntimeUpstream(httpUpstream), deferredService,
 		openAITokenProvider, grokTokenProvider, resolver, channelService, balanceNotifyService,
 		settingService, userPlatformQuotaRepo)
 	s.SetCodexTicketHistory(history)

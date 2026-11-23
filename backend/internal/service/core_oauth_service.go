@@ -359,9 +359,13 @@ func (s *CoreOAuthService) CompleteAuthorization(ctx context.Context, ref string
 		}
 		return nil, result
 	}
+	// Reauthorization already verified the bound identity above; retain its
+	// epoch so existing deployment, session and resource bindings still match.
+	if record.Grant == nil {
+		record.IdentityEpoch = uuid.NewString()
+	}
 	record.Grant = coreOAuthStoreGrant(*grant)
 	record.TokenRevision++
-	record.IdentityEpoch = uuid.NewString()
 	record.NeedsAuthorization = false
 	record.Attempt.Status = "consumed"
 	record.LastErrorCode = ""
@@ -391,7 +395,11 @@ func (s *CoreOAuthService) CancelAuthorization(ctx context.Context, ref, attempt
 	if record.Operation != nil && record.Operation.Kind == "exchange" {
 		record.Operation = nil
 		record.NeedsAuthorization = true
-	} else if record.Attempt.Status != "pending" || !record.Attempt.ExpiresAt.After(time.Now()) {
+	} else if record.Attempt.Status == "expired" || !record.Attempt.ExpiresAt.After(time.Now()) {
+		// An expired transaction is no longer usable, but it still needs an
+		// explicit terminal state so the admin UI can clear the stale attempt.
+		record.Attempt.Status = "canceled"
+	} else if record.Attempt.Status != "pending" {
 		return nil, ErrCoreOAuthConflict
 	}
 	record.Attempt.Status = "canceled"
@@ -431,8 +439,15 @@ func (s *CoreOAuthService) view(record *coreOAuthRecord) CoreOAuthProfile {
 	}
 	if attempt := record.Attempt; attempt != nil {
 		status := attempt.Status
-		if status == "pending" && !attempt.ExpiresAt.After(time.Now()) {
-			status = "expired"
+		if status == "pending" {
+			s.mu.Lock()
+			_, local := s.attempts[attempt.ID]
+			s.mu.Unlock()
+			// PKCE is process-local. Project availability without invalidating an
+			// attempt that another live instance can still complete.
+			if !local || !attempt.ExpiresAt.After(time.Now()) {
+				status = "expired"
+			}
 		}
 		view.Attempt = &CoreOAuthAttemptView{AttemptID: attempt.ID, Provider: record.Provider, Status: status, ExpiresAt: attempt.ExpiresAt}
 		if status == "pending" {

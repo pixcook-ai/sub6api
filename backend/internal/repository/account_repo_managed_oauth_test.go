@@ -87,6 +87,8 @@ func TestManagedOAuthRepositoryBulkFencesWholeBatch(t *testing.T) {
 	_, err = repo.BulkUpdate(context.Background(), []int64{17}, service.AccountBulkUpdate{Extra: map[string]any{service.ManagedOAuthExtraKey: nil}})
 	require.ErrorIs(t, err, service.ErrManagedOAuthRefresh)
 	mock.ExpectExec(`WITH managed_targets AS MATERIALIZED .*FOR NO KEY UPDATE.*UPDATE accounts.*NOT EXISTS .*managed_oauth`).WithArgs(sqlmock.AnyArg(), "{17,18}").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery(`SELECT id FROM accounts WHERE id = ANY\(\$1\) AND deleted_at IS NULL AND .*core_oauth`).
+		WithArgs("{17,18}").WillReturnRows(sqlmock.NewRows([]string{"id"}))
 	changed, err := repo.BulkUpdate(context.Background(), []int64{17, 18}, service.AccountBulkUpdate{Credentials: map[string]any{"refresh_token": "never-write"}})
 	require.ErrorIs(t, err, service.ErrManagedOAuthConflict)
 	require.Zero(t, changed)

@@ -43,6 +43,24 @@ func TestCoreOAuthRuntimeInstallRollsBackAllWritesWhenLaterCASFails(t *testing.T
 	}
 }
 
+func TestCoreOAuthRuntimeInstallRejectsInactiveAccountBeforeCAS(t *testing.T) {
+	for _, status := range []string{"", service.StatusDisabled, service.StatusError} {
+		t.Run(status, func(t *testing.T) {
+			db, mock, err := sqlmock.New()
+			require.NoError(t, err)
+			defer db.Close()
+			repo := &accountRepository{sql: db}
+			bps, codex, deployment := coreRuntimeInstallFixture()
+			bps.Expected.Status = status
+			mock.ExpectBegin()
+			mock.ExpectRollback()
+			_, err = repo.InstallCoreOAuthRuntime(context.Background(), bps, codex, &service.ManagedDeploymentUpdate{ManagedDeployment: deployment, ExpectedRouteRevision: 0})
+			require.ErrorIs(t, err, service.ErrCoreOAuthConflict)
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
+}
+
 func coreRuntimeInstallFixture() (service.CoreOAuthRuntimeAccountUpdate, service.CoreOAuthRuntimeAccountUpdate, service.ManagedDeployment) {
 	bpsBinding := service.CoreOAuthAccountBinding{Contract: service.CoreOAuthContract, ProfileRef: "22222222-2222-4222-8222-222222222222", Provider: service.CoreOAuthProviderExcel, Subject: "subject", WorkspaceID: "workspace", IdentityEpoch: "33333333-3333-4333-8333-333333333333", TokenRevision: 1, ExpiresAt: "2099-01-01T00:00:00Z"}
 	codexBinding := bpsBinding
@@ -61,8 +79,8 @@ func coreRuntimeInstallFixture() (service.CoreOAuthRuntimeAccountUpdate, service
 	codexExtra := map[string]any{service.CoreOAuthAccountExtraKey: codexBinding, service.ManagedDeploymentAccountExtraKey: managedBindingExtra(d.Codex)}
 	bpsShellExtra := map[string]any{service.CoreOAuthRuntimeShellExtraKey: map[string]any{"provider": service.CoreOAuthProviderExcel, "group_id": int64(1)}}
 	codexShellExtra := map[string]any{service.CoreOAuthRuntimeShellExtraKey: map[string]any{"provider": service.CoreOAuthProviderCodex, "group_id": int64(1)}}
-	bpsExpected := &service.Account{ID: 11, Platform: service.PlatformOpenAI, Type: service.AccountTypeAPIKey, Schedulable: false, GroupIDs: []int64{1}, Extra: bpsShellExtra, Credentials: map[string]any{"api_key": "inference"}}
-	codexExpected := &service.Account{ID: 12, Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth, Schedulable: false, GroupIDs: []int64{1}, Extra: codexShellExtra, Credentials: map[string]any{"access_token": ""}}
+	bpsExpected := &service.Account{ID: 11, Status: service.StatusActive, Platform: service.PlatformOpenAI, Type: service.AccountTypeAPIKey, Schedulable: false, GroupIDs: []int64{1}, Extra: bpsShellExtra, Credentials: map[string]any{"api_key": "inference"}}
+	codexExpected := &service.Account{ID: 12, Status: service.StatusActive, Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth, Schedulable: false, GroupIDs: []int64{1}, Extra: codexShellExtra, Credentials: map[string]any{"access_token": ""}}
 	bps := service.CoreOAuthRuntimeAccountUpdate{Expected: bpsExpected, Credentials: map[string]any{"api_key": "inference"}, Extra: bpsExtra}
 	codex := service.CoreOAuthRuntimeAccountUpdate{Expected: codexExpected, Credentials: map[string]any{"access_token": "access", "expires_at": "2099-01-01T00:00:00Z", "chatgpt_account_id": "workspace", "client_id": openai.ClientID}, Extra: codexExtra}
 	return bps, codex, d

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -107,7 +108,7 @@ func (s *OpenAIGatewayService) coreWorkerRequest(ctx context.Context, a *Account
 		return err
 	}
 	if s.httpUpstream == nil || ctx.Err() != nil || a.ProxyID != nil && a.Proxy == nil {
-		return ErrCoreOAuthUnavailable
+		return fmt.Errorf("worker transport unavailable: %w", ErrCoreOAuthUnavailable)
 	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
@@ -136,11 +137,11 @@ func (s *OpenAIGatewayService) coreWorkerRequest(ctx context.Context, a *Account
 	}
 	resp, e := s.httpUpstream.Do(req, proxyURL, a.ID, a.Concurrency)
 	if e != nil || resp == nil || resp.Body == nil {
-		return ErrCoreOAuthUnavailable
+		return fmt.Errorf("worker transport failed: %w", ErrCoreOAuthUnavailable)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return ErrCoreOAuthUnavailable
+		return fmt.Errorf("worker returned status %d: %w", resp.StatusCode, ErrCoreOAuthUnavailable)
 	}
 	raw, e := io.ReadAll(io.LimitReader(resp.Body, coreWorkerMaxBody+1))
 	if e != nil || len(raw) > coreWorkerMaxBody {
@@ -161,7 +162,7 @@ func (s *OpenAIGatewayService) coreWorkerRequest(ctx context.Context, a *Account
 		}
 	case *coreWorkerEvents:
 		if !coreWorkerShape(object, "", "next_cursor oldest_event_id", "cursor_gap", "events") {
-			return ErrCoreOAuthUnavailable
+			return fmt.Errorf("worker event page shape: %w", ErrCoreOAuthUnavailable)
 		}
 		events := object["events"].([]any)
 		if len(events) > coreWorkerEventLimit {
@@ -170,7 +171,7 @@ func (s *OpenAIGatewayService) coreWorkerRequest(ctx context.Context, a *Account
 		for _, value := range events {
 			event, ok := value.(map[string]any)
 			if !ok || !coreWorkerShape(event, "origin identity_epoch profile_ref binding_ref backend_id created_at", "event_id failed_token_revision", "", "") {
-				return ErrCoreOAuthUnavailable
+				return fmt.Errorf("worker event shape: %w", ErrCoreOAuthUnavailable)
 			}
 		}
 	default:
@@ -269,7 +270,7 @@ func (s *OpenAIGatewayService) coreOAuthWorkerUnauthorized(ctx context.Context, 
 		return nil, err
 	}
 	if !coreWorkerIdentityMatches(state, b) || page.NextCursor != state.LastEventID {
-		return nil, ErrCoreOAuthConflict
+		return nil, fmt.Errorf("worker event cursor or identity mismatch: %w", ErrCoreOAuthConflict)
 	}
 	if page.NextCursor == 0 {
 		if len(page.Events) != 0 || page.OldestEventID != 0 || page.CursorGap {

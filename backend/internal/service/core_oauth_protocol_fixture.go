@@ -26,6 +26,7 @@ type CoreOAuthFixtureConfig struct {
 	Synthetic     bool   `json:"synthetic"`
 	RunID         string `json:"run_id"`
 	OAuthBaseURL  string `json:"oauth_base_url"`
+	CodexBaseURL  string `json:"codex_base_url,omitempty"`
 	ControlSecret string `json:"control_secret"`
 }
 
@@ -65,7 +66,7 @@ func CoreOAuthFixtureReadPrivate(path string, target any) error {
 
 func CoreOAuthFixtureLoopbackURL(raw string) bool {
 	u, err := url.Parse(raw)
-	if err != nil || u.Scheme != "http" || u.Hostname() != "127.0.0.1" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.RawPath != "" || strings.TrimSpace(raw) != raw {
+	if err != nil || u.Scheme != "http" || u.Hostname() != "127.0.0.1" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.RawPath != "" || strings.TrimSpace(raw) != raw {
 		return false
 	}
 	port, err := strconv.Atoi(u.Port())
@@ -81,13 +82,26 @@ func CoreOAuthFixtureLoadConfig() (*CoreOAuthFixtureConfig, error) {
 	if u.Path != "" {
 		return nil, errors.New("synthetic OAuth fixture origin required")
 	}
+	if cfg.CodexBaseURL != "" && !coreOAuthFixtureOrigin(cfg.CodexBaseURL) {
+		return nil, errors.New("synthetic Codex fixture origin required")
+	}
 	return &cfg, nil
+}
+
+func coreOAuthFixtureOrigin(raw string) bool {
+	if !CoreOAuthFixtureLoopbackURL(raw) {
+		return false
+	}
+	u, _ := url.Parse(raw)
+	return u.Path == ""
 }
 
 func newCoreOAuthRuntimeService(repo CoreOAuthRepository, encryptor SecretEncryptor, _ *OpenAIOAuthService, proxies ProxyRepository) (*CoreOAuthService, error) {
 	cfg, err := CoreOAuthFixtureLoadConfig()
 	if err != nil {
-		return nil, err
+		// Preserve the production unavailable contract when the opt-in fixture
+		// has no synthetic configuration; never expose its private config path.
+		return nil, ErrCoreOAuthUnavailable
 	}
 	client := &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{Proxy: nil}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	protocols := map[string]CoreOAuthProtocol{}

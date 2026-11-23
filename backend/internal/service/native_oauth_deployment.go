@@ -1,10 +1,12 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -163,22 +165,31 @@ func (s *OpenAIGatewayService) prepareCoreOAuthRuntimeRequest(request *http.Requ
 	return request, binding, nil
 }
 
-func (s *OpenAIGatewayService) recoverCoreOAuthRuntimeUnauthorized(request *http.Request, account *Account, binding ManagedDeploymentBinding) {
+func (s *OpenAIGatewayService) recoverCoreOAuthRuntimeUnauthorized(request *http.Request, account *Account, binding ManagedDeploymentBinding, response *http.Response) {
 	if s == nil || s.coreOAuth == nil || request.Context().Err() != nil {
 		return
 	}
 	if binding.Provider == CoreOAuthProviderExcel {
+		// Release the failed inference connection before polling the same worker.
+		if response != nil && response.Body != nil {
+			body := s.readUpstreamErrorBody(response)
+			_ = response.Body.Close()
+			response.Body = io.NopCloser(bytes.NewReader(body))
+		}
 		configured, err := s.configureCoreOAuthWorkerAccount(account, "", "")
 		if err != nil {
+			slog.Warn("core_oauth.unauthorized_worker_config_invalid", "account_id", account.ID)
 			return
 		}
 		events, err := s.coreOAuthWorkerUnauthorized(request.Context(), configured, binding)
 		if err != nil {
+			slog.Warn("core_oauth.unauthorized_worker_event_read_failed", "account_id", account.ID, "reason", err.Error())
 			return
 		}
 		// Core CAS ignores stale versions; use the newest verified event first.
 		for i := len(events) - 1; i >= 0; i-- {
 			if _, err = s.coreOAuth.RecoverUnauthorized(request.Context(), events[i]); err != nil {
+				slog.Warn("core_oauth.unauthorized_refresh_failed", "account_id", account.ID)
 				return
 			}
 		}

@@ -5,11 +5,13 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
 
+	infraerrors "github.com/MACOS-DO/sub4api/internal/pkg/errors"
 	"github.com/MACOS-DO/sub4api/internal/pkg/openai"
 )
 
@@ -30,7 +32,7 @@ func (p *coreOAuthBPSProtocol) ExchangeCallback(ctx context.Context, attempt *Co
 	}
 	client, err := openai.NewBPSOAuthClient(transport.ProxyURL)
 	if err != nil {
-		return nil, &CoreOAuthProtocolError{}
+		return nil, coreOAuthBPSError(err)
 	}
 	token, err := client.ExchangeCallback(ctx, tx, callback, openai.BPSOAuthIdentity{Subject: expected.Subject, WorkspaceID: expected.WorkspaceID, Email: expected.Email})
 	if err != nil {
@@ -41,7 +43,7 @@ func (p *coreOAuthBPSProtocol) ExchangeCallback(ctx context.Context, attempt *Co
 func (p *coreOAuthBPSProtocol) Refresh(ctx context.Context, previous CoreOAuthGrant, transport CoreOAuthTransport) (*CoreOAuthGrant, error) {
 	client, err := openai.NewBPSOAuthClient(transport.ProxyURL)
 	if err != nil {
-		return nil, &CoreOAuthProtocolError{}
+		return nil, coreOAuthBPSError(err)
 	}
 	token, err := client.Refresh(ctx, openai.BPSOAuthToken{TokenResponse: openai.TokenResponse{AccessToken: previous.AccessToken, RefreshToken: previous.RefreshToken, IDToken: previous.IDToken, TokenType: "Bearer"}, BPSOAuthIdentity: openai.BPSOAuthIdentity{Subject: previous.Subject, WorkspaceID: previous.WorkspaceID, Email: previous.Email}, ClientID: previous.ClientID, ExpiresAt: previous.ExpiresAt})
 	if err != nil {
@@ -50,11 +52,43 @@ func (p *coreOAuthBPSProtocol) Refresh(ctx context.Context, previous CoreOAuthGr
 	return coreOAuthBPSGrant(token), nil
 }
 func coreOAuthBPSError(err error) error {
+	classified := &CoreOAuthProtocolError{OutcomeUnknown: true}
+	code, stage, status := "bps_oauth_unclassified", "unknown", 0
 	var typed *openai.BPSOAuthError
-	if errors.As(err, &typed) {
-		return &CoreOAuthProtocolError{Permanent: typed.Permanent, OutcomeUnknown: typed.OutcomeUnknown}
+	if errors.As(err, &typed) && typed != nil {
+		classified = &CoreOAuthProtocolError{Permanent: typed.Permanent, OutcomeUnknown: typed.OutcomeUnknown}
+		// Only locally defined policy codes may enter diagnostics. Never log err:
+		// wrappers and future provider messages may contain OAuth credentials.
+		switch typed.Code {
+		case "bps_oauth_client_configuration_invalid":
+			stage = "client_configuration"
+		case "bps_oauth_transaction_invalid", "bps_oauth_transaction_consumed", "bps_oauth_transaction_expired",
+			"bps_callback_mismatch", "bps_callback_invalid", "bps_duplicate_callback_parameter",
+			"bps_oauth_state_mismatch", "bps_authorization_rejected", "bps_invalid_authorization_code":
+			stage = "callback_validation"
+		case "bps_token_request_invalid", "bps_invalid_grant", "bps_token_endpoint_rejected",
+			"bps_token_exchange_outcome_unknown":
+			stage = "token_endpoint"
+		case "bps_refresh_outcome_unknown":
+			// Refresh deliberately collapses transport and post-response validation
+			// failures into one code; do not infer which stage failed.
+			stage = "refresh"
+		case "bps_profile_mismatch", "bps_invalid_token_response", "bps_invalid_token_claims",
+			"bps_client_mismatch", "bps_issuer_mismatch", "bps_token_expired", "bps_audience_mismatch",
+			"bps_email_unverified", "bps_subject_mismatch", "bps_workspace_mismatch",
+			"bps_email_mismatch", "bps_invalid_token_expiry":
+			stage = "token_validation"
+		}
+		if stage != "unknown" {
+			code = typed.Code
+		}
+		if typed.StatusCode >= 100 && typed.StatusCode <= 599 {
+			status = typed.StatusCode
+		}
 	}
-	return &CoreOAuthProtocolError{OutcomeUnknown: true}
+	slog.Warn("core_oauth.bps_protocol_failed", "provider", "openai_bps", "stage", stage,
+		"code", code, "http_status", status, "permanent", classified.Permanent, "outcome_unknown", classified.OutcomeUnknown)
+	return classified
 }
 func coreOAuthBPSGrant(t *openai.BPSOAuthToken) *CoreOAuthGrant {
 	if t == nil {
@@ -101,6 +135,12 @@ func (p *coreOAuthCodexProtocol) ExchangeCallback(ctx context.Context, attempt *
 	}
 	token, err := p.oauth.ExchangeCode(ctx, &OpenAIExchangeCodeInput{SessionID: session, Code: values.Get("code"), State: values.Get("state"), RedirectURI: openai.DefaultRedirectURI, ProxyID: transport.ProxyID})
 	if err != nil {
+		// These failures occur before ExchangeCode contacts the token endpoint.
+		// Leave all other errors uncertain, including a sent request timing out.
+		switch infraerrors.Reason(err) {
+		case "OPENAI_OAUTH_SESSION_NOT_FOUND", "OPENAI_OAUTH_STATE_REQUIRED", "OPENAI_OAUTH_INVALID_STATE", "OPENAI_OAUTH_PROXY_NOT_FOUND":
+			return nil, &CoreOAuthProtocolError{}
+		}
 		return nil, &CoreOAuthProtocolError{OutcomeUnknown: true}
 	}
 	return coreOAuthNativeGrant(token, CoreOAuthGrant{}), nil

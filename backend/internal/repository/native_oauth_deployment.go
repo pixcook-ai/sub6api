@@ -13,7 +13,7 @@ var _ service.CoreOAuthRuntimeInstallRepository = (*accountRepository)(nil)
 const installCoreOAuthRuntimeAccountSQL = `
 WITH updated AS (
  UPDATE accounts a SET credentials=$1::jsonb,extra=$2::jsonb,schedulable=CASE WHEN $8 THEN TRUE ELSE a.schedulable END,updated_at=NOW()
- WHERE a.id=$3 AND a.deleted_at IS NULL AND a.platform='openai' AND a.type=$4
+ WHERE a.id=$3 AND a.deleted_at IS NULL AND a.status='active' AND a.platform='openai' AND a.type=$4
    AND a.parent_account_id IS NULL
    AND COALESCE(a.credentials,'{}'::jsonb)=$5::jsonb AND COALESCE(a.extra,'{}'::jsonb)=$6::jsonb
    AND a.schedulable=$9
@@ -57,7 +57,7 @@ func (r *accountRepository) InstallCoreOAuthRuntime(ctx context.Context, bps, co
 }
 
 func installCoreOAuthRuntimeAccountTx(ctx context.Context, tx *sql.Tx, in service.CoreOAuthRuntimeAccountUpdate, activate bool) error {
-	if in.Expected == nil || in.Expected.ID <= 0 || in.Expected.Platform != service.PlatformOpenAI || in.Expected.ParentAccountID != nil || service.ManagedOAuthDeclared(in.Expected) {
+	if in.Expected == nil || in.Expected.ID <= 0 || in.Expected.Status != service.StatusActive || in.Expected.Platform != service.PlatformOpenAI || in.Expected.ParentAccountID != nil || service.ManagedOAuthDeclared(in.Expected) {
 		return service.ErrCoreOAuthConflict
 	}
 	for _, name := range []string{"refresh_token", "id_token"} {

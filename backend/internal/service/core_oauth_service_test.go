@@ -186,6 +186,11 @@ func TestCoreOAuthAuthorizationRestartExpiresPendingAttemptAndCancelIsActorBound
 	view, err := restarted.GetProfile(ctx, ref)
 	require.NoError(t, err)
 	require.Equal(t, "expired", view.Attempt.Status)
+	_, err = restarted.CancelAuthorization(ctx, ref, attempt.AttemptID, 42)
+	require.NoError(t, err)
+	view, err = restarted.GetProfile(ctx, ref)
+	require.NoError(t, err)
+	require.Equal(t, "canceled", view.Attempt.Status)
 
 	attempt, err = restarted.StartAuthorization(ctx, ref, 42)
 	require.NoError(t, err)

@@ -531,6 +531,16 @@ func (r *accountRepository) updateLockedAccount(
 		return nil, err
 	}
 	account.Extra = extra
+	if service.CoreOAuthDeclared(account) && account.Schedulable {
+		// The account row is still locked by lockAndMergeAccountProbeExtra. An
+		// ordinary edit loaded before a manual pause must not resume the runtime.
+		current, err := client.Account.Query().Where(dbaccount.IDEQ(account.ID)).
+			Select(dbaccount.FieldSchedulable).Only(ctx)
+		if err != nil {
+			return nil, err
+		}
+		account.Schedulable = current.Schedulable
+	}
 
 	schedulable := account.Schedulable
 	if account.Status == service.StatusError && !account.IsOpenAIBPS() {
@@ -749,6 +759,28 @@ func lockAndMergeAccountProbeExtra(
 			return nil, service.ErrManagedOAuthConflict
 		}
 	}
+	coreOwned := false
+	for _, key := range []string{service.CoreOAuthAccountExtraKey, service.CoreOAuthRuntimeShellExtraKey} {
+		_, before := currentExtra[key]
+		_, after := account.Extra[key]
+		coreOwned = coreOwned || before || after
+	}
+	if coreOwned {
+		// Inspect ownership only after acquiring the account row lock. A stale
+		// ordinary/shell edit must not overwrite a concurrently installed runtime.
+		if !identityUnchanged || account.ParentAccountID != nil {
+			return nil, service.ErrCoreOAuthConflict
+		}
+		for _, key := range []string{service.CoreOAuthAccountExtraKey, service.CoreOAuthRuntimeShellExtraKey, service.ManagedDeploymentAccountExtraKey} {
+			before, beforePresent := currentExtra[key]
+			after, afterPresent := account.Extra[key]
+			beforeJSON, beforeErr := json.Marshal(before)
+			afterJSON, afterErr := json.Marshal(after)
+			if beforePresent != afterPresent || beforeErr != nil || afterErr != nil || string(beforeJSON) != string(afterJSON) {
+				return nil, service.ErrCoreOAuthConflict
+			}
+		}
+	}
 	extra := service.MergeOpenAICodexTicketExtra(copyJSONMap(normalizeJSONMap(account.Extra)), currentExtra)
 	extra = service.MergeOpenAIBPSCredentialStateExtra(account, extra, currentExtra, identityUnchanged)
 	for _, key := range []string{
@@ -961,7 +993,7 @@ func (r *accountRepository) UpdateCredentials(ctx context.Context, id int64, cre
 				ELSE extra
 			END,
 			updated_at = NOW()
-		WHERE id = $2 AND deleted_at IS NULL AND NOT (COALESCE(extra,'{}'::jsonb) ? 'managed_oauth')
+		WHERE id = $2 AND deleted_at IS NULL AND NOT (COALESCE(extra,'{}'::jsonb) ?| ARRAY['managed_oauth','core_oauth','core_oauth_runtime_shell'])
 	`, string(payload), id)
 	if err != nil {
 		return err
@@ -971,6 +1003,19 @@ func (r *accountRepository) UpdateCredentials(ctx context.Context, id int64, cre
 		return err
 	}
 	if affected == 0 {
+		current, err := client.Account.Query().Where(dbaccount.IDEQ(id)).
+			Select(dbaccount.FieldExtra).Only(ctx)
+		if err != nil {
+			return translatePersistenceError(err, service.ErrAccountNotFound, nil)
+		}
+		for _, key := range []string{service.CoreOAuthAccountExtraKey, service.CoreOAuthRuntimeShellExtraKey} {
+			if _, declared := current.Extra[key]; declared {
+				return service.ErrCoreOAuthConflict
+			}
+		}
+		if _, declared := current.Extra[service.ManagedOAuthExtraKey]; declared {
+			return service.ErrManagedOAuthConflict
+		}
 		return service.ErrAccountNotFound
 	}
 	if err := enqueueSchedulerOutbox(ctx, client, service.SchedulerOutboxEventAccountChanged, &id, nil, nil); err != nil {
@@ -2707,12 +2752,27 @@ func (r *accountRepository) UpdateSessionWindowEnd(ctx context.Context, id int64
 }
 
 func (r *accountRepository) SetSchedulable(ctx context.Context, id int64, schedulable bool) error {
-	_, err := r.client.Account.Update().
-		Where(dbaccount.IDEQ(id)).
-		SetSchedulable(schedulable).
-		Save(ctx)
+	builder := r.client.Account.Update().
+		Where(dbaccount.IDEQ(id), dbaccount.DeletedAtIsNil()).
+		SetSchedulable(schedulable)
+	if schedulable {
+		// Keep the ownership check in the write so a concurrent installation
+		// cannot turn this ordinary scheduling endpoint into a resume bypass.
+		builder.Where(func(s *entsql.Selector) {
+			s.Where(entsql.ExprP("NOT (COALESCE(" + s.C(dbaccount.FieldExtra) + ", '{}'::jsonb) ?| ARRAY['core_oauth','core_oauth_runtime_shell'])"))
+		})
+	}
+	rows, err := builder.Save(ctx)
 	if err != nil {
 		return err
+	}
+	if schedulable && rows == 0 {
+		_, err := r.client.Account.Query().Where(dbaccount.IDEQ(id)).
+			Select(dbaccount.FieldID).Only(ctx)
+		if err != nil {
+			return translatePersistenceError(err, service.ErrAccountNotFound, nil)
+		}
+		return service.ErrCoreOAuthConflict
 	}
 	if err := enqueueSchedulerOutbox(ctx, r.sql, service.SchedulerOutboxEventAccountChanged, &id, nil, nil); err != nil {
 		logger.LegacyPrintf("repository.account", "[SchedulerOutbox] enqueue schedulable change failed: account=%d err=%v", id, err)
@@ -2767,6 +2827,11 @@ func (r *accountRepository) AutoPauseExpiredAccounts(ctx context.Context, now ti
 func (r *accountRepository) UpdateExtra(ctx context.Context, id int64, updates map[string]any) error {
 	if _, exists := updates[service.ManagedOAuthExtraKey]; exists {
 		return service.ErrManagedOAuthRefresh
+	}
+	for _, key := range []string{service.CoreOAuthAccountExtraKey, service.CoreOAuthRuntimeShellExtraKey, service.ManagedDeploymentAccountExtraKey} {
+		if _, declared := updates[key]; declared {
+			return service.ErrCoreOAuthConflict
+		}
 	}
 	updates = stripCodexFingerprintSeedFromExtraUpdate(updates)
 	if len(updates) == 0 {
@@ -3045,10 +3110,20 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 	if _, present := updates.Extra[service.ManagedOAuthExtraKey]; present {
 		return 0, service.ErrManagedOAuthRefresh
 	}
+	if _, present := updates.Extra[service.CoreOAuthAccountExtraKey]; present {
+		return 0, service.ErrCoreOAuthConflict
+	}
+	if _, present := updates.Extra[service.CoreOAuthRuntimeShellExtraKey]; present {
+		return 0, service.ErrCoreOAuthConflict
+	}
+	if _, present := updates.Extra[service.ManagedDeploymentAccountExtraKey]; present {
+		return 0, service.ErrCoreOAuthConflict
+	}
 	if len(ids) == 0 {
 		return 0, nil
 	}
 	updates.Extra = stripCodexFingerprintSeedFromExtraUpdate(updates.Extra)
+	coreIdentityMutation := len(updates.Credentials) > 0 || len(updates.Extra) > 0 || updates.ProxyID != nil
 
 	setClauses := make([]string, 0, 8)
 	args := make([]any, 0, 8)
@@ -3269,11 +3344,19 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 		args = append(args, service.AccountTypeAPIKey)
 	}
 	query := "UPDATE accounts SET " + joinClauses(setClauses, ", ") + whereClause
-	if len(updates.Credentials) > 0 {
+	resumeRequested := updates.Schedulable != nil && *updates.Schedulable
+	if coreIdentityMutation || resumeRequested {
 		// Lock the whole target set, then reject the whole statement if any row is
-		// managed. A mixed batch must never partially write tokens on ordinary rows.
+		// protected. A mixed batch must not partially write tokens or resume rows.
+		protected := make([]string, 0, 2)
+		if len(updates.Credentials) > 0 {
+			protected = append(protected, "COALESCE(extra, '{}'::jsonb) ? 'managed_oauth'")
+		}
+		if coreIdentityMutation || resumeRequested {
+			protected = append(protected, "COALESCE(extra, '{}'::jsonb) ?| ARRAY['core_oauth','core_oauth_runtime_shell']")
+		}
 		query = "WITH managed_targets AS MATERIALIZED (SELECT id, extra FROM accounts WHERE id = ANY(" + idsPlaceholder + ") AND deleted_at IS NULL ORDER BY id FOR NO KEY UPDATE) " + query +
-			" AND id IN (SELECT id FROM managed_targets) AND NOT EXISTS (SELECT 1 FROM managed_targets WHERE COALESCE(extra, '{}'::jsonb) ? 'managed_oauth')"
+			" AND id IN (SELECT id FROM managed_targets) AND NOT EXISTS (SELECT 1 FROM managed_targets WHERE " + strings.Join(protected, " OR ") + ")"
 	}
 
 	baseCtx := ctx
@@ -3302,6 +3385,26 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 	rows, err := result.RowsAffected()
 	if err != nil {
 		return 0, err
+	}
+	if (coreIdentityMutation || resumeRequested) && rows == 0 {
+		// No matching live rows is still a valid no-op. Only report an ownership
+		// conflict when the atomic gate actually encountered a protected target.
+		blocked, err := exec.QueryContext(ctx, "SELECT id FROM accounts WHERE id = ANY($1) AND deleted_at IS NULL AND COALESCE(extra, '{}'::jsonb) ?| ARRAY['core_oauth','core_oauth_runtime_shell'] LIMIT 1", pq.Array(ids))
+		if err != nil {
+			return 0, err
+		}
+		hasBlockedTarget := blocked.Next()
+		rowErr := blocked.Err()
+		closeErr := blocked.Close()
+		if rowErr != nil {
+			return 0, rowErr
+		}
+		if closeErr != nil {
+			return 0, closeErr
+		}
+		if hasBlockedTarget {
+			return 0, service.ErrCoreOAuthConflict
+		}
 	}
 	if len(updates.Credentials) > 0 && rows == 0 {
 		return 0, service.ErrManagedOAuthConflict

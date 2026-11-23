@@ -28,7 +28,7 @@ func (s *OpenAIGatewayService) doOpenAIUpstream(request *http.Request, proxyURL 
 	response, err := s.doOpenAIUpstreamOnce(request, proxyURL, account)
 	attachManagedOAuthAttempt(response, request, attempt)
 	if err == nil && response != nil && response.StatusCode == http.StatusUnauthorized && CoreOAuthDeclared(account) {
-		s.recoverCoreOAuthRuntimeUnauthorized(request, account, coreBinding)
+		s.recoverCoreOAuthRuntimeUnauthorized(request, account, coreBinding, response)
 		return response, err
 	}
 	if err == nil && response != nil && response.StatusCode == http.StatusUnauthorized && ManagedOAuthDeclared(account) {
