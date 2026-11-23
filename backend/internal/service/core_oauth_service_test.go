@@ -16,8 +16,9 @@ import (
 
 // This is the persistent database boundary, shared by independent core instances.
 type coreOAuthTestStore struct {
-	mu   sync.Mutex
-	rows map[string]service.CoreOAuthSealedProfile
+	mu           sync.Mutex
+	rows         map[string]service.CoreOAuthSealedProfile
+	failCASAfter int
 }
 
 func (m *coreOAuthTestStore) ReadProfile(_ context.Context, ref string) (*service.CoreOAuthSealedProfile, error) {
@@ -50,6 +51,12 @@ func (m *coreOAuthTestStore) CreateProfile(_ context.Context, r service.CoreOAut
 func (m *coreOAuthTestStore) CompareAndSwapProfile(_ context.Context, ref string, old int64, r service.CoreOAuthSealedProfile) (bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.failCASAfter > 0 {
+		m.failCASAfter--
+		if m.failCASAfter == 0 {
+			return false, service.ErrCoreOAuthStorage
+		}
+	}
 	if m.rows[ref].Version != old {
 		return false, nil
 	}
@@ -167,6 +174,40 @@ func TestCoreOAuthAuthorizationUnknownExchangeRequiresNewAttemptAcrossRestart(t 
 	require.NoError(t, err)
 	require.True(t, view.Authorized)
 	require.Equal(t, authorized.TokenRevision+1, view.TokenRevision)
+}
+
+func TestCoreOAuthExchangeCommitFailureFailsClosedAcrossRestart(t *testing.T) {
+	ctx := context.Background()
+	store := &coreOAuthTestStore{rows: map[string]service.CoreOAuthSealedProfile{}}
+	protocol := coreOAuthProtocolFixture()
+	protocols := map[string]service.CoreOAuthProtocol{service.CoreOAuthProviderExcel: protocol}
+	svc := coreOAuthTestService(t, store, protocols)
+	profile, err := svc.CreateProfile(ctx, service.CoreOAuthCreateInput{Provider: service.CoreOAuthProviderExcel, Name: "Excel"})
+	require.NoError(t, err)
+	attempt, err := svc.StartAuthorization(ctx, profile.ProfileRef, 42)
+	require.NoError(t, err)
+
+	store.mu.Lock()
+	store.failCASAfter = 2 // Persist exchanging, then fail the grant commit.
+	store.mu.Unlock()
+	_, err = svc.CompleteAuthorization(ctx, profile.ProfileRef, service.CoreOAuthCompleteInput{
+		AttemptID: attempt.AttemptID, CallbackURL: attempt.RedirectURI + "?code=fixture", ActorID: 42,
+	})
+	require.ErrorIs(t, err, service.ErrCoreOAuthStorage)
+	require.Equal(t, 1, protocol.exchanges)
+
+	restarted := coreOAuthTestService(t, store, protocols)
+	view, err := restarted.GetProfile(ctx, profile.ProfileRef)
+	require.NoError(t, err)
+	require.False(t, view.Authorized)
+	require.Equal(t, "exchanging", view.Attempt.Status)
+	_, err = restarted.CredentialSnapshot(ctx, profile.ProfileRef)
+	require.ErrorIs(t, err, service.ErrCoreOAuthBusy)
+	_, err = restarted.CompleteAuthorization(ctx, profile.ProfileRef, service.CoreOAuthCompleteInput{
+		AttemptID: attempt.AttemptID, CallbackURL: attempt.RedirectURI + "?code=fixture", ActorID: 42,
+	})
+	require.ErrorIs(t, err, service.ErrCoreOAuthBusy)
+	require.Equal(t, 1, protocol.exchanges, "persisted exchange fence must prevent reusing the callback")
 }
 
 func TestCoreOAuthAuthorizationPersistsOnlySafeRegionRejectionCode(t *testing.T) {
