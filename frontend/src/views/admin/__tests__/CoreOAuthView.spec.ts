@@ -3,17 +3,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import CoreOAuthView from '../CoreOAuthView.vue'
 import type { CoreOAuthProfile, ManagedSwitchState } from '@/api/admin/core-oauth'
 
-const { api, stepUpRun } = vi.hoisted(() => ({
+const { api, stepUpRun, routeQuery } = vi.hoisted(() => ({
   api: {
     getCapabilities: vi.fn(), getProfile: vi.fn(), createProfile: vi.fn(), createRuntimeShell: vi.fn(), listProfiles: vi.fn(), startAuthorization: vi.fn(), completeAuthorization: vi.fn(),
     cancelAuthorization: vi.fn(), refreshProfile: vi.fn(), getSwitchOptions: vi.fn(), switchProvider: vi.fn(), installCoreRuntime: vi.fn(),
   },
   stepUpRun: vi.fn((action: () => Promise<unknown>) => action()),
+  routeQuery: { profile_ref: '' as string },
 }))
 vi.mock('@/api/admin/core-oauth', () => ({ default: api }))
 vi.mock('@/composables/useStepUp', () => ({
   useStepUp: () => ({ run: stepUpRun, onCancel: vi.fn() }), isStepUpCancelled: () => false,
 }))
+vi.mock('vue-router', () => ({ useRoute: () => ({ query: routeQuery }) }))
 enableAutoUnmount(afterEach)
 
 function mountView() {
@@ -75,6 +77,7 @@ async function prepareInstall(wrapper: ReturnType<typeof mountView>) {
 describe('核心双 OAuth 授权管理', () => {
   beforeEach(() => {
     vi.resetAllMocks()
+    routeQuery.profile_ref = ''
     stepUpRun.mockImplementation((action: () => Promise<unknown>) => action())
     api.listProfiles.mockResolvedValue([])
     api.getCapabilities.mockResolvedValue({ available: true, providers: [
@@ -110,6 +113,14 @@ describe('核心双 OAuth 授权管理', () => {
     expect(wrapper.text()).toContain('新会话')
     expect(wrapper.find('iframe').exists()).toBe(false)
     expect(wrapper.find('input[type="file"]').exists()).toBe(false)
+  })
+
+  it('从账号创建流程进入时自动选中新建的 Excel profile', async () => {
+    routeQuery.profile_ref = 'excel-profile'
+    api.listProfiles.mockResolvedValue(authorizedProfiles())
+    const wrapper = mountView()
+    await flushPromises()
+    expect((wrapper.get('[data-provider="bps_excel"] select').element as HTMLSelectElement).value).toBe('excel-profile')
   })
 
   it('为所选 provider 创建档案并展示官方授权链接', async () => {

@@ -932,6 +932,9 @@ interface Props {
   initialEmailPassword?: string
   platform?: AccountPlatform // Platform type for different UI/text
   showProjectId?: boolean // New prop to control project ID visibility
+  titleOverride?: string
+  requireCallbackUrl?: boolean
+  callbackRedirectUri?: string
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -957,7 +960,10 @@ const props = withDefaults(defineProps<Props>(), {
   initialInputMethod: 'manual',
   initialEmailPassword: '',
   platform: 'anthropic',
-  showProjectId: true
+  showProjectId: true,
+  titleOverride: '',
+  requireCallbackUrl: false,
+  callbackRedirectUri: ''
 })
 
 const emit = defineEmits<{
@@ -993,17 +999,19 @@ const getOAuthKey = (key: string) => {
 }
 
 // Computed translations for current platform
-const oauthTitle = computed(() => t(getOAuthKey('title')))
+const oauthTitle = computed(() => props.titleOverride || t(getOAuthKey('title')))
 const oauthFollowSteps = computed(() => t(getOAuthKey('followSteps')))
 const oauthStep1GenerateUrl = computed(() => t(getOAuthKey('step1GenerateUrl')))
 const oauthGenerateAuthUrl = computed(() => t(getOAuthKey('generateAuthUrl')))
 const oauthStep2OpenUrl = computed(() => t(getOAuthKey('step2OpenUrl')))
 const oauthOpenUrlDesc = computed(() => t(getOAuthKey('openUrlDesc')))
 const oauthStep3EnterCode = computed(() => t(getOAuthKey('step3EnterCode')))
-const oauthAuthCodeDesc = computed(() => t(getOAuthKey('authCodeDesc')))
-const oauthAuthCode = computed(() => t(getOAuthKey('authCode')))
-const oauthAuthCodePlaceholder = computed(() => t(getOAuthKey('authCodePlaceholder')))
-const oauthAuthCodeHint = computed(() => t(getOAuthKey('authCodeHint')))
+const oauthAuthCodeDesc = computed(() => props.requireCallbackUrl ? t('admin.accounts.bps.authMode.callbackDesc', { redirectUri: props.callbackRedirectUri }) : t(getOAuthKey('authCodeDesc')))
+const oauthAuthCode = computed(() => props.requireCallbackUrl ? t('admin.accounts.bps.authMode.callbackLabel') : t(getOAuthKey('authCode')))
+const oauthAuthCodePlaceholder = computed(() => props.requireCallbackUrl && props.callbackRedirectUri
+  ? `${props.callbackRedirectUri}?code=...&state=...`
+  : props.requireCallbackUrl ? t('admin.accounts.bps.authMode.callbackPlaceholder') : t(getOAuthKey('authCodePlaceholder')))
+const oauthAuthCodeHint = computed(() => props.requireCallbackUrl ? t('admin.accounts.bps.authMode.callbackHint', { redirectUri: props.callbackRedirectUri }) : t(getOAuthKey('authCodeHint')))
 const oauthImportantNotice = computed(() => {
   if (props.platform === 'openai') return t('admin.accounts.oauth.openai.importantNotice')
   if (props.platform === 'antigravity') return t('admin.accounts.oauth.antigravity.importantNotice')
@@ -1132,6 +1140,7 @@ watch(inputMethod, (newVal) => {
 // Auto-extract code from callback URL (OpenAI/Gemini/Antigravity/Grok)
 // e.g., http://localhost:8085/callback?code=xxx...&state=...
 watch(authCodeInput, (newVal) => {
+  if (props.requireCallbackUrl) return
   if (props.platform !== 'openai' && props.platform !== 'gemini' && props.platform !== 'antigravity' && props.platform !== 'grok') return
 
   const trimmed = newVal.trim()

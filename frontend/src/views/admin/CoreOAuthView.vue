@@ -147,6 +147,7 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import TotpStepUpDialog from '@/components/auth/TotpStepUpDialog.vue'
 import coreOAuthAPI from '@/api/admin/core-oauth'
@@ -165,6 +166,8 @@ const capabilityChoices: { id: DeploymentCapability; label: string }[] = [
 ]
 const fieldClass = 'w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 disabled:cursor-not-allowed disabled:opacity-60 dark:border-dark-600 dark:bg-dark-800 dark:text-gray-100'
 const stepUp = useStepUp()
+const route = useRoute()
+let requestedProfileRef = typeof route.query.profile_ref === 'string' ? route.query.profile_ref : ''
 const loading = ref(true)
 const loadError = ref('')
 const capabilities = ref<CoreOAuthCapabilities | null>(null)
@@ -272,6 +275,13 @@ async function loadProfiles() {
     if (!alive) return
     capabilities.value = available
     profiles.value = result
+    if (requestedProfileRef) {
+      const requested = result.find((profile) => profile.profile_ref === requestedProfileRef)
+      if (requested) {
+        selected[requested.provider] = requested.profile_ref
+        requestedProfileRef = ''
+      }
+    }
     for (const provider of providers) {
       clearTransient(provider.id)
       needsReload[provider.id] = false

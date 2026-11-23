@@ -9,6 +9,9 @@ const {
   showWarningMock,
   importCodexSessionMock,
   createOpenAICodexPATMock,
+  showSuccessMock,
+  coreOAuthAPI,
+  routerPushMock,
   authIsSimpleMode,
 } = vi.hoisted(() => ({
   createAccountMock: vi.fn(),
@@ -17,13 +20,21 @@ const {
   showWarningMock: vi.fn(),
   importCodexSessionMock: vi.fn(),
   createOpenAICodexPATMock: vi.fn(),
+  showSuccessMock: vi.fn(),
+  coreOAuthAPI: {
+    createProfile: vi.fn(),
+    startAuthorization: vi.fn(),
+    completeAuthorization: vi.fn(),
+    cancelAuthorization: vi.fn(),
+  },
+  routerPushMock: vi.fn().mockResolvedValue(undefined),
   authIsSimpleMode: { value: true },
 }))
 
 vi.mock('@/stores/app', () => ({
   useAppStore: () => ({
     showError: vi.fn(),
-    showSuccess: vi.fn(),
+    showSuccess: showSuccessMock,
     showWarning: showWarningMock,
   }),
 }))
@@ -60,6 +71,9 @@ vi.mock('@/api/admin/accounts', () => ({
   getAntigravityDefaultModelMapping: vi.fn().mockResolvedValue([]),
 }))
 
+vi.mock('@/api/admin/core-oauth', () => ({ default: coreOAuthAPI }))
+vi.mock('vue-router', () => ({ useRouter: () => ({ push: routerPushMock }) }))
+
 vi.mock('vue-i18n', async () => {
   const actual = await vi.importActual<typeof import('vue-i18n')>('vue-i18n')
   return {
@@ -85,10 +99,12 @@ const OAuthAuthorizationFlowStub = defineComponent({
     showCodexPatOption: Boolean,
     initialInputMethod: String,
   },
-  data: () => ({ inputMethod: 'manual' }),
-  emits: ['import-codex-session', 'import-codex-pat'],
+  data: () => ({ inputMethod: 'manual', authCode: '' }),
+  emits: ['import-codex-session', 'import-codex-pat', 'generate-url'],
   template: `
     <div>
+      <button data-testid="oauth-generate-url" @click="$emit('generate-url')">generate</button>
+      <input data-testid="oauth-callback-url" v-model="authCode" />
       <button data-testid="import-codex-session" @click="$emit('import-codex-session', 'session-json')">session</button>
       <button data-testid="import-codex-pat" @click="$emit('import-codex-pat', 'pat-token')">pat</button>
     </div>
@@ -737,6 +753,58 @@ describe('CreateAccountModal OpenAI BPS', () => {
       platform: 'openai_bps', type: 'oauth', credentials: expect.objectContaining({ access_token: 'test-token', chatgpt_account_id: 'workspace' })
     }))
     expect(wrapper.emitted('test')).toEqual([[saved]])
+    wrapper.unmount()
+  })
+
+  it('authorizes Excel in the existing account flow and stores it through the Sub6 core API', async () => {
+    createAccountMock.mockReset()
+    showSuccessMock.mockReset()
+    routerPushMock.mockReset().mockResolvedValue(undefined)
+    coreOAuthAPI.createProfile.mockReset().mockResolvedValue({
+      profile_ref: 'excel-profile', provider: 'bps_excel', name: 'Excel admin',
+      status: 'empty', authorized: false, needs_authorization: true, subject: '', workspace_id: '',
+      email: '', client_id: '', identity_epoch: '', token_revision: 0, expires_at: null,
+      attempt: null, last_error_code: '', created_at: '', updated_at: '',
+    })
+    coreOAuthAPI.startAuthorization.mockReset().mockResolvedValue({
+      profile: {
+        profile_ref: 'excel-profile', provider: 'bps_excel', name: 'Excel admin',
+        status: 'authorizing', authorized: false, needs_authorization: true, subject: '', workspace_id: '',
+        email: '', client_id: '', identity_epoch: '', token_revision: 0, expires_at: null,
+        attempt: { attempt_id: 'excel-attempt', provider: 'bps_excel', status: 'pending', expires_at: '2099-01-01T00:00:00Z' },
+        last_error_code: '', created_at: '', updated_at: '',
+      },
+      attempt_id: 'excel-attempt', authorization_url: 'https://auth.openai.com/api/accounts/authorize?state=fixture',
+      redirect_uri: 'https://bps.openai.com/basispoints/extension/360590d7-f8f9-4d88-bf75-0edfe0a4b9f3/auth/callback', expires_at: '2099-01-01T00:00:00Z',
+    })
+    coreOAuthAPI.completeAuthorization.mockReset().mockResolvedValue({
+      profile_ref: 'excel-profile', provider: 'bps_excel', name: 'Excel admin',
+      status: 'authorized', authorized: true, needs_authorization: false, subject: '', workspace_id: '',
+      email: '', client_id: '', identity_epoch: 'epoch-1', token_revision: 1, expires_at: '2099-01-01T00:00:00Z',
+      attempt: null, last_error_code: '', created_at: '', updated_at: '',
+    })
+    coreOAuthAPI.cancelAuthorization.mockReset().mockResolvedValue({})
+
+    const wrapper = mountModal()
+    await selectButtonByText(wrapper, 'OpenAI BPS')
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('Excel admin')
+    await wrapper.get('[data-testid="bps-auth-mode-excel"]').trigger('click')
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+    await wrapper.get('[data-testid="oauth-generate-url"]').trigger('click')
+    await flushPromises()
+    const callbackURL = 'https://bps.openai.com/basispoints/extension/360590d7-f8f9-4d88-bf75-0edfe0a4b9f3/auth/callback?code=fixture-code&state=fixture-state'
+    await wrapper.get('[data-testid="oauth-callback-url"]').setValue(callbackURL)
+    await wrapper.get('[data-testid="oauth-exchange-code"]').trigger('click')
+    await flushPromises()
+
+    expect(coreOAuthAPI.createProfile).toHaveBeenCalledWith({ name: 'Excel admin', provider: 'bps_excel' })
+    expect(coreOAuthAPI.completeAuthorization).toHaveBeenCalledWith('excel-profile', {
+      attempt_id: 'excel-attempt', callback_url: callbackURL,
+    })
+    expect(createAccountMock).not.toHaveBeenCalled()
+    expect(routerPushMock).toHaveBeenCalledWith({ path: '/admin/core-oauth', query: { profile_ref: 'excel-profile' } })
+    expect(showSuccessMock).toHaveBeenCalledWith('admin.accounts.bps.authMode.profileSaved')
     wrapper.unmount()
   })
 })

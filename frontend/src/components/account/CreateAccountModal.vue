@@ -248,11 +248,24 @@
         </div>
       </div>
 
-      <div v-if="form.platform === 'openai_bps'" role="alert" data-testid="bps-risk-warning" class="mb-4 rounded-lg border-2 border-amber-500 bg-amber-50 p-4 text-amber-950 dark:border-amber-500 dark:bg-amber-950/40 dark:text-amber-100">
+      <div v-if="form.platform === 'openai_bps'" class="mb-4">
+        <div class="inline-flex rounded-md border border-gray-200 bg-gray-50 p-1 dark:border-dark-600 dark:bg-dark-800" role="group" :aria-label="t('admin.accounts.bps.authMode.label')">
+          <button type="button" data-testid="bps-auth-mode-token" class="rounded px-3 py-1.5 text-sm" :class="bpsAuthMode === 'token' ? 'bg-white font-medium text-green-700 shadow-sm dark:bg-dark-600 dark:text-green-300' : 'text-gray-600 dark:text-gray-300'" @click="bpsAuthMode = 'token'">
+            {{ t('admin.accounts.bps.authMode.token') }}
+          </button>
+          <button type="button" data-testid="bps-auth-mode-excel" class="rounded px-3 py-1.5 text-sm" :class="bpsAuthMode === 'excel_oauth' ? 'bg-white font-medium text-green-700 shadow-sm dark:bg-dark-600 dark:text-green-300' : 'text-gray-600 dark:text-gray-300'" @click="bpsAuthMode = 'excel_oauth'">
+            {{ t('admin.accounts.bps.authMode.excelOAuth') }}
+          </button>
+        </div>
+      </div>
+      <div v-if="form.platform === 'openai_bps' && bpsAuthMode === 'token'" role="alert" data-testid="bps-risk-warning" class="mb-4 rounded-lg border-2 border-amber-500 bg-amber-50 p-4 text-amber-950 dark:border-amber-500 dark:bg-amber-950/40 dark:text-amber-100">
         <div class="mb-1 flex items-center gap-2 font-bold"><Icon name="exclamationTriangle" size="md" />{{ t('admin.accounts.bps.riskTitle') }}</div>
         <p class="text-sm font-medium">{{ t('admin.accounts.bps.riskDescription') }}</p>
       </div>
-      <OpenAIBPSAccountFields v-if="form.platform === 'openai_bps'" v-model="bpsDraft" />
+      <OpenAIBPSAccountFields v-if="form.platform === 'openai_bps' && bpsAuthMode === 'token'" v-model="bpsDraft" />
+      <p v-if="form.platform === 'openai_bps' && bpsAuthMode === 'excel_oauth'" class="mb-4 rounded-md border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-900 dark:border-green-800 dark:bg-green-950/30 dark:text-green-200">
+        {{ t('admin.accounts.bps.authMode.coreOwnershipNotice') }}
+      </p>
 
       <!-- Account Type Selection (Anthropic) -->
       <div v-if="form.platform === 'anthropic'">
@@ -3561,6 +3574,7 @@
 
         <!-- Group Selection - 仅标准模式显示 -->
         <GroupSelector
+          v-if="!isCoreExcelOAuthFlow"
           v-model="form.group_ids"
           :groups="groups"
           :platform="form.platform"
@@ -3584,18 +3598,21 @@
         :show-proxy-warning="form.platform !== 'openai' && form.platform !== 'grok' && !!form.proxy_id"
         :allow-multiple="form.platform === 'anthropic'"
         :show-cookie-option="form.platform === 'anthropic'"
-        :show-refresh-token-option="form.platform === 'openai' || form.platform === 'antigravity' || form.platform === 'grok'"
-        :show-mobile-refresh-token-option="form.platform === 'openai'"
+        :show-refresh-token-option="!isCoreExcelOAuthFlow && (form.platform === 'openai' || form.platform === 'antigravity' || form.platform === 'grok')"
+        :show-mobile-refresh-token-option="form.platform === 'openai' && !isCoreExcelOAuthFlow"
         :show-session-token-option="false"
         :show-access-token-option="false"
-        :show-codex-session-import-option="form.platform === 'openai'"
-        :show-agent-identity-option="form.platform === 'openai'"
-        :show-codex-pat-option="form.platform === 'openai'"
+        :show-codex-session-import-option="form.platform === 'openai' && !isCoreExcelOAuthFlow"
+        :show-agent-identity-option="form.platform === 'openai' && !isCoreExcelOAuthFlow"
+        :show-codex-pat-option="form.platform === 'openai' && !isCoreExcelOAuthFlow"
         :show-sso-option="form.platform === 'grok'"
         :show-email-password-option="false"
         :show-manual-option="true"
         :initial-input-method="'manual'"
-        :platform="form.platform"
+        :platform="isCoreExcelOAuthFlow ? 'openai' : form.platform"
+        :title-override="isCoreExcelOAuthFlow ? t('admin.accounts.bps.authMode.excelTitle') : ''"
+        :require-callback-url="isCoreExcelOAuthFlow"
+        :callback-redirect-uri="coreExcelRedirectUri"
         :show-project-id="geminiOAuthType === 'code_assist'"
         @generate-url="handleGenerateUrl"
         @cookie-auth="handleCookieAuth"
@@ -3663,6 +3680,7 @@
         <button
           v-if="isManualInputMethod"
           type="button"
+          data-testid="oauth-exchange-code"
           :disabled="!canExchangeCode"
           class="btn btn-primary"
           @click="handleExchangeCode"
@@ -3965,6 +3983,8 @@ import { useOpenAIOAuth } from '@/composables/useOpenAIOAuth'
 import { useGeminiOAuth } from '@/composables/useGeminiOAuth'
 import { useAntigravityOAuth } from '@/composables/useAntigravityOAuth'
 import { useGrokOAuth } from '@/composables/useGrokOAuth'
+import coreOAuthAPI, { type CoreOAuthProfile } from '@/api/admin/core-oauth'
+import { useRouter } from 'vue-router'
 import type {
   Proxy,
   AdminGroup,
@@ -4147,6 +4167,7 @@ const emit = defineEmits<{
 }>()
 
 const appStore = useAppStore()
+const router = useRouter()
 
 const hideAccountLongContextBilling = computed(() => {
   return allSelectedGroupsEnableLongContextPricing(form.group_ids, props.groups)
@@ -4161,6 +4182,7 @@ const grokOAuth = useGrokOAuth() // For Grok OAuth
 
 // Computed: current OAuth state for template binding
 const currentAuthUrl = computed(() => {
+  if (isCoreExcelOAuthFlow.value) return coreExcelAuthUrl.value
   if (form.platform === 'openai') return openaiOAuth.authUrl.value
   if (form.platform === 'gemini') return geminiOAuth.authUrl.value
   if (form.platform === 'antigravity') return antigravityOAuth.authUrl.value
@@ -4169,6 +4191,7 @@ const currentAuthUrl = computed(() => {
 })
 
 const currentSessionId = computed(() => {
+  if (isCoreExcelOAuthFlow.value) return coreExcelAttemptId.value
   if (form.platform === 'openai') return openaiOAuth.sessionId.value
   if (form.platform === 'gemini') return geminiOAuth.sessionId.value
   if (form.platform === 'antigravity') return antigravityOAuth.sessionId.value
@@ -4177,6 +4200,7 @@ const currentSessionId = computed(() => {
 })
 
 const currentOAuthLoading = computed(() => {
+  if (isCoreExcelOAuthFlow.value) return coreExcelLoading.value
   if (form.platform === 'openai') return openaiOAuth.loading.value
   if (form.platform === 'gemini') return geminiOAuth.loading.value
   if (form.platform === 'antigravity') return antigravityOAuth.loading.value
@@ -4185,6 +4209,7 @@ const currentOAuthLoading = computed(() => {
 })
 
 const currentOAuthError = computed(() => {
+  if (isCoreExcelOAuthFlow.value) return coreExcelError.value
   if (form.platform === 'openai') return openaiOAuth.error.value
   if (form.platform === 'gemini') return geminiOAuth.error.value
   if (form.platform === 'antigravity') return antigravityOAuth.error.value
@@ -4791,6 +4816,13 @@ const tempUnschedPresets = computed(() => [
 ])
 
 const bpsDraft = ref(newBPSAccountDraft())
+const bpsAuthMode = ref<'token' | 'excel_oauth'>('token')
+const coreExcelProfile = ref<CoreOAuthProfile | null>(null)
+const coreExcelAttemptId = ref('')
+const coreExcelAuthUrl = ref('')
+const coreExcelRedirectUri = ref('')
+const coreExcelLoading = ref(false)
+const coreExcelError = ref('')
 const bpsTestAfterSave = ref(false)
 const pendingBPSCreate = ref<{ payload: CreateAccountRequest; testAfterSave: boolean } | null>(null)
 
@@ -4811,7 +4843,7 @@ const form = reactive({
 
 // Helper to check if current type needs OAuth flow
 const isOAuthFlow = computed(() => {
-  if (form.platform === 'openai_bps') return false
+  if (form.platform === 'openai_bps') return bpsAuthMode.value === 'excel_oauth'
   // Antigravity upstream 类型不需要 OAuth 流程
   if (form.platform === 'antigravity' && antigravityAccountType.value === 'upstream') {
     return false
@@ -4822,6 +4854,8 @@ const isOAuthFlow = computed(() => {
   }
   return accountCategory.value === 'oauth-based'
 })
+
+const isCoreExcelOAuthFlow = computed(() => form.platform === 'openai_bps' && bpsAuthMode.value === 'excel_oauth')
 
 const isGrokSSOInputMethod = computed(() => form.platform === 'grok' && oauthFlowRef.value?.inputMethod === 'sso_cookie')
 
@@ -4838,6 +4872,9 @@ const expiresAtInput = computed({
 
 const canExchangeCode = computed(() => {
   const authCode = oauthFlowRef.value?.authCode || ''
+  if (isCoreExcelOAuthFlow.value) {
+    return authCode.trim() && coreExcelAttemptId.value && !coreExcelLoading.value
+  }
   if (form.platform === 'openai') {
     return authCode.trim() && openaiOAuth.sessionId.value && !openaiOAuth.loading.value
   }
@@ -4916,6 +4953,10 @@ watch(
 watch(
   () => form.platform,
   (newPlatform) => {
+    if (newPlatform !== 'openai_bps') {
+      cancelCoreExcelAttempt()
+      bpsAuthMode.value = 'token'
+    }
     // Reset base URL based on platform
     if (isCNProviderPlatform(newPlatform) || newPlatform === 'opencode_go') {
       const mode = newPlatform === 'opencode_go' ? openCodeAccountMode.value : accountMode.value
@@ -5390,8 +5431,10 @@ const submitCreateAccount = async (payload: CreateAccountRequest) => {
 
 // Methods
 const resetForm = () => {
+  cancelCoreExcelAttempt()
   pendingBPSCreate.value = null
   bpsDraft.value = newBPSAccountDraft()
+  bpsAuthMode.value = 'token'
   bpsTestAfterSave.value = false
   step.value = 1
   form.name = ''
@@ -5512,6 +5555,7 @@ const resetForm = () => {
 }
 
 const handleClose = () => {
+  cancelCoreExcelAttempt()
   pendingBPSCreate.value = null
   bpsTestAfterSave.value = false
   antigravityMixedChannelConfirmed.value = false
@@ -5756,7 +5800,7 @@ const handleVertexServiceAccountDrop = async (event: DragEvent) => {
 }
 
 const handleSubmit = async () => {
-  if (form.platform === 'openai_bps') {
+  if (form.platform === 'openai_bps' && bpsAuthMode.value === 'token') {
     if (!bpsDraft.value.token.trim()) { appStore.showError(t('admin.accounts.bps.tokenRequired')); return }
     await createAccountAndFinish('openai_bps', 'oauth', bpsCredentials(bpsDraft.value))
     return
@@ -6022,6 +6066,7 @@ const handleSubmit = async () => {
 }
 
 const goBackToBasicInfo = () => {
+  cancelCoreExcelAttempt()
   step.value = 1
   oauth.resetState()
   openaiOAuth.resetState()
@@ -6032,7 +6077,9 @@ const goBackToBasicInfo = () => {
 }
 
 const handleGenerateUrl = async () => {
-  if (form.platform === 'openai') {
+  if (isCoreExcelOAuthFlow.value) {
+    await handleGenerateCoreExcelUrl()
+  } else if (form.platform === 'openai') {
     await openaiOAuth.generateAuthUrl(form.proxy_id)
   } else if (form.platform === 'gemini') {
     await geminiOAuth.generateAuthUrl(
@@ -6048,6 +6095,82 @@ const handleGenerateUrl = async () => {
   } else {
     await oauth.generateAuthUrl(addMethod.value, form.proxy_id)
   }
+}
+
+const isCoreExcelAuthorizationURL = (value: string) => {
+  try {
+    const url = new URL(value)
+    return url.protocol === 'https:' && url.origin === 'https://auth.openai.com' &&
+      url.pathname === '/api/accounts/authorize' && !url.username && !url.password && !url.hash
+  } catch {
+    return false
+  }
+}
+
+const isCoreExcelRedirectURI = (value: string) => {
+  try {
+    const url = new URL(value)
+    return url.protocol === 'https:' && url.origin === 'https://bps.openai.com' &&
+      url.pathname.startsWith('/basispoints/extension/') && url.pathname.endsWith('/auth/callback') &&
+      !url.username && !url.password && !url.search && !url.hash
+  } catch {
+    return false
+  }
+}
+
+const handleGenerateCoreExcelUrl = async () => {
+  if (!form.name.trim() || coreExcelLoading.value) return
+  coreExcelLoading.value = true
+  coreExcelError.value = ''
+  coreExcelAttemptId.value = ''
+  coreExcelAuthUrl.value = ''
+  coreExcelRedirectUri.value = ''
+  try {
+    if (coreExcelProfile.value?.attempt && ['pending', 'expired'].includes(coreExcelProfile.value.attempt.status)) {
+      coreExcelProfile.value = await coreOAuthAPI.cancelAuthorization(coreExcelProfile.value.profile_ref, coreExcelProfile.value.attempt.attempt_id)
+    }
+    if (!coreExcelProfile.value) {
+      const created = await coreOAuthAPI.createProfile({
+        name: form.name.trim(),
+        provider: 'bps_excel',
+        ...(form.proxy_id ? { proxy_id: form.proxy_id } : {}),
+      })
+      if (created.provider !== 'bps_excel' || !created.profile_ref) throw new Error('invalid core Excel profile')
+      coreExcelProfile.value = created
+    }
+    const result = await coreOAuthAPI.startAuthorization(coreExcelProfile.value.profile_ref)
+    if (
+      result.profile.provider !== 'bps_excel' ||
+      result.profile.profile_ref !== coreExcelProfile.value.profile_ref ||
+      result.attempt_id !== result.profile.attempt?.attempt_id ||
+      !isCoreExcelAuthorizationURL(result.authorization_url) ||
+      !isCoreExcelRedirectURI(result.redirect_uri)
+    ) {
+      throw new Error('invalid core Excel authorization response')
+    }
+    coreExcelProfile.value = result.profile
+    coreExcelAttemptId.value = result.attempt_id
+    coreExcelAuthUrl.value = result.authorization_url
+    coreExcelRedirectUri.value = result.redirect_uri
+    openaiOAuth.sessionId.value = result.attempt_id
+  } catch {
+    coreExcelError.value = t('admin.accounts.bps.authMode.authorizeFailed')
+  } finally {
+    coreExcelLoading.value = false
+  }
+}
+
+const cancelCoreExcelAttempt = () => {
+  const profile = coreExcelProfile.value
+  if (profile && coreExcelAttemptId.value && profile.attempt && ['pending', 'expired'].includes(profile.attempt.status)) {
+    void coreOAuthAPI.cancelAuthorization(profile.profile_ref, coreExcelAttemptId.value).catch(() => undefined)
+  }
+  coreExcelProfile.value = null
+  coreExcelAttemptId.value = ''
+  coreExcelAuthUrl.value = ''
+  coreExcelRedirectUri.value = ''
+  coreExcelError.value = ''
+  openaiOAuth.sessionId.value = ''
 }
 
 const handleValidateRefreshToken = (rt: string) => {
@@ -6427,6 +6550,39 @@ const handleGrokAuthorizePassword = async (emailPasswordInput: string) => {
 
 // OpenAI OAuth 授权码兑换
 const handleOpenAIExchange = async (authCode: string) => {
+  if (isCoreExcelOAuthFlow.value) {
+    const profile = coreExcelProfile.value
+    const attemptId = coreExcelAttemptId.value
+    if (!profile || !attemptId || !authCode.trim() || coreExcelLoading.value) return
+    coreExcelLoading.value = true
+    coreExcelError.value = ''
+    try {
+      const completed = await coreOAuthAPI.completeAuthorization(profile.profile_ref, {
+        attempt_id: attemptId,
+        callback_url: authCode.trim(),
+      })
+      if (completed.provider !== 'bps_excel' || completed.profile_ref !== profile.profile_ref || !completed.authorized) {
+        throw new Error('invalid core Excel completion response')
+      }
+      const profileRef = completed.profile_ref
+      coreExcelAttemptId.value = ''
+      appStore.showSuccess(t('admin.accounts.bps.authMode.profileSaved'))
+      handleClose()
+      await router.push({ path: '/admin/core-oauth', query: { profile_ref: profileRef } }).catch(() => undefined)
+    } catch {
+      coreExcelAttemptId.value = ''
+      try {
+        coreExcelProfile.value = await coreOAuthAPI.getProfile(profile.profile_ref)
+      } catch {
+        coreExcelProfile.value = profile
+      }
+      coreExcelError.value = t('admin.accounts.bps.authMode.completeFailed')
+    } finally {
+      coreExcelLoading.value = false
+    }
+    return
+  }
+
   const oauthClient = openaiOAuth
   if (!authCode.trim() || !oauthClient.sessionId.value) return
 
@@ -7115,6 +7271,10 @@ const handleAnthropicExchange = async (authCode: string) => {
 // 主入口：根据平台路由到对应处理函数
 const handleExchangeCode = async () => {
   const authCode = oauthFlowRef.value?.authCode || ''
+
+  if (isCoreExcelOAuthFlow.value) {
+    return handleOpenAIExchange(authCode)
+  }
 
   switch (form.platform) {
     case 'openai':

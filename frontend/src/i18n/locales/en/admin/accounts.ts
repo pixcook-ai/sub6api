@@ -1,6 +1,20 @@
 export default {
     accounts: {
       bps: {
+        authMode: {
+          label: 'BPS authentication method',
+          token: 'Access Token',
+          excelOAuth: 'Excel OAuth',
+          excelTitle: 'Excel OAuth',
+          callbackLabel: 'Full callback URL',
+          callbackDesc: 'After approval, copy the full URL from the browser address bar. It should begin with {redirectUri}.',
+          callbackPlaceholder: 'Paste the full callback URL from the browser address bar.',
+          callbackHint: 'Paste the complete callback URL beginning with {redirectUri}. A code by itself cannot be exchanged.',
+          coreOwnershipNotice: 'Sub6 will securely store and refresh this Excel authorization. The callback is exchanged by Sub6; BPS workers receive access tokens only.',
+          authorizeFailed: 'Failed to start Excel OAuth in Sub6. Reload the profile state and try again.',
+          completeFailed: 'Excel OAuth did not complete. Verify the callback URL and current attempt, then start a new authorization.',
+          profileSaved: 'Excel authorization saved in Sub6. Continue to runtime binding.'
+        },
         testInterrupted: 'The BPS test stream ended without a completion result.',
         riskTitle: "Account suspension risk",
         riskDescription: "Using OpenAI BPS may result in account restrictions or suspension. Proceed with caution.",

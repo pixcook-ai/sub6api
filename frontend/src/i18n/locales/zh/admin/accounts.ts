@@ -1,6 +1,20 @@
 export default {
     accounts: {
       bps: {
+        authMode: {
+          label: 'BPS 授权方式',
+          token: 'Access Token',
+          excelOAuth: 'Excel OAuth',
+          excelTitle: 'Excel OAuth 授权',
+          callbackLabel: '完整回调链接',
+          callbackDesc: '授权通过后，复制浏览器地址栏中的完整链接；回调地址以 {redirectUri} 开头。',
+          callbackPlaceholder: '粘贴浏览器地址栏中的完整回调链接。',
+          callbackHint: '粘贴以 {redirectUri} 开头的完整回调链接；只粘贴 code 无法完成兑换。',
+          coreOwnershipNotice: 'Sub6 会安全保存并刷新这份 Excel 授权。回调由 Sub6 兑换，BPS worker 只接收 Access Token。',
+          authorizeFailed: 'Sub6 无法发起 Excel OAuth，请刷新档案状态后重试。',
+          completeFailed: 'Excel OAuth 未完成。请核对本次回调链接和授权事务，再重新发起授权。',
+          profileSaved: 'Excel 授权已安全保存到 Sub6，请继续绑定运行时账号。'
+        },
         testInterrupted: 'BPS 测试流已中断，未收到完成结果。',
         riskTitle: "封号风险提示",
         riskDescription: "使用 OpenAI BPS 可能存在账号被限制或封禁的风险，请谨慎使用。",
