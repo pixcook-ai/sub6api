@@ -1224,6 +1224,7 @@ func (h *AccountHandler) CreateCoreRuntimeShell(c *gin.Context) {
 		if input.Name == "" {
 			input.Name = "Sub6 Excel Runtime"
 		}
+		input.Concurrency = 1
 		input.Credentials = map[string]any{"base_url": strings.TrimRight(req.BaseURL, "/"), "api_key": req.APIKey}
 	}
 	if err := h.adminService.ValidateAccountGroupBindings(c.Request.Context(), input.GroupIDs); err != nil {

@@ -169,6 +169,9 @@ func TestCoreRuntimeShellCreatesOnlyPausedProviderSpecificAccounts(t *testing.T)
 			require.Equal(t, service.PlatformOpenAI, created.Platform)
 			require.Equal(t, tc.wantType, created.Type)
 			require.Equal(t, tc.wantCreds, created.Credentials)
+			if tc.name == "excel" {
+				require.Equal(t, 1, created.Concurrency)
+			}
 			require.False(t, *created.Schedulable)
 			require.NotContains(t, created.Extra, service.CoreOAuthAccountExtraKey)
 			require.Contains(t, created.Extra, service.CoreOAuthRuntimeShellExtraKey)
