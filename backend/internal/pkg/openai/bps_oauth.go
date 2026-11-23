@@ -16,10 +16,12 @@ import (
 )
 
 const (
-	BPSExcelClientID = "app_fnr0pYvVwwFDocDumLG3H2Bp"
-	BPSExcelCallback = "https://bps.openai.com/basispoints/extension/360590d7-f8f9-4d88-bf75-0edfe0a4b9f3/auth/callback"
-	BPSAuthorizeURL  = "https://auth.openai.com/api/accounts/authorize"
-	BPSTokenURL      = "https://auth.openai.com/oauth/token?unified=true"
+	BPSExcelClientID       = "app_fnr0pYvVwwFDocDumLG3H2Bp"
+	BPSExcelCallback       = "https://bps.openai.com/basispoints/extension/360590d7-f8f9-4d88-bf75-0edfe0a4b9f3/auth/callback"
+	BPSAuthorizeURL        = "https://auth.openai.com/api/accounts/authorize"
+	BPSTokenURL            = "https://auth.openai.com/oauth/token?unified=true"
+	BPSOAuthUserAgent      = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36"
+	BPSOAuthAcceptLanguage = "zh-CN,zh;q=0.9,en;q=0.8"
 )
 
 // BPSOAuthTransaction binds one official Excel authorization to its PKCE secret.
@@ -209,6 +211,8 @@ func (c *BPSOAuthClient) requestTokens(ctx context.Context, form url.Values, ref
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", BPSOAuthUserAgent)
+	req.Header.Set("Accept-Language", BPSOAuthAcceptLanguage)
 	response, err := c.client.Do(req)
 	if err != nil {
 		return nil, unknown()

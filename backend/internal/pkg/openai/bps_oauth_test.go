@@ -79,6 +79,9 @@ func TestBPSOAuthCallbackExchangesBoundPKCEOnce(t *testing.T) {
 		if r.Method != http.MethodPost || r.Header.Get("Content-Type") != "application/x-www-form-urlencoded" || r.Header.Get("Authorization") != "" {
 			t.Error("incorrect OAuth request shape")
 		}
+		if r.Header.Get("User-Agent") != openai.BPSOAuthUserAgent || r.Header.Get("Accept-Language") != openai.BPSOAuthAcceptLanguage {
+			t.Error("incorrect Excel OAuth request identity")
+		}
 		if err := r.ParseForm(); err != nil {
 			t.Fatal(err)
 		}
