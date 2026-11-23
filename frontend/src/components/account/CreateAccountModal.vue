@@ -4217,6 +4217,19 @@ const currentOAuthError = computed(() => {
   return oauth.error.value
 })
 
+const coreExcelCompletionError = (error: unknown) => {
+  const value = error as {
+    code?: unknown
+    reason?: unknown
+    response?: { data?: { code?: unknown; reason?: unknown } }
+  } | null
+  const code = [value?.reason, value?.code, value?.response?.data?.reason, value?.response?.data?.code]
+    .find((item): item is string => item === 'CORE_OAUTH_REGION_UNSUPPORTED')
+  return code
+    ? t('admin.accounts.bps.authMode.regionUnsupported')
+    : t('admin.accounts.bps.authMode.completeFailed')
+}
+
 // Refs
 const oauthFlowRef = ref<OAuthFlowExposed | null>(null)
 
@@ -6569,14 +6582,14 @@ const handleOpenAIExchange = async (authCode: string) => {
       appStore.showSuccess(t('admin.accounts.bps.authMode.profileSaved'))
       handleClose()
       await router.push({ path: '/admin/core-oauth', query: { profile_ref: profileRef } }).catch(() => undefined)
-    } catch {
+    } catch (error) {
       coreExcelAttemptId.value = ''
       try {
         coreExcelProfile.value = await coreOAuthAPI.getProfile(profile.profile_ref)
       } catch {
         coreExcelProfile.value = profile
       }
-      coreExcelError.value = t('admin.accounts.bps.authMode.completeFailed')
+      coreExcelError.value = coreExcelCompletionError(error)
     } finally {
       coreExcelLoading.value = false
     }

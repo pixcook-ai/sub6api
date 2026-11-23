@@ -23,6 +23,7 @@ const {
   showSuccessMock: vi.fn(),
   coreOAuthAPI: {
     createProfile: vi.fn(),
+    getProfile: vi.fn(),
     startAuthorization: vi.fn(),
     completeAuthorization: vi.fn(),
     cancelAuthorization: vi.fn(),
@@ -98,6 +99,7 @@ const OAuthAuthorizationFlowStub = defineComponent({
     showAgentIdentityOption: Boolean,
     showCodexPatOption: Boolean,
     initialInputMethod: String,
+    error: String,
   },
   data: () => ({ inputMethod: 'manual', authCode: '' }),
   emits: ['import-codex-session', 'import-codex-pat', 'generate-url'],
@@ -805,6 +807,49 @@ describe('CreateAccountModal OpenAI BPS', () => {
     expect(createAccountMock).not.toHaveBeenCalled()
     expect(routerPushMock).toHaveBeenCalledWith({ path: '/admin/core-oauth', query: { profile_ref: 'excel-profile' } })
     expect(showSuccessMock).toHaveBeenCalledWith('admin.accounts.bps.authMode.profileSaved')
+    wrapper.unmount()
+  })
+
+  it('shows safe proxy guidance for an unsupported Excel OAuth region', async () => {
+    coreOAuthAPI.createProfile.mockReset().mockResolvedValue({
+      profile_ref: 'excel-profile', provider: 'bps_excel', name: 'Excel admin',
+      status: 'empty', authorized: false, needs_authorization: true, subject: '', workspace_id: '',
+      email: '', client_id: '', identity_epoch: '', token_revision: 0, expires_at: null,
+      attempt: null, last_error_code: '', created_at: '', updated_at: '',
+    })
+    coreOAuthAPI.startAuthorization.mockReset().mockResolvedValue({
+      profile: {
+        profile_ref: 'excel-profile', provider: 'bps_excel', name: 'Excel admin',
+        status: 'authorizing', authorized: false, needs_authorization: true, subject: '', workspace_id: '',
+        email: '', client_id: '', identity_epoch: '', token_revision: 0, expires_at: null,
+        attempt: { attempt_id: 'excel-attempt', provider: 'bps_excel', status: 'pending', expires_at: '2099-01-01T00:00:00Z' },
+        last_error_code: '', created_at: '', updated_at: '',
+      },
+      attempt_id: 'excel-attempt', authorization_url: 'https://auth.openai.com/api/accounts/authorize?state=fixture',
+      redirect_uri: 'https://bps.openai.com/basispoints/extension/360590d7-f8f9-4d88-bf75-0edfe0a4b9f3/auth/callback', expires_at: '2099-01-01T00:00:00Z',
+    })
+    coreOAuthAPI.completeAuthorization.mockReset().mockRejectedValue({
+      response: { data: { code: 'CORE_OAUTH_REGION_UNSUPPORTED', message: 'private provider response' } },
+    })
+    coreOAuthAPI.getProfile.mockReset().mockRejectedValue(new Error('profile refresh failed'))
+
+    const wrapper = mountModal()
+    await selectButtonByText(wrapper, 'OpenAI BPS')
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('Excel admin')
+    await wrapper.get('[data-testid="bps-auth-mode-excel"]').trigger('click')
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+    await wrapper.get('[data-testid="oauth-generate-url"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-testid="oauth-callback-url"]').setValue(
+      'https://bps.openai.com/basispoints/extension/360590d7-f8f9-4d88-bf75-0edfe0a4b9f3/auth/callback?code=fixture&state=fixture'
+    )
+    await wrapper.get('[data-testid="oauth-exchange-code"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.getComponent(OAuthAuthorizationFlowStub).props('error')).toBe('admin.accounts.bps.authMode.regionUnsupported')
+    expect(wrapper.getComponent(OAuthAuthorizationFlowStub).props('error')).not.toContain('private provider response')
+    expect(coreOAuthAPI.completeAuthorization).toHaveBeenCalledTimes(1)
     wrapper.unmount()
   })
 })

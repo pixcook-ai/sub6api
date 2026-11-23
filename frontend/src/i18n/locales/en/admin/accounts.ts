@@ -13,6 +13,7 @@ export default {
           coreOwnershipNotice: 'Sub6 will securely store and refresh this Excel authorization. The callback is exchanged by Sub6; BPS workers receive access tokens only.',
           authorizeFailed: 'Failed to start Excel OAuth in Sub6. Reload the profile state and try again.',
           completeFailed: 'Excel OAuth did not complete. Verify the callback URL and current attempt, then start a new authorization.',
+          regionUnsupported: 'The provider rejected this network region. Use a proxy in a supported region, start a new authorization, and submit its new callback URL. Without a proxy, the request uses the server network.',
           profileSaved: 'Excel authorization saved in Sub6. Continue to runtime binding.'
         },
         testInterrupted: 'The BPS test stream ended without a completion result.',

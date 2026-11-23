@@ -13,6 +13,7 @@ export default {
           coreOwnershipNotice: 'Sub6 会安全保存并刷新这份 Excel 授权。回调由 Sub6 兑换，BPS worker 只接收 Access Token。',
           authorizeFailed: 'Sub6 无法发起 Excel OAuth，请刷新档案状态后重试。',
           completeFailed: 'Excel OAuth 未完成。请核对本次回调链接和授权事务，再重新发起授权。',
+          regionUnsupported: '官方拒绝了当前网络出口的地区。请改用受支持地区的代理，重新发起授权并使用新回调链接；未选代理时请求使用服务器直连。',
           profileSaved: 'Excel 授权已安全保存到 Sub6，请继续绑定运行时账号。'
         },
         testInterrupted: 'BPS 测试流已中断，未收到完成结果。',
