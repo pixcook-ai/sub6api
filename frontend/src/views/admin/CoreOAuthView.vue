@@ -36,6 +36,7 @@
             <div v-if="selectedProfile(provider.id)?.workspace_id" class="flex flex-wrap justify-between gap-2"><dt class="text-gray-500 dark:text-gray-400">工作区</dt><dd class="break-all text-gray-900 dark:text-gray-100">{{ selectedProfile(provider.id)?.workspace_id }}</dd></div>
             <div class="flex flex-wrap justify-between gap-2"><dt class="text-gray-500 dark:text-gray-400">授权有效期</dt><dd class="text-gray-900 dark:text-gray-100">{{ formatTime(selectedProfile(provider.id)?.expires_at) }}</dd></div>
           </dl>
+          <p v-if="authorizationFeedback(provider.id)" role="alert" class="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-300">{{ authorizationFeedback(provider.id) }}</p>
           <p v-if="selectedProfile(provider.id)?.status === 'refresh_uncertain'" class="text-sm text-amber-700 dark:text-amber-300">刷新结果未知，已停止重试旧凭据。请重新授权。</p>
           <p v-if="activeAttempt(provider.id) && selectedProfile(provider.id)?.authorized" class="text-sm text-gray-500 dark:text-gray-400">本次重新授权尚未完成，原有效授权保留。</p>
           <div class="flex flex-wrap gap-2">
@@ -45,16 +46,17 @@
           <p v-if="!loading && capabilities?.available && !providerAvailable(provider.id)" class="text-sm text-amber-700 dark:text-amber-300">{{ needsReload[provider.id] ? '授权状态尚未确认，请刷新状态后再操作。' : '该提供方暂不可用，请检查配置后刷新状态。' }}</p>
           <div v-if="activeAttempt(provider.id)" class="space-y-3 rounded-lg border border-gray-200 bg-gray-50 p-4 dark:border-dark-600 dark:bg-dark-800">
             <p v-if="attemptExpired(provider.id)" role="status" class="text-sm text-amber-700 dark:text-amber-300">本次授权已过期，请取消后重新发起。</p>
+            <p v-else-if="activeAttempt(provider.id)?.status === 'exchanging'" class="text-sm text-gray-600 dark:text-gray-300">授权请求已提交，请先刷新状态核对结果，不要重复提交旧回调。</p>
             <p v-else class="text-sm text-gray-600 dark:text-gray-300">本次授权有效至 {{ formatTime(activeAttempt(provider.id)?.expires_at) }}。请在官方页面登录，将最终地址栏中的完整回调 URL 粘贴到下方。</p>
-            <a v-if="authorizationLinks[provider.id] && !attemptExpired(provider.id)" :href="authorizationLinks[provider.id]" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer" class="btn btn-secondary inline-flex" data-action="official-login">打开官方授权页面 ↗</a>
-            <p v-else-if="!attemptExpired(provider.id)" class="text-xs text-gray-500 dark:text-gray-400">若尚未打开官方页面，请取消事务后重新发起。已完成登录的本次回调仍可提交。</p>
+            <a v-if="authorizationLinks[provider.id] && !attemptExpired(provider.id) && activeAttempt(provider.id)?.status === 'pending'" :href="authorizationLinks[provider.id]" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer" class="btn btn-secondary inline-flex" data-action="official-login">打开官方授权页面 ↗</a>
+            <p v-else-if="!attemptExpired(provider.id) && activeAttempt(provider.id)?.status === 'pending'" class="text-xs text-gray-500 dark:text-gray-400">若尚未打开官方页面，请取消事务后重新发起。已完成登录的本次回调仍可提交。</p>
             <form class="space-y-3" @submit.prevent="complete(provider.id)">
               <label :for="`callback-${provider.id}`" class="block text-sm font-medium text-gray-700 dark:text-gray-200">本次完整回调 URL</label>
-              <textarea :id="`callback-${provider.id}`" v-model="callbackURLs[provider.id]" :class="fieldClass" rows="3" maxlength="16384" autocomplete="off" autocapitalize="off" :spellcheck="false" :disabled="mutationBusy || !providerAvailable(provider.id) || attemptExpired(provider.id)" :aria-describedby="`callback-note-${provider.id}`" />
+              <textarea :id="`callback-${provider.id}`" v-model="callbackURLs[provider.id]" :class="fieldClass" rows="3" maxlength="16384" autocomplete="off" autocapitalize="off" :spellcheck="false" :disabled="mutationBusy || !providerAvailable(provider.id) || attemptExpired(provider.id) || activeAttempt(provider.id)?.status !== 'pending'" :aria-describedby="`callback-note-${provider.id}`" />
               <p :id="`callback-note-${provider.id}`" class="text-xs text-gray-500 dark:text-gray-400">回调仅用于本次授权，提交后清空。不要粘贴 token、凭据文件或其他事务的回调。</p>
               <div class="flex flex-wrap gap-2">
                 <button type="submit" class="btn btn-primary" data-action="complete" :disabled="!canComplete(provider.id)">完成本次授权</button>
-                <button type="button" class="btn btn-secondary" data-action="cancel" :disabled="mutationBusy || needsReload[provider.id]" @click="cancel(provider.id)">取消本次事务</button>
+                <button type="button" class="btn btn-secondary" data-action="cancel" :disabled="mutationBusy || needsReload[provider.id]" @click="cancel(provider.id)">{{ attemptExpired(provider.id) ? '清理过期事务' : '取消本次事务' }}</button>
               </div>
             </form>
           </div>
@@ -116,7 +118,7 @@
               <p>worker 须配置为仅接收访问凭据的受管模式。安装采用上方当前选中的 Codex 与 Excel 授权档案。</p>
             </div>
             <div class="grid gap-4 sm:grid-cols-2">
-              <div class="space-y-1"><label for="install-group" class="block text-sm font-medium text-gray-700 dark:text-gray-200">OpenAI 分组 ID</label><input id="install-group" v-model.number="installGroup" data-field="install-group" :class="fieldClass" type="number" min="1" step="1" :disabled="mutationBusy"></div>
+              <div class="space-y-1"><label for="install-group" class="block text-sm font-medium text-gray-700 dark:text-gray-200">OpenAI 分组 ID</label><input id="install-group" v-model.number="installGroup" data-field="install-group" :class="fieldClass" type="number" min="1" step="1" :disabled="mutationBusy || !!installBPSAccount"></div>
               <div class="space-y-1"><label for="install-backend" class="block text-sm font-medium text-gray-700 dark:text-gray-200">Worker backend ID</label><input id="install-backend" v-model="installBackend" data-field="install-backend" :class="fieldClass" type="text" maxlength="256" autocomplete="off" :disabled="mutationBusy"></div>
               <div v-if="!installBPSAccount" class="space-y-1"><label for="install-bps-base-url" class="block text-sm font-medium text-gray-700 dark:text-gray-200">Worker inference base URL</label><input id="install-bps-base-url" v-model="installBPSBaseURL" data-field="install-bps-base-url" :class="fieldClass" type="url" maxlength="2048" autocomplete="url" :disabled="mutationBusy"></div>
               <div v-if="!installBPSAccount" class="space-y-1"><label for="install-bps-api-key" class="block text-sm font-medium text-gray-700 dark:text-gray-200">Inference API key</label><input id="install-bps-api-key" v-model="installBPSAPIKey" data-field="install-bps-api-key" :class="fieldClass" type="password" maxlength="4096" autocomplete="new-password" :disabled="mutationBusy"></div>
@@ -129,8 +131,9 @@
               <select id="install-provider" v-model="installProvider" data-field="install-provider" :class="fieldClass" :disabled="mutationBusy"><option value="" disabled>请选择提供方</option><option value="codex">Codex</option><option value="bps_excel">Excel / BPS</option></select>
             </div>
             <div class="flex flex-wrap items-center gap-2">
-              <button type="button" class="btn btn-secondary" data-action="create-runtime-shells" :disabled="mutationBusy || !positiveID(installGroup) || !installBPSBaseURL.trim() || !installBPSAPIKey.trim()" @click="createRuntimeShells">创建并绑定两个暂停账号</button>
+              <button v-if="!installCodexAccount" type="button" class="btn btn-secondary" data-action="create-runtime-shells" :disabled="!canCreateRuntimeShells" @click="createRuntimeShells">{{ installBPSAccount ? '重试创建 Codex 账号' : '创建并绑定两个暂停账号' }}</button>
               <span v-if="installBPSAccount && installCodexAccount" role="status" class="text-sm text-gray-600 dark:text-gray-300">已创建 Excel #{{ installBPSAccount }} 与 Codex #{{ installCodexAccount }}</span>
+              <span v-else-if="installBPSAccount" role="status" class="text-sm text-gray-600 dark:text-gray-300">已创建 Excel #{{ installBPSAccount }}</span>
             </div>
             <p class="text-xs text-gray-500 dark:text-gray-400">首次安装使用路由版本 0；已有部署会校验当前版本。部署路由 CAS 失败时，暂停账号只会保留运行时标记，不能参与新会话调度。</p>
             <label class="flex items-start gap-2 text-sm text-gray-700 dark:text-gray-200"><input v-model="installConfirmed" data-field="install-confirm" type="checkbox" :disabled="mutationBusy" class="mt-0.5 rounded border-gray-300 text-primary-600 focus:ring-primary-500 dark:border-dark-500">我已核对两份授权、分组和全新空账号，明确为新会话启用所选提供方。</label>
@@ -165,6 +168,7 @@ const capabilityChoices: { id: DeploymentCapability; label: string }[] = [
   { id: 'bps_local_responses', label: 'BPS 本地 Responses' },
 ]
 const fieldClass = 'w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 disabled:cursor-not-allowed disabled:opacity-60 dark:border-dark-600 dark:bg-dark-800 dark:text-gray-100'
+const authorizationUncertainMessage = '授权结果尚未确认，请先刷新状态核对。请勿重复提交旧回调；如需重试，请重新发起授权，并使用新事务的回调 URL。'
 const stepUp = useStepUp()
 const route = useRoute()
 let requestedProfileRef = typeof route.query.profile_ref === 'string' ? route.query.profile_ref : ''
@@ -194,6 +198,19 @@ function profilesFor(provider: CoreOAuthProvider) {
 }
 function selectedProfile(provider: CoreOAuthProvider) {
   return profilesFor(provider).find((profile) => profile.profile_ref === selected[provider])
+}
+function authorizationFeedback(provider: CoreOAuthProvider) {
+  const profile = selectedProfile(provider)
+  if (profile?.last_error_code === 'CORE_OAUTH_PROVIDER_REJECTED') {
+    return '官方授权未通过，请重新发起授权，并使用新事务的回调 URL。'
+  }
+  if (profile?.attempt?.status === 'failed') {
+    return '本次授权未完成，请重新发起授权，并使用新事务的回调 URL。'
+  }
+  if (profile?.attempt?.status === 'exchanging' || (!profile?.authorized && profile?.attempt?.status === 'consumed') || profile?.last_error_code === 'CORE_OAUTH_STORAGE_FAILED') {
+    return authorizationUncertainMessage
+  }
+  return ''
 }
 function providerAvailable(provider: CoreOAuthProvider) {
   return !loading.value && !loadError.value && !needsReload[provider] && capabilities.value?.available === true &&
@@ -253,7 +270,7 @@ function safeError(error: unknown): string {
     CORE_OAUTH_ATTEMPT_FORBIDDEN: '请使用发起本次授权的管理员账号完成或取消事务。',
     CORE_OAUTH_AUTHORIZATION_REQUIRED: '该档案需重新授权，请在官方页面登录。',
     CORE_OAUTH_REFRESH_UNCERTAIN: '刷新结果未知，已停止重试旧凭据。请重新授权。',
-    CORE_OAUTH_PROVIDER_REJECTED: '官方授权未通过，请核对本次回调或重新发起授权。',
+    CORE_OAUTH_PROVIDER_REJECTED: '官方授权未通过，请重新发起授权，并使用新事务的回调 URL。',
     CORE_OAUTH_STORAGE_FAILED: '授权状态暂时无法保存，请稍候刷新确认。',
     CORE_OAUTH_INVALID_RESPONSE: '官方登录地址校验失败，请取消事务并联系管理员。',
     MANAGED_DEPLOYMENT_INVALID: '部署、模型或能力无效，请检查后重新校验。',
@@ -275,17 +292,16 @@ async function loadProfiles() {
     if (!alive) return
     capabilities.value = available
     profiles.value = result
-    if (requestedProfileRef) {
-      const requested = result.find((profile) => profile.profile_ref === requestedProfileRef)
-      if (requested) {
-        selected[requested.provider] = requested.profile_ref
-        requestedProfileRef = ''
-      }
-    }
     for (const provider of providers) {
       clearTransient(provider.id)
       needsReload[provider.id] = false
       if (!selectedProfile(provider.id)) selected[provider.id] = profilesFor(provider.id)[0]?.profile_ref || ''
+    }
+    const requestedProfile = result.find((profile) => profile.profile_ref === requestedProfileRef)
+    if (requestedProfile) {
+      selected[requestedProfile.provider] = requestedProfile.profile_ref
+      requestedProfileRef = ''
+      showInstall.value = true
     }
   } catch (error) {
     if (alive) { capabilities.value = null; loadError.value = safeError(error) }
@@ -357,10 +373,15 @@ async function complete(provider: CoreOAuthProvider) {
     if (!alive) return
     upsert(result)
     authorizationLinks[provider] = ''
-    notices[provider] = '已完成本次授权。'
+    if (!authorizationFeedback(provider) && result.authorized && result.status === 'authorized' && (!result.attempt || result.attempt.status === 'consumed')) {
+      notices[provider] = '已完成本次授权。'
+    } else if (!authorizationFeedback(provider)) {
+      errors[provider] = authorizationUncertainMessage
+      needsReload[provider] = true
+    }
   } catch (error) {
     if (alive && !isStepUpCancelled(error)) {
-      errors[provider] = safeError(error)
+      errors[provider] = errorCode(error) ? safeError(error) : authorizationUncertainMessage
       await syncProfileAfterError(provider, profile.profile_ref)
     }
   } finally { if (alive) { callbackURLs[provider] = ''; busy[provider] = false } }
@@ -517,20 +538,25 @@ function validControlURL(value: string) {
     return ['https:', 'http:'].includes(url.protocol) && !url.username && !url.password && !url.search && !url.hash
   } catch { return false }
 }
+const canCreateRuntimeShells = computed(() => !mutationBusy.value && positiveID(installGroup.value) && !installCodexAccount.value &&
+  (!!installBPSAccount.value || (!!installBPSBaseURL.value.trim() && !!installBPSAPIKey.value.trim())))
 async function createRuntimeShells() {
-  if (mutationBusy.value || !positiveID(installGroup.value) || !installBPSBaseURL.value.trim() || !installBPSAPIKey.value.trim()) return
+  if (!canCreateRuntimeShells.value) return
+  const groupID = Number(installGroup.value)
   switchBusy.value = true
   switchError.value = ''
   switchNotice.value = ''
   try {
-    const excel = await stepUp.run(() => coreOAuthAPI.createRuntimeShell({
-      provider: 'bps_excel', group_id: Number(installGroup.value), base_url: installBPSBaseURL.value.trim(), api_key: installBPSAPIKey.value,
-    }))
-    installBPSAPIKey.value = ''
-    installBPSAccount.value = excel.id
-    const codex = await stepUp.run(() => coreOAuthAPI.createRuntimeShell({ provider: 'codex', group_id: Number(installGroup.value) }))
+    if (!installBPSAccount.value) {
+      const excel = await stepUp.run(() => coreOAuthAPI.createRuntimeShell({
+        provider: 'bps_excel', group_id: groupID, base_url: installBPSBaseURL.value.trim(), api_key: installBPSAPIKey.value,
+      }))
+      installBPSAPIKey.value = ''
+      installBPSBaseURL.value = ''
+      installBPSAccount.value = excel.id
+    }
+    const codex = await stepUp.run(() => coreOAuthAPI.createRuntimeShell({ provider: 'codex', group_id: groupID }))
     installCodexAccount.value = codex.id
-    installBPSBaseURL.value = ''
     switchNotice.value = '两个运行账号已创建并保持暂停调度。'
   } catch (error) {
     if (!isStepUpCancelled(error)) switchError.value = safeError(error)

@@ -9,13 +9,16 @@ const { api, stepUpRun, routeQuery } = vi.hoisted(() => ({
     cancelAuthorization: vi.fn(), refreshProfile: vi.fn(), getSwitchOptions: vi.fn(), switchProvider: vi.fn(), installCoreRuntime: vi.fn(),
   },
   stepUpRun: vi.fn((action: () => Promise<unknown>) => action()),
-  routeQuery: { profile_ref: '' as string },
+  routeQuery: {} as Record<string, string>,
 }))
 vi.mock('@/api/admin/core-oauth', () => ({ default: api }))
+vi.mock('vue-router', async () => {
+  const actual = await vi.importActual<typeof import('vue-router')>('vue-router')
+  return { ...actual, useRoute: () => ({ query: routeQuery }) }
+})
 vi.mock('@/composables/useStepUp', () => ({
   useStepUp: () => ({ run: stepUpRun, onCancel: vi.fn() }), isStepUpCancelled: () => false,
 }))
-vi.mock('vue-router', () => ({ useRoute: () => ({ query: routeQuery }) }))
 enableAutoUnmount(afterEach)
 
 function mountView() {
@@ -77,7 +80,7 @@ async function prepareInstall(wrapper: ReturnType<typeof mountView>) {
 describe('核心双 OAuth 授权管理', () => {
   beforeEach(() => {
     vi.resetAllMocks()
-    routeQuery.profile_ref = ''
+    Object.keys(routeQuery).forEach((key) => delete routeQuery[key])
     stepUpRun.mockImplementation((action: () => Promise<unknown>) => action())
     api.listProfiles.mockResolvedValue([])
     api.getCapabilities.mockResolvedValue({ available: true, providers: [
@@ -115,12 +118,30 @@ describe('核心双 OAuth 授权管理', () => {
     expect(wrapper.find('input[type="file"]').exists()).toBe(false)
   })
 
-  it('从账号创建流程进入时自动选中新建的 Excel profile', async () => {
-    routeQuery.profile_ref = 'excel-profile'
+  it('从账号创建入口带入 Excel profile 时选中档案并打开运行时安装步骤', async () => {
     api.listProfiles.mockResolvedValue(authorizedProfiles())
+    routeQuery.profile_ref = 'excel-profile'
     const wrapper = mountView()
     await flushPromises()
-    expect((wrapper.get('[data-provider="bps_excel"] select').element as HTMLSelectElement).value).toBe('excel-profile')
+    expect((wrapper.get('#profile-bps_excel').element as HTMLSelectElement).value).toBe('excel-profile')
+    expect(wrapper.get('#core-runtime-install').exists()).toBe(true)
+  })
+
+  it.each(['codex', 'bps_excel'] as const)('支持 %s 档案跳转，后续刷新保留手动选择', async (provider) => {
+    const initial = profile({ provider, profile_ref: `${provider}-initial` })
+    const requested = profile({ provider, profile_ref: `${provider}-requested` })
+    api.listProfiles.mockResolvedValue([initial, requested])
+    routeQuery.profile_ref = requested.profile_ref
+    const wrapper = mountView()
+    await flushPromises()
+    const select = wrapper.get(`#profile-${provider}`)
+    expect((select.element as HTMLSelectElement).value).toBe(requested.profile_ref)
+    expect(wrapper.get('#core-runtime-install').exists()).toBe(true)
+
+    await select.setValue(initial.profile_ref)
+    await wrapper.get('[data-action="reload"]').trigger('click')
+    await flushPromises()
+    expect((select.element as HTMLSelectElement).value).toBe(initial.profile_ref)
   })
 
   it('为所选 provider 创建档案并展示官方授权链接', async () => {
@@ -165,6 +186,126 @@ describe('核心双 OAuth 授权管理', () => {
     expect(wrapper.html()).not.toContain('private-test-code')
   })
 
+  it('刷新或重新打开页面仍显示 Excel 授权失败与安全重试指引', async () => {
+    api.listProfiles.mockResolvedValue([profile({
+      profile_ref: 'excel-profile', provider: 'bps_excel', name: 'Excel 核心授权',
+      attempt: { ...attempt, provider: 'bps_excel', status: 'failed' },
+      last_error_code: 'CORE_OAUTH_PROVIDER_REJECTED',
+    })])
+    const wrapper = mountView()
+    await flushPromises()
+    const excel = wrapper.get('[data-provider="bps_excel"]')
+    expect(excel.get('[role="alert"]').text()).toContain('官方授权未通过')
+    expect(excel.text()).toContain('重新发起授权')
+    expect(excel.text()).toContain('新事务的回调')
+    await wrapper.get('[data-action="reload"]').trigger('click')
+    await flushPromises()
+    expect(excel.get('[role="alert"]').text()).toContain('官方授权未通过')
+    expect(excel.find('textarea').exists()).toBe(false)
+    expect(api.startAuthorization).not.toHaveBeenCalled()
+  })
+
+  it('complete 返回失败档案时不误报成功，原有效授权仍保留', async () => {
+    api.listProfiles.mockResolvedValue([profile({ status: 'authorizing', attempt })])
+    api.completeAuthorization.mockResolvedValue(profile({
+      status: 'authorized', authorized: true, needs_authorization: false, token_revision: 7,
+      attempt: { ...attempt, status: 'failed' }, last_error_code: 'CORE_OAUTH_PROVIDER_REJECTED',
+    }))
+    const wrapper = mountView()
+    await flushPromises()
+    await wrapper.get('textarea').setValue(callbackURL)
+    await wrapper.get('[data-provider="codex"] form').trigger('submit')
+    await flushPromises()
+    const codex = wrapper.get('[data-provider="codex"]')
+    expect(codex.get('[role="alert"]').text()).toContain('官方授权未通过')
+    expect(codex.text()).not.toContain('已完成本次授权')
+    expect(codex.text()).toContain('已授权')
+    expect(codex.find('textarea').exists()).toBe(false)
+    expect(wrapper.html()).not.toContain('private-test-code')
+    expect(api.startAuthorization).not.toHaveBeenCalled()
+  })
+
+  it.each(['exchanging', 'consumed'] as const)('持久显示 %s 未确认结果，刷新不引导重发旧回调', async (status) => {
+    api.listProfiles.mockResolvedValue([profile({
+      status: 'authorizing', attempt: { ...attempt, status },
+    })])
+    const wrapper = mountView()
+    await flushPromises()
+    const codex = wrapper.get('[data-provider="codex"]')
+    expect(codex.get('[role="alert"]').text()).toContain('授权结果尚未确认')
+    expect(codex.text()).toContain('请先刷新状态核对')
+    expect(codex.text()).toContain('请勿重复提交旧回调')
+    if (status === 'exchanging') {
+      expect(codex.text()).not.toContain('本次回调仍可提交')
+      expect(codex.get('textarea').attributes('disabled')).toBeDefined()
+    }
+    await wrapper.get('[data-action="reload"]').trigger('click')
+    await flushPromises()
+    expect(codex.get('[role="alert"]').text()).toContain('授权结果尚未确认')
+    expect(api.completeAuthorization).not.toHaveBeenCalled()
+    expect(api.startAuthorization).not.toHaveBeenCalled()
+  })
+
+  it('complete 未返回有效授权时显示未确认结果，不误报成功或自动重试', async () => {
+    api.listProfiles.mockResolvedValue([profile({ status: 'authorizing', attempt })])
+    api.completeAuthorization.mockResolvedValue(profile())
+    const wrapper = mountView()
+    await flushPromises()
+    await wrapper.get('textarea').setValue(callbackURL)
+    await wrapper.get('[data-provider="codex"] form').trigger('submit')
+    await flushPromises()
+    const codex = wrapper.get('[data-provider="codex"]')
+    expect(codex.get('[role="alert"]').text()).toContain('授权结果尚未确认')
+    expect(codex.text()).toContain('请勿重复提交旧回调')
+    expect(codex.text()).not.toContain('已完成本次授权')
+    expect(codex.get('[data-action="authorize"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.html()).not.toContain('private-test-code')
+    expect(api.completeAuthorization).toHaveBeenCalledTimes(1)
+    expect(api.startAuthorization).not.toHaveBeenCalled()
+  })
+
+  it('提交回调后连接中断也明确提示先确认状态，不引导重发旧回调', async () => {
+    api.listProfiles.mockResolvedValue([profile({ status: 'authorizing', attempt })])
+    api.getProfile.mockResolvedValue(profile({ status: 'authorizing', attempt }))
+    api.completeAuthorization.mockRejectedValue(new Error('private-test-code secret-access-token'))
+    const wrapper = mountView()
+    await flushPromises()
+    await wrapper.get('textarea').setValue(callbackURL)
+    await wrapper.get('[data-provider="codex"] form').trigger('submit')
+    await flushPromises()
+    expect(wrapper.get('[role="alert"]').text()).toContain('授权结果尚未确认')
+    expect(wrapper.get('[role="alert"]').text()).toContain('请勿重复提交旧回调')
+    expect((wrapper.get('textarea').element as HTMLTextAreaElement).value).toBe('')
+    expect(wrapper.html()).not.toContain('private-test-code')
+    expect(wrapper.html()).not.toContain('secret-access-token')
+    expect(api.completeAuthorization).toHaveBeenCalledTimes(1)
+    expect(api.startAuthorization).not.toHaveBeenCalled()
+  })
+
+  it('未知公开失败码只显示固定文案，不回显码内的回调或凭据', async () => {
+    api.listProfiles.mockResolvedValue([profile({
+      attempt: { ...attempt, status: 'failed' },
+      last_error_code: `${callbackURL} secret-access-token <img src=x>`,
+    })])
+    const wrapper = mountView()
+    await flushPromises()
+    expect(wrapper.get('[role="alert"]').text()).toBe('本次授权未完成，请重新发起授权，并使用新事务的回调 URL。')
+    expect(wrapper.html()).not.toContain('private-test-code')
+    expect(wrapper.html()).not.toContain('test-state')
+    expect(wrapper.html()).not.toContain('secret-access-token')
+    expect(wrapper.find('img').exists()).toBe(false)
+  })
+
+  it('保存结果未知的公开错误码在重开页面后仍提示先核对状态', async () => {
+    api.listProfiles.mockResolvedValue([profile({ last_error_code: 'CORE_OAUTH_STORAGE_FAILED' })])
+    const wrapper = mountView()
+    await flushPromises()
+    expect(wrapper.get('[role="alert"]').text()).toContain('授权结果尚未确认')
+    expect(wrapper.get('[role="alert"]').text()).toContain('请先刷新状态核对')
+    expect(wrapper.get('[role="alert"]').text()).toContain('请勿重复提交旧回调')
+    expect(api.startAuthorization).not.toHaveBeenCalled()
+  })
+
   it('取消当前事务且不影响另一份档案', async () => {
     api.listProfiles.mockResolvedValue([profile({ status: 'authorizing', attempt }), profile({ profile_ref: 'excel-profile', provider: 'bps_excel', name: 'Excel 核心授权', status: 'authorized', authorized: true })])
     const wrapper = mountView()
@@ -179,11 +320,17 @@ describe('核心双 OAuth 授权管理', () => {
 
   it('过期事务不能提交，仍可取消后重新发起', async () => {
     api.listProfiles.mockResolvedValue([profile({ status: 'authorizing', attempt: { ...attempt, expires_at: '2000-01-01T00:00:00Z' } })])
+    api.cancelAuthorization.mockResolvedValue(profile())
     const wrapper = mountView()
     await flushPromises()
     await wrapper.get('textarea').setValue(callbackURL)
     expect(wrapper.get('[data-action="complete"]').attributes('disabled')).toBeDefined()
     expect(wrapper.text()).toContain('已过期')
+    expect(wrapper.get('[data-action="cancel"]').text()).toContain('清理过期事务')
+    await wrapper.get('[data-action="cancel"]').trigger('click')
+    await flushPromises()
+    expect(api.cancelAuthorization).toHaveBeenCalledWith('codex-profile', 'attempt-current')
+    expect(wrapper.get('[data-action="authorize"]').attributes('disabled')).toBeUndefined()
     expect(api.completeAuthorization).not.toHaveBeenCalled()
   })
 
@@ -405,6 +552,32 @@ describe('核心双 OAuth 授权管理', () => {
     expect((wrapper.get('[data-field="install-bps-api-key"]').element as HTMLInputElement).value).toBe('')
     expect(wrapper.html()).not.toContain('private-inference-key')
     expect(wrapper.html()).not.toContain('private inference key')
+  })
+
+  it('Codex 创建失败后复用已创建的 Excel 账号，只重试 Codex', async () => {
+    api.listProfiles.mockResolvedValue(authorizedProfiles())
+    api.createRuntimeShell.mockResolvedValueOnce({ id: 11 }).mockRejectedValueOnce({ code: 'CORE_OAUTH_INVALID_INPUT' })
+    const wrapper = mountView()
+    await flushPromises()
+    await prepareInstall(wrapper)
+
+    expect(api.createRuntimeShell).toHaveBeenCalledTimes(2)
+    expect(wrapper.find('[data-field="install-bps-api-key"]').exists()).toBe(false)
+    const retry = wrapper.get('[data-action="create-runtime-shells"]')
+    expect(retry.attributes('disabled')).toBeUndefined()
+    expect(wrapper.get('[data-field="install-group"]').attributes('disabled')).toBeDefined()
+    await retry.trigger('click')
+    await flushPromises()
+
+    expect(api.createRuntimeShell).toHaveBeenCalledTimes(3)
+    expect(api.createRuntimeShell).toHaveBeenLastCalledWith({ provider: 'codex', group_id: 1 })
+    expect(wrapper.text()).toContain('已创建 Excel #11 与 Codex #12')
+    await wrapper.get('[data-field="install-control-key"]').setValue('fixture-independent-control-key-1234567890')
+    await wrapper.get('[data-form="install"]').trigger('submit')
+    await flushPromises()
+    expect(api.installCoreRuntime).toHaveBeenCalledWith('deployment-1', expect.objectContaining({
+      bps_account_id: 11, codex_account_id: 12, group_id: 1,
+    }))
   })
 
   it('安装失败同样清空 control key，不回显错误中的凭据或自动重试', async () => {

@@ -1,8 +1,9 @@
-import { onMounted, onUnmounted, nextTick } from 'vue'
+import { onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { driver, type Driver, type DriveStep } from 'driver.js'
 import 'driver.js/dist/driver.css'
 import { useAuthStore as useUserStore } from '@/stores/auth'
 import { useOnboardingStore } from '@/stores/onboarding'
+import { useAdminComplianceStore } from '@/stores/adminCompliance'
 import { useI18n } from 'vue-i18n'
 import { getAdminSteps, getUserSteps } from '@/components/Guide/steps'
 
@@ -15,6 +16,7 @@ export function useOnboardingTour(options: OnboardingOptions) {
   const { t } = useI18n()
   const userStore = useUserStore()
   const onboardingStore = useOnboardingStore()
+  const complianceStore = useAdminComplianceStore()
   const storageVersion = 'v4_interactive' // Bump version for new tour type
 
   // Timing constants for better maintainability
@@ -91,7 +93,12 @@ export function useOnboardingTour(options: OnboardingOptions) {
     return false
   }
 
+  const canStartTour = () => userStore.user?.role !== 'admin' ||
+    (complianceStore.initialized && !complianceStore.loading && !complianceStore.shouldShow)
+
   const startTour = async (startIndex = 0) => {
+    if (!canStartTour()) return
+
     // 动态获取当前用户角色和步骤
     const isAdmin = userStore.user?.role === 'admin'
     const isSimpleMode = userStore.isSimpleMode
@@ -105,6 +112,8 @@ export function useOnboardingTour(options: OnboardingOptions) {
     if (currentStep?.element && typeof currentStep.element === 'string') {
       await ensureElement(currentStep.element, TIMING.ELEMENT_TIMEOUT_MS)
     }
+
+    if (!canStartTour()) return
 
     if (driverInstance) {
       driverInstance.destroy()
@@ -516,6 +525,7 @@ export function useOnboardingTour(options: OnboardingOptions) {
   }
 
   const replayTour = () => {
+    if (!canStartTour()) return
     clearSeen()
     void startTour()
   }
@@ -542,10 +552,20 @@ export function useOnboardingTour(options: OnboardingOptions) {
       return
     }
 
-    if (!options.autoStart || hasSeen()) return
-    autoStartTimer = setTimeout(() => {
-      void startTour()
-    }, TIMING.AUTO_START_DELAY_MS)
+    // 合规状态尚未加载或仍待确认时，不让导览遮挡确认弹窗。
+    watch(canStartTour, (canStart) => {
+      if (autoStartTimer) {
+        clearTimeout(autoStartTimer)
+        autoStartTimer = null
+      }
+      if (!canStart || !options.autoStart || hasSeen() || onboardingStore.isDriverActive()) return
+      autoStartTimer = setTimeout(() => {
+        autoStartTimer = null
+        if (canStartTour() && !hasSeen() && !onboardingStore.isDriverActive()) {
+          void startTour()
+        }
+      }, TIMING.AUTO_START_DELAY_MS)
+    }, { immediate: true })
   })
 
   onUnmounted(() => {
