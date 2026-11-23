@@ -205,6 +205,23 @@ describe('核心双 OAuth 授权管理', () => {
     expect(api.startAuthorization).not.toHaveBeenCalled()
   })
 
+  it('地区拒绝只显示安全的代理与新事务指引', async () => {
+    api.listProfiles.mockResolvedValue([profile({
+      profile_ref: 'excel-profile', provider: 'bps_excel', name: 'Excel 核心授权',
+      attempt: { ...attempt, provider: 'bps_excel', status: 'failed' },
+      last_error_code: 'CORE_OAUTH_REGION_UNSUPPORTED',
+    })])
+    const wrapper = mountView()
+    await flushPromises()
+    const alert = wrapper.get('[data-provider="bps_excel"] [role="alert"]').text()
+    expect(alert).toContain('受支持地区的代理')
+    expect(alert).toContain('新事务的回调 URL')
+    expect(alert).toContain('服务器直连')
+    expect(wrapper.html()).not.toContain('unsupported_country_region_territory')
+    expect(wrapper.html()).not.toContain('provider-secret')
+    expect(api.startAuthorization).not.toHaveBeenCalled()
+  })
+
   it('complete 返回失败档案时不误报成功，原有效授权仍保留', async () => {
     api.listProfiles.mockResolvedValue([profile({ status: 'authorizing', attempt })])
     api.completeAuthorization.mockResolvedValue(profile({

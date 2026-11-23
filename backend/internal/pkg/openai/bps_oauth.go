@@ -219,12 +219,24 @@ func (c *BPSOAuthClient) requestTokens(ctx context.Context, form url.Values, ref
 		return nil, unknown()
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		var failure struct {
-			Error string `json:"error"`
+		var envelope struct {
+			Error json.RawMessage `json:"error"`
 		}
-		_ = json.Unmarshal(raw, &failure)
-		if failure.Error == "invalid_grant" {
+		_ = json.Unmarshal(raw, &envelope)
+		var objectFailure struct {
+			Code string `json:"code"`
+		}
+		var failureCode string
+		if json.Unmarshal(envelope.Error, &objectFailure) == nil {
+			failureCode = objectFailure.Code
+		} else {
+			_ = json.Unmarshal(envelope.Error, &failureCode)
+		}
+		if failureCode == "invalid_grant" {
 			return nil, &BPSOAuthError{Code: "bps_invalid_grant", StatusCode: response.StatusCode, Permanent: true}
+		}
+		if !refresh && failureCode == "unsupported_country_region_territory" {
+			return nil, &BPSOAuthError{Code: "bps_region_unsupported", StatusCode: response.StatusCode, Permanent: true}
 		}
 		if refresh && response.StatusCode >= 500 {
 			return nil, unknown()

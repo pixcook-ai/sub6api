@@ -69,6 +69,9 @@ func coreOAuthBPSError(err error) error {
 		case "bps_token_request_invalid", "bps_invalid_grant", "bps_token_endpoint_rejected",
 			"bps_token_exchange_outcome_unknown":
 			stage = "token_endpoint"
+		case "bps_region_unsupported":
+			stage = "token_endpoint"
+			code = "CORE_OAUTH_REGION_UNSUPPORTED"
 		case "bps_refresh_outcome_unknown":
 			// Refresh deliberately collapses transport and post-response validation
 			// failures into one code; do not infer which stage failed.
@@ -80,7 +83,11 @@ func coreOAuthBPSError(err error) error {
 			stage = "token_validation"
 		}
 		if stage != "unknown" {
-			code = typed.Code
+			if typed.Code == "bps_region_unsupported" {
+				classified.SafeCode = "CORE_OAUTH_REGION_UNSUPPORTED"
+			} else if code == "bps_oauth_unclassified" {
+				code = typed.Code
+			}
 		}
 		if typed.StatusCode >= 100 && typed.StatusCode <= 599 {
 			status = typed.StatusCode

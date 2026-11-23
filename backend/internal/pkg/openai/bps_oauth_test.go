@@ -107,6 +107,30 @@ func TestBPSOAuthCallbackExchangesBoundPKCEOnce(t *testing.T) {
 	}
 }
 
+func TestBPSOAuthRegionRejectionUsesOnlyFixedCode(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+		code string
+	}{
+		{"unsupported region", `{"error":{"code":"unsupported_country_region_territory","message":"synthetic-provider-secret"}}`, "bps_region_unsupported"},
+		{"unknown provider code", `{"error":{"code":"private-provider-code","message":"synthetic-provider-secret"}}`, "bps_token_endpoint_rejected"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tx, callback := bpsTestAuthorization(t)
+			client := bpsLocalClient(t, func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusForbidden)
+				_, _ = io.WriteString(w, tc.body)
+			})
+			_, err := client.ExchangeCallback(context.Background(), tx, callback, openai.BPSOAuthIdentity{})
+			classified := bpsRequireError(t, err, tc.code, false, tc.code == "bps_region_unsupported")
+			if classified.StatusCode != http.StatusForbidden || strings.Contains(classified.Error(), "synthetic-provider-secret") || strings.Contains(classified.Error(), "private-provider-code") {
+				t.Fatal("provider details escaped the fixed error classification")
+			}
+		})
+	}
+}
+
 func TestBPSOAuthRefreshPreservesIdentityAndUnrotatedRefreshToken(t *testing.T) {
 	client := bpsLocalClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if err := r.ParseForm(); err != nil {
@@ -356,6 +380,7 @@ func TestBPSOAuthRefreshFailureIsSafeAndNeverRetried(t *testing.T) {
 		unknown, permanent bool
 	}{
 		{"revoked grant", 400, `{"error":"invalid_grant","error_description":"synthetic-secret"}`, "bps_invalid_grant", false, true},
+		{"unsupported region remains ordinary refresh rejection", 403, `{"error":{"code":"unsupported_country_region_territory","message":"synthetic-secret"}}`, "bps_token_endpoint_rejected", false, false},
 		{"server failure", 503, `{"error":"server_error","description":"synthetic-secret"}`, "bps_refresh_outcome_unknown", true, false},
 		{"malformed success", 200, `synthetic-secret-invalid-json`, "bps_refresh_outcome_unknown", true, false},
 		{"oversized success", 200, strings.Repeat("x", (1<<20)+1), "bps_refresh_outcome_unknown", true, false},

@@ -201,6 +201,9 @@ function selectedProfile(provider: CoreOAuthProvider) {
 }
 function authorizationFeedback(provider: CoreOAuthProvider) {
   const profile = selectedProfile(provider)
+  if (profile?.last_error_code === 'CORE_OAUTH_REGION_UNSUPPORTED') {
+    return '官方拒绝了当前网络地区的授权。请选择位于受支持地区的代理，重新发起授权并使用新事务的回调 URL；未选代理时使用服务器直连。'
+  }
   if (profile?.last_error_code === 'CORE_OAUTH_PROVIDER_REJECTED') {
     return '官方授权未通过，请重新发起授权，并使用新事务的回调 URL。'
   }
@@ -271,6 +274,7 @@ function safeError(error: unknown): string {
     CORE_OAUTH_AUTHORIZATION_REQUIRED: '该档案需重新授权，请在官方页面登录。',
     CORE_OAUTH_REFRESH_UNCERTAIN: '刷新结果未知，已停止重试旧凭据。请重新授权。',
     CORE_OAUTH_PROVIDER_REJECTED: '官方授权未通过，请重新发起授权，并使用新事务的回调 URL。',
+    CORE_OAUTH_REGION_UNSUPPORTED: '官方拒绝了当前网络地区的授权。请选择位于受支持地区的代理，重新发起授权并使用新事务的回调 URL；未选代理时使用服务器直连。',
     CORE_OAUTH_STORAGE_FAILED: '授权状态暂时无法保存，请稍候刷新确认。',
     CORE_OAUTH_INVALID_RESPONSE: '官方登录地址校验失败，请取消事务并联系管理员。',
     MANAGED_DEPLOYMENT_INVALID: '部署、模型或能力无效，请检查后重新校验。',

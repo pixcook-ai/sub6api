@@ -27,6 +27,7 @@ var (
 	ErrCoreOAuthAuthorizationRequired = infraerrors.New(http.StatusConflict, "CORE_OAUTH_AUTHORIZATION_REQUIRED", "Complete authorization for the original provider")
 	ErrCoreOAuthRefreshUncertain      = infraerrors.New(http.StatusConflict, "CORE_OAUTH_REFRESH_UNCERTAIN", "Refresh outcome is unknown; authorize the original provider again")
 	ErrCoreOAuthProviderRejected      = infraerrors.New(http.StatusBadRequest, "CORE_OAUTH_PROVIDER_REJECTED", "The provider rejected authorization")
+	ErrCoreOAuthRegionUnsupported     = infraerrors.New(http.StatusBadRequest, "CORE_OAUTH_REGION_UNSUPPORTED", "The provider rejected this network region; select a supported proxy and start a new authorization")
 	ErrCoreOAuthStorage               = infraerrors.New(http.StatusServiceUnavailable, "CORE_OAUTH_STORAGE_FAILED", "Core OAuth secure storage is unavailable")
 	// Aliases keep handler terminology aligned with fixed public error codes.
 	ErrCoreOAuthInvalidInput  = ErrCoreOAuthInvalid
@@ -131,7 +132,13 @@ type CoreOAuthProtocol interface {
 	ExchangeCallback(context.Context, *CoreOAuthProtocolAttempt, string, CoreOAuthIdentity, CoreOAuthTransport) (*CoreOAuthGrant, error)
 	Refresh(context.Context, CoreOAuthGrant, CoreOAuthTransport) (*CoreOAuthGrant, error)
 }
-type CoreOAuthProtocolError struct{ Permanent, OutcomeUnknown bool }
+type CoreOAuthProtocolError struct {
+	Permanent      bool
+	OutcomeUnknown bool
+	// SafeCode is a fixed local diagnostic suitable for profile state.
+	// It never contains provider text or response bodies.
+	SafeCode string
+}
 
 func (*CoreOAuthProtocolError) Error() string { return "OAuth provider operation failed" }
 

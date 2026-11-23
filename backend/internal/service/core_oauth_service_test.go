@@ -169,6 +169,30 @@ func TestCoreOAuthAuthorizationUnknownExchangeRequiresNewAttemptAcrossRestart(t 
 	require.Equal(t, authorized.TokenRevision+1, view.TokenRevision)
 }
 
+func TestCoreOAuthAuthorizationPersistsOnlySafeRegionRejectionCode(t *testing.T) {
+	ctx := context.Background()
+	store := &coreOAuthTestStore{rows: map[string]service.CoreOAuthSealedProfile{}}
+	protocol := coreOAuthProtocolFixture()
+	svc, profile := authorizeCoreOAuthFixture(t, store, protocol)
+	attempt, err := svc.StartAuthorization(ctx, profile.ProfileRef, 42)
+	require.NoError(t, err)
+	protocol.exchangeErr = &service.CoreOAuthProtocolError{Permanent: true, SafeCode: "CORE_OAUTH_REGION_UNSUPPORTED"}
+	_, err = svc.CompleteAuthorization(ctx, profile.ProfileRef, service.CoreOAuthCompleteInput{
+		AttemptID: attempt.AttemptID, CallbackURL: attempt.RedirectURI + "?code=fixture", ActorID: 42,
+	})
+	require.ErrorIs(t, err, service.ErrCoreOAuthRegionUnsupported)
+
+	restarted := coreOAuthTestService(t, store, map[string]service.CoreOAuthProtocol{service.CoreOAuthProviderExcel: protocol})
+	view, err := restarted.GetProfile(ctx, profile.ProfileRef)
+	require.NoError(t, err)
+	require.Equal(t, service.ErrCoreOAuthRegionUnsupported.Reason, view.LastErrorCode)
+	require.Equal(t, "failed", view.Attempt.Status)
+	raw, err := json.Marshal(view)
+	require.NoError(t, err)
+	require.NotContains(t, string(raw), "synthetic-provider-secret")
+	require.NotContains(t, string(raw), "unsupported_country_region_territory")
+}
+
 func TestCoreOAuthAuthorizationRestartExpiresPendingAttemptAndCancelIsActorBound(t *testing.T) {
 	ctx := context.Background()
 	store := &coreOAuthTestStore{rows: map[string]service.CoreOAuthSealedProfile{}}

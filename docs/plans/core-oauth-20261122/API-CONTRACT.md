@@ -38,7 +38,7 @@ Attempt status: pending,exchanging,consumed,canceled,expired,failed. No actor/st
 CoreOAuthAuthorization: {profile:CoreOAuthProfile,attempt_id,authorization_url,redirect_uri,expires_at}.
 ActorID is trusted middleware context, never client JSON. Refresh token/access token/ID token never returned.
 
-Errors: CORE_OAUTH_UNAVAILABLE503; CORE_OAUTH_INVALID_INPUT400; CORE_OAUTH_PROFILE_NOT_FOUND404; CORE_OAUTH_CONFLICT409; CORE_OAUTH_BUSY409; CORE_OAUTH_ATTEMPT_EXPIRED410; CORE_OAUTH_ATTEMPT_FORBIDDEN403; CORE_OAUTH_AUTHORIZATION_REQUIRED409; CORE_OAUTH_REFRESH_UNCERTAIN409; CORE_OAUTH_PROVIDER_REJECTED400; CORE_OAUTH_STORAGE_FAILED503. Only fixed safe error text.
+Errors: CORE_OAUTH_UNAVAILABLE503; CORE_OAUTH_INVALID_INPUT400; CORE_OAUTH_PROFILE_NOT_FOUND404; CORE_OAUTH_CONFLICT409; CORE_OAUTH_BUSY409; CORE_OAUTH_ATTEMPT_EXPIRED410; CORE_OAUTH_ATTEMPT_FORBIDDEN403; CORE_OAUTH_AUTHORIZATION_REQUIRED409; CORE_OAUTH_REFRESH_UNCERTAIN409; CORE_OAUTH_PROVIDER_REJECTED400; CORE_OAUTH_REGION_UNSUPPORTED400; CORE_OAUTH_STORAGE_FAILED503. Only fixed safe error text. CORE_OAUTH_REGION_UNSUPPORTED is emitted only for the fixed provider classification `unsupported_country_region_territory`; provider response bodies and arbitrary provider error codes are never persisted or returned.
 
 ## D runtime seam
 CoreOAuthCredentialSnapshot: Profile CoreOAuthProfile, AccessToken string; AccessToken has json omit tag. No RT/ID token. CredentialSnapshot refreshes an expired grant through this core authority. RT is committed before snapshot publication; unknown refresh fails closed.

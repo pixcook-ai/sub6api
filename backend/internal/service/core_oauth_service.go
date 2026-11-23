@@ -352,6 +352,8 @@ func (s *CoreOAuthService) CompleteAuthorization(ctx context.Context, ref string
 		if !errors.As(exchangeErr, &classified) || classified == nil || classified.OutcomeUnknown {
 			record.NeedsAuthorization = true
 			result = ErrCoreOAuthAuthorizationRequired
+		} else if classified.SafeCode == "CORE_OAUTH_REGION_UNSUPPORTED" {
+			result = ErrCoreOAuthRegionUnsupported
 		}
 		record.LastErrorCode = result.Reason
 		if err = s.save(persistCtx, record); err != nil {
