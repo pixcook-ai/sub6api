@@ -177,6 +177,8 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 	reqStream := parsed.Stream
 	originalModel := reqModel
 
+	captureClaudeOAuthCompatibilitySource(c, account, body)
+
 	// === DEBUG: 打印客户端原始请求（headers + body 摘要）===
 	if c != nil {
 		s.debugLogGatewaySnapshot("CLIENT_ORIGINAL", c.Request.Header, body, map[string]string{

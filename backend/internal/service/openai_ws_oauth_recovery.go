@@ -8,6 +8,9 @@ import (
 )
 
 func (s *OpenAIGatewayService) recoverOpenAIOAuthHeaders(ctx context.Context, account *Account, headers http.Header) (http.Header, *Account, bool) {
+	if ManagedOAuthDeclared(account) || openAIManagedDeploymentNoReplay(ctx) {
+		return headers, nil, false
+	}
 	if s.openAITokenProvider == nil {
 		return headers, nil, false
 	}
@@ -32,6 +35,9 @@ func (s *OpenAIGatewayService) recoverOpenAIOAuthHeaders(ctx context.Context, ac
 // refreshOpenAIWSAuthHeaders also runs for delayed prewarming. Never retain an
 // old OAuth bearer in a future dial after another request rotates credentials.
 func (s *OpenAIGatewayService) refreshOpenAIWSAuthHeaders(ctx context.Context, account *Account, headers http.Header) (http.Header, error) {
+	if ManagedOAuthDeclared(account) {
+		return nil, ErrManagedOAuthRefresh
+	}
 	if s.isAgentIdentityAccount(ctx, account) {
 		return s.refreshOpenAIAgentIdentityHeaders(ctx, account, headers)
 	}
@@ -62,9 +68,16 @@ func (s *OpenAIGatewayService) refreshOpenAIWSAuthHeaders(ctx context.Context, a
 }
 
 func (s *OpenAIGatewayService) acquireOpenAIWSWithAuthRecovery(ctx context.Context, pool *openAIWSConnPool, request *openAIWSAcquireRequest) (*openAIWSConnLease, error) {
-	lease, err := pool.Acquire(ctx, *request)
+	scopedRequest := *request
+	scopedRequest.Headers = scopeManagedDeploymentWireHeaders(ctx, request.Headers)
+	if openAIManagedDeploymentNoReplay(ctx) {
+		// Pool reuse does not key on protocol session headers. A managed
+		// ingress keeps its own lease across turns; never inherit another one.
+		scopedRequest.ForceNewConn = true
+	}
+	lease, err := pool.Acquire(ctx, scopedRequest)
 	var dialErr *openAIWSDialError
-	if err == nil || !errors.As(err, &dialErr) || dialErr.StatusCode != http.StatusUnauthorized || ctx.Err() != nil {
+	if err == nil || !errors.As(err, &dialErr) || dialErr.StatusCode != http.StatusUnauthorized || openAIManagedDeploymentNoReplay(ctx) || ctx.Err() != nil {
 		return lease, err
 	}
 	headers, owner, recovered := s.recoverOpenAIOAuthHeaders(ctx, request.Account, request.Headers)

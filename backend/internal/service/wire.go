@@ -27,6 +27,12 @@ func ProvideGrokOAuthService(proxyRepo ProxyRepository, oauthClient GrokOAuthCli
 	return svc
 }
 
+func ProvideStoredResponsesWorker(svc *StoredResponseService) *StoredResponsesWorker {
+	worker := NewStoredResponsesWorker(svc)
+	worker.Start()
+	return worker
+}
+
 // ProvidePricingService creates and initializes PricingService
 func ProvidePricingService(cfg *config.Config, remoteClient PricingRemoteClient) (*PricingService, error) {
 	svc := NewPricingService(cfg, remoteClient)
@@ -838,6 +844,10 @@ func ProvideAPIKeyService(
 
 // ProviderSet is the Wire provider set for all services
 var ProviderSet = wire.NewSet(
+	ProvideFileService,
+	NewManagedFileResolver,
+	ProvideStoredResponseService,
+	ProvideStoredResponsesWorker,
 	// Core services
 	ProvideAuthService,
 	NewPasskeyService,
@@ -871,6 +881,7 @@ var ProviderSet = wire.NewSet(
 	NewOAuthService,
 	ProvideClaudeResetCreditService,
 	ProvideOpenAIOAuthService,
+	ProvideCoreOAuthService,
 	ProvideGrokOAuthService,
 	wire.Bind(new(GrokOAuthTokenService), new(*GrokOAuthService)),
 	NewGeminiOAuthService,

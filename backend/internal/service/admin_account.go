@@ -411,6 +411,14 @@ func normalizeOpenAILongContextBillingUpdateExtra(account *Account, input *Updat
 // Grok media eligibility helpers live in account_grok_media_eligibility.go.
 
 func buildAccountForCreate(input *CreateAccountInput, accountExtra map[string]any) (*Account, error) {
+	if err := RejectCoreOAuthAdminMutation(nil, accountExtra, input.Credentials); err != nil {
+		return nil, err
+	}
+	var managedErr error
+	accountExtra, managedErr = prepareManagedOAuthCreate(input, accountExtra)
+	if managedErr != nil {
+		return nil, managedErr
+	}
 	if input.Platform == PlatformOpenAIBPS {
 		creds, err := NormalizeOpenAIBPSCredentials(input.Type, input.Credentials, nil)
 		if err != nil {
@@ -446,6 +454,9 @@ func buildAccountForCreate(input *CreateAccountInput, accountExtra map[string]an
 		Priority:    input.Priority,
 		Status:      StatusActive,
 		Schedulable: true,
+	}
+	if input.Schedulable != nil {
+		account.Schedulable = *input.Schedulable
 	}
 	if input.ProbeEnabled != nil && *input.ProbeEnabled {
 		if !isUpstreamBillingProbeAccount(account) {
@@ -491,6 +502,9 @@ func buildAccountForCreate(input *CreateAccountInput, accountExtra map[string]an
 func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccountInput) (*Account, error) {
 	accountExtra, err := normalizeOpenAILongContextBillingExtra(input.Platform, input.Extra)
 	if err != nil {
+		return nil, err
+	}
+	if err := RejectCoreOAuthAdminMutation(nil, accountExtra, input.Credentials); err != nil {
 		return nil, err
 	}
 	if err := ValidateOpenAIRequestTimezoneExtra(input.Platform, accountExtra); err != nil {
@@ -564,7 +578,7 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 
 	// OAuth 账号：创建后异步设置隐私。
 	// 使用 Ensure（幂等）而非 Force：新建账号 Extra 为空时效果相同，但更安全。
-	if account.Type == AccountTypeOAuth {
+	if account.Type == AccountTypeOAuth && !ManagedOAuthDeclared(account) {
 		switch account.Platform {
 		case PlatformOpenAI:
 			go func() {
@@ -593,6 +607,15 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *UpdateAccountInput) (*Account, error) {
 	account, err := s.accountRepo.GetByID(ctx, id)
 	if err != nil {
+		return nil, err
+	}
+	if err := RejectCoreOAuthAdminMutation(account, input.Extra, input.Credentials); err != nil {
+		return nil, err
+	}
+	if CoreOAuthDeclared(account) && (input.Type != "" && input.Type != account.Type || input.ProxyID != nil) {
+		return nil, ErrCoreOAuthConflict
+	}
+	if err := managedOAuthAuthFieldsUnchanged(account, input); err != nil {
 		return nil, err
 	}
 	if account.Platform == PlatformTypeSafe && input.Type != "" && input.Type != AccountTypeAPIKey {
@@ -729,6 +752,7 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		delete(normalizedExtra, OpenCodeGoUsageSnapshotExtraKey)
 		// 保留配额用量和专用服务受管字段，防止普通账号编辑意外覆盖。
 		for _, key := range []string{
+			ManagedOAuthExtraKey,
 			"quota_used",
 			"quota_daily_used",
 			"quota_daily_start",
@@ -985,6 +1009,16 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 // UpdateAccountExtra 仅对 Extra JSONB 做 key 级合并，避免覆盖其它运行态键
 // （如 model_rate_limits / passive_usage_* 等）。
 func (s *adminServiceImpl) UpdateAccountExtra(ctx context.Context, id int64, updates map[string]any) error {
+	account, err := s.accountRepo.GetByID(ctx, id)
+	if err != nil {
+		return err
+	}
+	if err := RejectCoreOAuthAdminMutation(account, updates, nil); err != nil {
+		return err
+	}
+	if _, exists := updates[ManagedOAuthExtraKey]; exists {
+		return ErrManagedOAuthRefresh
+	}
 	updates = MergeOpenAICodexTicketExtra(updates, nil)
 	updates = sanitizedCodexFingerprintExtraUpdates(updates)
 	updates = stripOpenAIAutoResetCreditManagedExtra(updates, true)
@@ -1015,6 +1049,12 @@ func (s *adminServiceImpl) UpdateAccountExtra(ctx context.Context, id int64, upd
 // BulkUpdateAccounts updates multiple accounts in one request.
 // It merges credentials/extra keys instead of overwriting the whole object.
 func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUpdateAccountsInput) (*BulkUpdateAccountsResult, error) {
+	if err := RejectCoreOAuthAdminMutation(nil, input.Extra, input.Credentials); err != nil {
+		return nil, err
+	}
+	if _, present := input.Extra[ManagedOAuthExtraKey]; present {
+		return nil, ErrManagedOAuthRefresh
+	}
 	delete(input.Extra, OpenAIBPSCredentialStateExtraKey)
 	// Managed probe/session state may only enter through dedicated typed endpoints.
 	input.Extra = MergeOpenAICodexTicketExtra(input.Extra, nil)
@@ -1063,7 +1103,7 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 
 	// 预取所有目标账号，供凭据守卫/代理守卫/混合渠道检查共用，避免多次 DB 查询。
 	var cachedTargets []*Account
-	if len(input.Credentials) > 0 || input.ProxyID != nil || input.GroupIDs != nil || openAISettings.any() || input.ProbeEnabled != nil || input.RateMultiplier != nil {
+	if input.Credentials != nil || input.Extra != nil || input.ProxyID != nil || input.GroupIDs != nil || openAISettings.any() || input.ProbeEnabled != nil || input.RateMultiplier != nil {
 		loaded, err := s.accountRepo.GetByIDs(ctx, input.AccountIDs)
 		if err != nil {
 			return nil, err
@@ -1074,6 +1114,16 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 	for _, account := range cachedTargets {
 		if account != nil {
 			targetsByID[account.ID] = account
+		}
+	}
+	if input.Extra != nil || input.Credentials != nil || input.ProxyID != nil {
+		for _, account := range cachedTargets {
+			if err := RejectCoreOAuthAdminMutation(account, input.Extra, input.Credentials); err != nil {
+				return nil, err
+			}
+			if CoreOAuthDeclared(account) && input.ProxyID != nil {
+				return nil, ErrCoreOAuthConflict
+			}
 		}
 	}
 	if openAISettings.any() {
@@ -1098,6 +1148,9 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 	// UpdateAccount 守卫对齐)。覆盖显式 IDs 与 filter 解析出的 IDs(此处 AccountIDs 已解析完成)。
 	if len(input.Credentials) > 0 {
 		for _, acc := range cachedTargets {
+			if ManagedOAuthDeclared(acc) {
+				return nil, ErrManagedOAuthRefresh
+			}
 			if acc != nil && acc.IsOpenAIBPS() {
 				return nil, infraerrors.BadRequest("BPS_BULK_CREDENTIALS_UNSUPPORTED", "Edit BPS credentials individually so workspace and expiry metadata are validated per account")
 			}
@@ -1358,6 +1411,15 @@ func (s *adminServiceImpl) resolveBulkUpdateTargetIDs(ctx context.Context, filte
 }
 
 func (s *adminServiceImpl) DeleteAccount(ctx context.Context, id int64) error {
+	account, err := s.accountRepo.GetByID(ctx, id)
+	if err != nil {
+		return err
+	}
+	if CoreOAuthDeclared(account) {
+		// Core runtime accounts are owned by the native OAuth deployment flow;
+		// ordinary account CRUD must not remove the runtime behind a live binding.
+		return ErrCoreOAuthConflict
+	}
 	// 级联删除 spark 影子账号（先删影子，再删母账号）
 	shadows, err := s.accountRepo.ListShadowsByParent(ctx, id)
 	if err != nil {
@@ -1440,9 +1502,15 @@ func (s *adminServiceImpl) CreateShadow(ctx context.Context, parentID int64, opt
 	if err != nil {
 		return nil, fmt.Errorf("get parent account: %w", err)
 	}
+	if CoreOAuthDeclared(parent) {
+		return nil, ErrCoreOAuthConflict
+	}
 	if !parent.IsOpenAIOAuth() {
 		return nil, infraerrors.New(http.StatusBadRequest, "SPARK_SHADOW_INVALID_PARENT",
 			"spark shadow requires an OpenAI OAuth parent account")
+	}
+	if ManagedOAuthDeclared(parent) {
+		return nil, ErrManagedOAuthRefresh
 	}
 	// G6:母账号本身不能是影子,否则会建出二级影子——resolveCredentialAccount 只解一层,
 	// 会解析到无凭据的一级影子,进入坏调度/上游失败。

@@ -20,6 +20,7 @@ func ProvideAdminHandlers(
 	backupHandler *admin.BackupHandler,
 	oauthHandler *admin.OAuthHandler,
 	openaiOAuthHandler *admin.OpenAIOAuthHandler,
+	coreOAuthHandler *admin.CoreOAuthHandler,
 	geminiOAuthHandler *admin.GeminiOAuthHandler,
 	antigravityOAuthHandler *admin.AntigravityOAuthHandler,
 	grokOAuthHandler *admin.GrokOAuthHandler,
@@ -72,6 +73,7 @@ func ProvideAdminHandlers(
 		Backup:                 backupHandler,
 		OAuth:                  oauthHandler,
 		OpenAIOAuth:            openaiOAuthHandler,
+		CoreOAuth:              coreOAuthHandler,
 		GeminiOAuth:            geminiOAuthHandler,
 		AntigravityOAuth:       antigravityOAuthHandler,
 		GrokOAuth:              grokOAuthHandler,
@@ -145,14 +147,18 @@ func ProvideOpenAIGatewayHandler(
 	userRequestAuditService *service.UserRequestAuditService,
 	coordinator *securityaudit.Coordinator,
 	compositeResolver *service.CompositeRouteResolver,
+	managedFiles *service.ManagedFileResolver,
+	storedResponses *service.StoredResponseService,
 ) *OpenAIGatewayHandler {
 	gatewayService.SetPluginManager(pluginManager)
+	gatewayService.SetStoredResponseService(storedResponses)
 	h := NewOpenAIGatewayHandler(gatewayService, concurrencyService, billingCacheService, apiKeyService,
 		usageRecordWorkerPool, errorPassthroughService, contentModerationService, opsService, cfg)
 	h.compositeResolver = compositeResolver
 	h.grokMediaEligibilityProber = grokQuotaService
 	h.securityAuditCoordinator = coordinator
 	h.userRequestAuditService = userRequestAuditService
+	h.SetManagedFileResolver(managedFiles)
 	return h
 }
 
@@ -202,6 +208,8 @@ func ProvideHandlers(
 	adminHandlers *AdminHandlers,
 	gatewayHandler *GatewayHandler,
 	openaiGatewayHandler *OpenAIGatewayHandler,
+	fileHandler *FileHandler,
+	storedResponseHandler *StoredResponseHandler,
 	settingHandler *SettingHandler,
 	totpHandler *TotpHandler,
 	passkeyHandler *PasskeyHandler,
@@ -228,6 +236,8 @@ func ProvideHandlers(
 		Admin:            adminHandlers,
 		Gateway:          gatewayHandler,
 		OpenAIGateway:    openaiGatewayHandler,
+		Files:            fileHandler,
+		StoredResponses:  storedResponseHandler,
 		Setting:          settingHandler,
 		Totp:             totpHandler,
 		Passkey:          passkeyHandler,
@@ -254,6 +264,8 @@ var ProviderSet = wire.NewSet(
 	NewChannelMonitorV2Handler,
 	ProvideGatewayHandler,
 	ProvideOpenAIGatewayHandler,
+	NewFileHandler,
+	NewStoredResponseHandler,
 	NewTotpHandler,
 	NewPasskeyHandler,
 	ProvideSettingHandler,
@@ -274,6 +286,7 @@ var ProviderSet = wire.NewSet(
 	admin.NewBackupHandler,
 	admin.NewOAuthHandler,
 	admin.NewOpenAIOAuthHandler,
+	admin.NewCoreOAuthHandler,
 	admin.NewGeminiOAuthHandler,
 	admin.NewAntigravityOAuthHandler,
 	admin.NewGrokOAuthHandler,

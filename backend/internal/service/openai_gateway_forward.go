@@ -18,7 +18,29 @@ import (
 )
 
 // Forward forwards request to OpenAI API
-func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, account *Account, body []byte) (*OpenAIForwardResult, error) {
+func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, account *Account, body []byte) (result *OpenAIForwardResult, err error) {
+	started := time.Now()
+	defer func() {
+		var observed *storedResponseUsageError
+		if result != nil || !errors.As(err, &observed) {
+			return
+		}
+		model := gjson.GetBytes(body, "model").String()
+		billingModel, upstreamModel := resolveOpenAIForwardMappedModels(account, model, isOpenAIResponsesCompactPath(c))
+		result = &OpenAIForwardResult{
+			Model: model, BillingModel: billingModel, UpstreamModel: upstreamModel,
+			Usage: observed.usage, Stream: gjson.GetBytes(body, "stream").Bool(),
+			Duration: time.Since(started),
+		}
+	}()
+	var resourceErr error
+	ctx, resourceErr = s.PrepareBPSResourceContext(ctx, c, account, body)
+	if resourceErr != nil {
+		return nil, resourceErr
+	}
+	if c != nil && c.Request != nil {
+		c.Request = c.Request.WithContext(ctx)
+	}
 	if responsesWebSearchEnabled(ctx, c, account, s.settingService, s.channelService) {
 		return forwardHostedResponsesWebSearch(ctx, c, account, body, func(next []byte) (*OpenAIForwardResult, error) {
 			return s.forwardWithoutHostedWebSearch(ctx, c, account, next)
@@ -33,6 +55,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 }
 
 func (s *OpenAIGatewayService) forwardWithoutHostedWebSearch(ctx context.Context, c *gin.Context, account *Account, body []byte) (*OpenAIForwardResult, error) {
+	managedDeployment := openAIInferenceNoReplay(ctx)
 	if account.IsOpenAIBPS() {
 		return s.forwardOpenAIBPS(ctx, c, account, body)
 	}
@@ -692,7 +715,7 @@ func (s *OpenAIGatewayService) forwardWithoutHostedWebSearch(ctx context.Context
 	if clampedCap, ok := ollamaCloudResponsesMaxOutputTokensClamp(account, upstreamModel, body); ok {
 		markPatchSet("max_output_tokens", clampedCap)
 	}
-	if wsDecision.Transport != OpenAIUpstreamTransportResponsesWebsocketV2 &&
+	if !managedDeployment && wsDecision.Transport != OpenAIUpstreamTransportResponsesWebsocketV2 &&
 		!account.IsOpenAIApiKey() && gjson.GetBytes(body, "previous_response_id").Exists() {
 		markPatchDelete("previous_response_id")
 	}
@@ -809,7 +832,7 @@ func (s *OpenAIGatewayService) forwardWithoutHostedWebSearch(ctx context.Context
 	lineageGroupID := getOpenAIGroupIDFromContext(c)
 	lineageEntryBody := body
 	lineageSessionHash := ""
-	if stateStore := s.getOpenAIWSStateStore(); stateStore != nil && stateStore.HasAnySessionInvalidEncryptedContent() {
+	if stateStore := s.getOpenAIWSStateStore(); !managedDeployment && stateStore != nil && stateStore.HasAnySessionInvalidEncryptedContent() {
 		lineageSessionHash = s.GenerateSessionHash(c, body)
 		if invalidDigests := stateStore.GetSessionInvalidEncryptedContentDigests(lineageGroupID, lineageSessionHash); len(invalidDigests) > 0 {
 			strippedBody, strippedCount := s.stripSessionInvalidEncryptedContentLogged(
@@ -843,7 +866,7 @@ func (s *OpenAIGatewayService) forwardWithoutHostedWebSearch(ctx context.Context
 		imageInputSize = imageCfg.InputSize
 	}
 	// Get access token
-	token, _, err := s.GetAccessToken(ctx, account)
+	ctx, token, _, err := s.credentialsForRequest(ctx, account)
 	if err != nil {
 		return nil, err
 	}
@@ -866,6 +889,9 @@ func (s *OpenAIGatewayService) forwardWithoutHostedWebSearch(ctx context.Context
 			hasPreviousResponseID,
 		)
 		maxAttempts := openAIWSReconnectRetryLimit + 1
+		if managedDeployment {
+			maxAttempts = 1
+		}
 		wsAttempts := 0
 		var wsResult *OpenAIForwardResult
 		var wsErr error
@@ -970,6 +996,11 @@ func (s *OpenAIGatewayService) forwardWithoutHostedWebSearch(ctx context.Context
 				&agentTaskRecoveryTried,
 			)
 			if wsErr == nil {
+				break
+			}
+			// A managed session has already selected its immutable provider and
+			// owner. Never replay its turn or discard native history to recover.
+			if managedDeployment {
 				break
 			}
 			if c != nil && c.Writer != nil && c.Writer.Written() {
@@ -1169,7 +1200,7 @@ func (s *OpenAIGatewayService) forwardWithoutHostedWebSearch(ctx context.Context
 			upstreamMsg := strings.TrimSpace(extractUpstreamErrorMessage(respBody))
 			upstreamMsg = sanitizeUpstreamErrorMessage(upstreamMsg)
 			upstreamCode := extractUpstreamErrorCode(respBody)
-			if !agentTaskRecoveryTried && s.isAgentIdentityAccount(ctx, account) && isAgentIdentityTaskInvalidHTTPResponse(resp.StatusCode, respBody) {
+			if !managedDeployment && !agentTaskRecoveryTried && s.isAgentIdentityAccount(ctx, account) && isAgentIdentityTaskInvalidHTTPResponse(resp.StatusCode, respBody) {
 				agentTaskRecoveryTried = true
 				expectedTaskID := account.GetCredential("task_id")
 				if err := s.recoverAgentIdentityTask(ctx, account, expectedTaskID); err != nil {
@@ -1179,7 +1210,7 @@ func (s *OpenAIGatewayService) forwardWithoutHostedWebSearch(ctx context.Context
 			}
 			respBody = s.redactAgentIdentitySensitiveBody(ctx, account, respBody)
 			resp.Body = io.NopCloser(bytes.NewReader(respBody))
-			if !httpInvalidEncryptedContentRetryTried && resp.StatusCode == http.StatusBadRequest && upstreamCode == "invalid_encrypted_content" {
+			if !managedDeployment && !httpInvalidEncryptedContentRetryTried && resp.StatusCode == http.StatusBadRequest && upstreamCode == "invalid_encrypted_content" {
 				decoded, decodeErr := ensureReqBody()
 				if decodeErr != nil {
 					return nil, decodeErr
@@ -1207,32 +1238,36 @@ func (s *OpenAIGatewayService) forwardWithoutHostedWebSearch(ctx context.Context
 				}
 				logger.LegacyPrintf("service.openai_gateway", "[OpenAI] Skip non-WSv2 invalid_encrypted_content retry because encrypted reasoning items are missing (account: %s)", account.Name)
 			}
-			if retryBody, reason, changed, retryErr := normalizeOpenAIResponsesRejectedFieldRetryBody(resp.StatusCode, body, respBody); retryErr != nil {
-				return nil, fmt.Errorf("normalize rejected Responses field retry body: %w", retryErr)
-			} else if changed && rejectedFieldRetryState.Allow(retryBody) {
-				body = retryBody
-				requestView = newOpenAIRequestView(body)
-				reqBody = nil
-				logger.LegacyPrintf("service.openai_gateway", "[OpenAI] Retrying non-WSv2 request after %s (account: %s)", reason, account.Name)
-				continue
+			if !managedDeployment {
+				if retryBody, reason, changed, retryErr := normalizeOpenAIResponsesRejectedFieldRetryBody(resp.StatusCode, body, respBody); retryErr != nil {
+					return nil, fmt.Errorf("normalize rejected Responses field retry body: %w", retryErr)
+				} else if changed && rejectedFieldRetryState.Allow(retryBody) {
+					body = retryBody
+					requestView = newOpenAIRequestView(body)
+					reqBody = nil
+					logger.LegacyPrintf("service.openai_gateway", "[OpenAI] Retrying non-WSv2 request after %s (account: %s)", reason, account.Name)
+					continue
+				}
 			}
-			if retryBody, fallbackModel, retry := s.prepareOpenAICompactFallbackRetry(
-				c, account, requestedModel, body, resp.StatusCode, upstreamMsg, respBody, compactModelFallbackRetried,
-			); retry {
-				s.appendOpenAICompactFallbackRetryOps(c, account, resp, respBody, upstreamMsg, false)
-				fromModel := strings.TrimSpace(gjson.GetBytes(body, "model").String())
-				body = retryBody
-				requestView = newOpenAIRequestView(body)
-				reqBody = nil
-				upstreamModel = fallbackModel
-				compactModelFallbackRetried = true
-				SetOpsUpstreamModel(c, fallbackModel)
-				logger.LegacyPrintf(
-					"service.openai_gateway",
-					"[OpenAI] Retrying explicit compact request once with fallback model (account: %s, from: %s, to: %s, upstream_code: %s)",
-					account.Name, fromModel, fallbackModel, upstreamCode,
-				)
-				continue
+			if !managedDeployment {
+				if retryBody, fallbackModel, retry := s.prepareOpenAICompactFallbackRetry(
+					c, account, requestedModel, body, resp.StatusCode, upstreamMsg, respBody, compactModelFallbackRetried,
+				); retry {
+					s.appendOpenAICompactFallbackRetryOps(c, account, resp, respBody, upstreamMsg, false)
+					fromModel := strings.TrimSpace(gjson.GetBytes(body, "model").String())
+					body = retryBody
+					requestView = newOpenAIRequestView(body)
+					reqBody = nil
+					upstreamModel = fallbackModel
+					compactModelFallbackRetried = true
+					SetOpsUpstreamModel(c, fallbackModel)
+					logger.LegacyPrintf(
+						"service.openai_gateway",
+						"[OpenAI] Retrying explicit compact request once with fallback model (account: %s, from: %s, to: %s, upstream_code: %s)",
+						account.Name, fromModel, fallbackModel, upstreamCode,
+					)
+					continue
+				}
 			}
 			if s.shouldFailoverOpenAIUpstreamResponse(account, resp.StatusCode, upstreamMsg, respBody) {
 				upstreamDetail := ""
@@ -1294,16 +1329,18 @@ func (s *OpenAIGatewayService) forwardWithoutHostedWebSearch(ctx context.Context
 			streamResult, err := s.handleStreamingResponseWithReasoning(ctx, resp, c, account, startTime, originalModel, upstreamModel, reasoningEffortValue)
 			if err != nil {
 				if signal, ok := asOpenAICompactFallbackSignal(err); ok {
-					if retryBody, fallbackModel, retry := s.prepareOpenAICompactFallbackRetry(
-						c, account, requestedModel, body, http.StatusBadRequest, signal.message, signal.payload, compactModelFallbackRetried,
-					); retry {
-						s.appendOpenAICompactFallbackRetryOps(c, account, resp, signal.payload, signal.message, false)
-						body = retryBody
-						requestView = newOpenAIRequestView(body)
-						upstreamModel = fallbackModel
-						compactModelFallbackRetried = true
-						SetOpsUpstreamModel(c, fallbackModel)
-						continue
+					if !managedDeployment {
+						if retryBody, fallbackModel, retry := s.prepareOpenAICompactFallbackRetry(
+							c, account, requestedModel, body, http.StatusBadRequest, signal.message, signal.payload, compactModelFallbackRetried,
+						); retry {
+							s.appendOpenAICompactFallbackRetryOps(c, account, resp, signal.payload, signal.message, false)
+							body = retryBody
+							requestView = newOpenAIRequestView(body)
+							upstreamModel = fallbackModel
+							compactModelFallbackRetried = true
+							SetOpsUpstreamModel(c, fallbackModel)
+							continue
+						}
 					}
 					if resp.Body != nil {
 						_ = resp.Body.Close()
@@ -1341,16 +1378,18 @@ func (s *OpenAIGatewayService) forwardWithoutHostedWebSearch(ctx context.Context
 			nonStreamResult, err := s.handleNonStreamingResponse(ctx, resp, c, account, originalModel, upstreamModel)
 			if err != nil {
 				if signal, ok := asOpenAICompactFallbackSignal(err); ok {
-					if retryBody, fallbackModel, retry := s.prepareOpenAICompactFallbackRetry(
-						c, account, requestedModel, body, http.StatusBadRequest, signal.message, signal.payload, compactModelFallbackRetried,
-					); retry {
-						s.appendOpenAICompactFallbackRetryOps(c, account, resp, signal.payload, signal.message, false)
-						body = retryBody
-						requestView = newOpenAIRequestView(body)
-						upstreamModel = fallbackModel
-						compactModelFallbackRetried = true
-						SetOpsUpstreamModel(c, fallbackModel)
-						continue
+					if !managedDeployment {
+						if retryBody, fallbackModel, retry := s.prepareOpenAICompactFallbackRetry(
+							c, account, requestedModel, body, http.StatusBadRequest, signal.message, signal.payload, compactModelFallbackRetried,
+						); retry {
+							s.appendOpenAICompactFallbackRetryOps(c, account, resp, signal.payload, signal.message, false)
+							body = retryBody
+							requestView = newOpenAIRequestView(body)
+							upstreamModel = fallbackModel
+							compactModelFallbackRetried = true
+							SetOpsUpstreamModel(c, fallbackModel)
+							continue
+						}
 					}
 				}
 				return nil, err
@@ -1636,4 +1675,20 @@ func (s *OpenAIGatewayService) codexIdentityOverrideUA(account *Account) string 
 		return ""
 	}
 	return account.GetOpenAIUserAgent()
+}
+
+func openAIManagedDeploymentNoReplay(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	_, managed := ManagedDeploymentSessionFromContext(ctx)
+	return managed
+}
+
+func openAIManagedDeploymentNoReplayFromGin(c *gin.Context) bool {
+	return c != nil && c.Request != nil && openAIInferenceNoReplay(c.Request.Context())
+}
+
+func openAIInferenceNoReplay(ctx context.Context) bool {
+	return ctx != nil && (openAIManagedDeploymentNoReplay(ctx) || IsBPSResourceRequest(ctx) || ManagedFilePlanFromContext(ctx) != nil || StoredResponsePlanFromContext(ctx) != nil)
 }

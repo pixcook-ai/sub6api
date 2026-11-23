@@ -2958,6 +2958,12 @@
           </div>
         </div>
 
+        <ClaudeOAuthCompatibilitySettings
+          v-if="account?.platform === 'anthropic' && account.type === 'oauth'"
+          :account-id="account.id"
+          :active="show"
+        />
+
         <!-- Cache TTL Override -->
         <div class="rounded-lg border border-gray-200 p-4 dark:border-dark-600">
           <div class="flex items-center justify-between">
@@ -3168,6 +3174,7 @@
 
 <script setup lang="ts">
 import OpenAIBPSAccountFields from './OpenAIBPSAccountFields.vue'
+import ClaudeOAuthCompatibilitySettings from './ClaudeOAuthCompatibilitySettings.vue'
 import { newBPSAccountDraft, bpsCredentials } from '@/utils/openaiBps'
 import { ref, reactive, computed, watch, nextTick, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'

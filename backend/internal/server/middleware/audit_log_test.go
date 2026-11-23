@@ -3,6 +3,7 @@ package middleware
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -187,4 +188,93 @@ func TestOllamaCloudUsageSessionRouteOmitsAuditBody(t *testing.T) {
 	require.Len(t, logs, 1)
 	require.Equal(t, "<credential-bearing body omitted>", logs[0].RequestBody)
 	require.NotContains(t, logs[0].RequestBody, "audit-canary")
+}
+
+func TestCoreOAuthCompleteOmitsCallbackBodyFromSuccessAndFailureAudit(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	const callback = "https://example.invalid/oauth/callback?code=audit-canary-code&state=audit-canary-state"
+	repository := &auditCaptureRepository{}
+	auditService := service.NewAuditLogService(repository, nil)
+	auditService.Start()
+	t.Cleanup(auditService.Stop)
+
+	router := gin.New()
+	router.Use(gin.HandlerFunc(NewAuditLogMiddleware(auditService)))
+	status := http.StatusOK
+	router.POST("/api/v1/admin/core-oauth/profiles/:ref/complete", func(c *gin.Context) {
+		var input struct {
+			AttemptID   string `json:"attempt_id"`
+			CallbackURL string `json:"callback_url"`
+		}
+		require.NoError(t, c.ShouldBindJSON(&input))
+		require.Equal(t, "audit-canary-attempt", input.AttemptID)
+		require.Equal(t, callback, input.CallbackURL)
+		c.JSON(status, gin.H{"message": "Core OAuth result"})
+	})
+
+	for _, status = range []int{http.StatusOK, http.StatusBadRequest} {
+		request := httptest.NewRequest(http.MethodPost, "/api/v1/admin/core-oauth/profiles/profile-1/complete",
+			bytes.NewBufferString(`{"attempt_id":"audit-canary-attempt","callback_url":"`+callback+`"}`))
+		request.Header.Set("Content-Type", "application/json")
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, request)
+		require.Equal(t, status, recorder.Code)
+	}
+	auditService.Stop()
+
+	repository.mu.Lock()
+	logs := append([]*service.AuditLog(nil), repository.logs...)
+	repository.mu.Unlock()
+	require.Len(t, logs, 2)
+	for i, entry := range logs {
+		require.Equal(t, []int{http.StatusOK, http.StatusBadRequest}[i], entry.StatusCode)
+		require.Equal(t, "<credential-bearing body omitted>", entry.RequestBody)
+		encoded, err := json.Marshal(entry)
+		require.NoError(t, err)
+		require.NotContains(t, string(encoded), "audit-canary")
+		require.NotContains(t, string(encoded), callback)
+	}
+}
+
+func TestCoreOAuthRuntimeInstallOmitsControlBodyFromSuccessAndFailureAudit(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	const controlKey = "audit-canary-independent-control-key"
+	repository := &auditCaptureRepository{}
+	auditService := service.NewAuditLogService(repository, nil)
+	auditService.Start()
+	t.Cleanup(auditService.Stop)
+
+	router := gin.New()
+	router.Use(gin.HandlerFunc(NewAuditLogMiddleware(auditService)))
+	status := http.StatusOK
+	router.POST("/api/v1/admin/managed-deployments/:id/core-runtime", func(c *gin.Context) {
+		var input struct {
+			ControlKey string `json:"bps_control_key"`
+		}
+		require.NoError(t, c.ShouldBindJSON(&input))
+		require.Equal(t, controlKey, input.ControlKey)
+		c.JSON(status, gin.H{"message": "Core runtime result"})
+	})
+
+	for _, status = range []int{http.StatusOK, http.StatusBadRequest} {
+		request := httptest.NewRequest(http.MethodPost, "/api/v1/admin/managed-deployments/deployment-1/core-runtime",
+			bytes.NewBufferString(`{"bps_control_key":"`+controlKey+`"}`))
+		request.Header.Set("Content-Type", "application/json")
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, request)
+		require.Equal(t, status, recorder.Code)
+	}
+	auditService.Stop()
+
+	repository.mu.Lock()
+	logs := append([]*service.AuditLog(nil), repository.logs...)
+	repository.mu.Unlock()
+	require.Len(t, logs, 2)
+	for i, entry := range logs {
+		require.Equal(t, []int{http.StatusOK, http.StatusBadRequest}[i], entry.StatusCode)
+		require.Equal(t, "<credential-bearing body omitted>", entry.RequestBody)
+		encoded, err := json.Marshal(entry)
+		require.NoError(t, err)
+		require.NotContains(t, string(encoded), controlKey)
+	}
 }

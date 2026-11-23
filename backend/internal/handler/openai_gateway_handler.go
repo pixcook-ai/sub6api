@@ -36,6 +36,7 @@ import (
 type OpenAIGatewayHandler struct {
 	compositeResolver          *service.CompositeRouteResolver
 	gatewayService             *service.OpenAIGatewayService
+	managedFiles               *service.ManagedFileResolver
 	billingCacheService        *service.BillingCacheService
 	apiKeyService              *service.APIKeyService
 	usageRecordWorkerPool      *service.UsageRecordWorkerPool
@@ -433,6 +434,9 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		return
 	}
 
+	if !h.validateManagedDeploymentHTTPBody(c, body) {
+		return
+	}
 	if len(body) == 0 {
 		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Request body is empty")
 		return
@@ -541,13 +545,22 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		if apiKey.GroupID != nil {
 			groupID = *apiKey.GroupID
 		}
-		owned, ownershipErr := h.gatewayService.ValidateOpenAIHTTPResponseOwner(
-			c.Request.Context(),
-			groupID,
-			previousResponseID,
-			subject.UserID,
-			apiKey.ID,
-		)
+		var owned bool
+		var ownershipErr error
+		if session, managed := service.ManagedDeploymentSessionFromContext(c.Request.Context()); managed {
+			owner, e := h.gatewayService.ResolveManagedDeploymentResource(c.Request.Context(), groupID, subject.UserID, apiKey.ID, "response", previousResponseID)
+			if e != nil {
+				h.managedDeploymentError(c, e)
+				return
+			}
+			if owner.DeploymentID != session.DeploymentID || owner.Binding != session.Binding {
+				h.managedDeploymentError(c, service.ErrManagedDeploymentContext)
+				return
+			}
+			owned = true
+		} else {
+			owned, ownershipErr = h.gatewayService.ValidateOpenAIHTTPResponseOwner(c.Request.Context(), groupID, previousResponseID, subject.UserID, apiKey.ID)
+		}
 		if ownershipErr != nil {
 			reqLog.Warn("openai.previous_response_owner_lookup_failed", zap.Error(ownershipErr))
 		}
@@ -698,7 +711,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		// Streaming Forward intentionally detaches the upstream request so usage can
 		// be drained after a disconnect. Re-check the client context before every
 		// account attempt so a canceled request never starts a failover replay.
-		if !openAIRequestAllowsFailoverReplay(c) {
+		if !openAIRequestAllowsAccountAttempt(c, switchCount != 0 || len(failedAccountIDs) != 0 || len(sameAccountRetryCount) != 0) {
 			return
 		}
 		// Select account supporting the requested model
@@ -773,6 +786,13 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		)
 		account := selection.Account
 		if previousResponseID != "" && requestPlatform == service.PlatformOpenAI && !account.IsOpenAIApiKey() {
+			if _, managed := service.ManagedDeploymentSessionFromContext(c.Request.Context()); managed {
+				if selection.ReleaseFunc != nil {
+					selection.ReleaseFunc()
+				}
+				h.managedDeploymentError(c, service.ErrManagedDeploymentContext)
+				return
+			}
 			// The public Responses HTTP API supports previous_response_id on API-key
 			// accounts. OAuth/SetupToken upstreams do not, so keep searching instead
 			// of silently deleting continuation state from a mixed account pool.
@@ -909,6 +929,15 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			})
 		}
 		if err != nil {
+			var local *service.StoredResponseLocalError
+			if errors.As(err, &local) {
+				submitResponsesUsage(result)
+				h.handleStoredResponseDispatchError(c, local.Err, streamStarted)
+				return
+			}
+			if h.handleManagedFilePreparationError(c, err, streamStarted) {
+				return
+			}
 			if result != nil && result.ClientDisconnect {
 				reqLog.Info("openai.client_disconnected",
 					zap.Int64("account_id", account.ID),
@@ -934,6 +963,10 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			} else {
 				var failoverErr *service.UpstreamFailoverError
 				if errors.As(err, &failoverErr) {
+					if _, managed := service.ManagedDeploymentSessionFromContext(c.Request.Context()); managed {
+						h.handleFailoverExhausted(c, failoverErr, streamStarted)
+						return
+					}
 					if failoverClientGone(c) {
 						reqLog.Info("openai.failover_aborted_client_disconnected",
 							zap.Int64("account_id", account.ID),
@@ -1250,6 +1283,9 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 		h.anthropicErrorResponse(c, http.StatusBadRequest, "invalid_request_error", "Failed to read request body")
 		return
 	}
+	if !h.validateManagedDeploymentHTTPBody(c, body) {
+		return
+	}
 	if len(body) == 0 {
 		h.anthropicErrorResponse(c, http.StatusBadRequest, "invalid_request_error", "Request body is empty")
 		return
@@ -1513,6 +1549,9 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 			})
 		}
 		if err != nil {
+			if h.handleAnthropicManagedFilePreparationError(c, err, streamStarted) {
+				return
+			}
 			if result != nil && result.ImageCount > 0 {
 				reqLog.Warn("openai_messages.forward_partial_error_with_image_result",
 					zap.Int64("account_id", account.ID),
@@ -1522,6 +1561,10 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 			} else {
 				var failoverErr *service.UpstreamFailoverError
 				if errors.As(err, &failoverErr) {
+					if _, managed := service.ManagedDeploymentSessionFromContext(c.Request.Context()); managed {
+						h.handleAnthropicFailoverExhausted(c, failoverErr, streamStarted)
+						return
+					}
 					if failoverClientGone(c) {
 						reqLog.Info("openai_messages.failover_aborted_client_disconnected",
 							zap.Int64("account_id", account.ID),
@@ -1711,6 +1754,11 @@ func (h *OpenAIGatewayHandler) validateFunctionCallOutputRequest(c *gin.Context,
 
 	validation := service.ValidateFunctionCallOutputContextBytes(body)
 	if !validation.HasFunctionCallOutput {
+		return true
+	}
+	if plan := service.StoredResponsePlanFromContext(c.Request.Context()); plan.HasNativeParent15() && !validation.HasFunctionCallOutputMissingCallID {
+		// Local native ingress already resolved the owning history. The worker
+		// preflight validates exact pending calls before reservation or send.
 		return true
 	}
 
@@ -2472,6 +2520,12 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		closeOpenAIClientWS(wsConn, coderws.StatusPolicyViolation, "missing first response.create message")
 		return
 	}
+	c.Request = c.Request.WithContext(ctx)
+	if !h.prepareManagedDeploymentWebSocket(c, apiKey, firstMessage) {
+		closeOpenAIClientWS(wsConn, coderws.StatusPolicyViolation, "managed deployment context unavailable; rebuild with a new explicit session")
+		return
+	}
+	ctx = c.Request.Context()
 	firstTurnStartedAt := time.Now()
 	if msgType != coderws.MessageText && msgType != coderws.MessageBinary {
 		closeOpenAIClientWS(wsConn, coderws.StatusPolicyViolation, "unsupported websocket message type")
@@ -2681,6 +2735,9 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 	var oauth429FailoverState service.OpenAIOAuth429FailoverState
 	wsAttemptMessage := append([]byte(nil), firstMessage...)
 	waitForWSSameAccountRetry := func(account *service.Account, failoverErr *service.UpstreamFailoverError) bool {
+		if _, managed := service.ManagedDeploymentSessionFromContext(ctx); managed {
+			return false
+		}
 		if account == nil || failoverErr == nil || failoverErr.StatusCode != http.StatusTooManyRequests || failoverErr.SameAccountRetryDeadline.IsZero() {
 			return false
 		}
@@ -2704,6 +2761,11 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		}
 	}
 	handleWSFailover := func(account *service.Account, failoverErr *service.UpstreamFailoverError) bool {
+		if _, managed := service.ManagedDeploymentSessionFromContext(ctx); managed {
+			releaseAccountSlot()
+			closeOpenAIWSFailoverExhausted(c, wsConn, failoverErr)
+			return false
+		}
 		if ctx.Err() != nil {
 			return false
 		}
@@ -3839,14 +3901,30 @@ func openAIForwardMayFailover(c *gin.Context, writerSizeBeforeForward int, failo
 	if c == nil || c.Writer == nil {
 		return false
 	}
+	if _, managed := service.ManagedDeploymentSessionFromContext(c.Request.Context()); managed {
+		return false
+	}
 	if service.OpenAICompactKeepaliveAdjustedWrittenSize(c) == writerSizeBeforeForward {
 		return true
 	}
 	return failoverErr != nil && failoverErr.SafeToFailoverAfterWrite
 }
 
+func openAIRequestAllowsAccountAttempt(c *gin.Context, replay bool) bool {
+	if c == nil || c.Request == nil {
+		return false
+	}
+	if replay {
+		return openAIRequestAllowsFailoverReplay(c)
+	}
+	return !failoverClientGone(c)
+}
+
 func openAIRequestAllowsFailoverReplay(c *gin.Context) bool {
 	if c == nil || c.Request == nil {
+		return false
+	}
+	if _, managed := service.ManagedDeploymentSessionFromContext(c.Request.Context()); managed {
 		return false
 	}
 	return !failoverClientGone(c)

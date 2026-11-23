@@ -979,6 +979,8 @@ const (
 
 // GatewayConfig API网关相关配置
 type GatewayConfig struct {
+	Files           FilesConfig           `mapstructure:"files"`
+	StoredResponses StoredResponsesConfig `mapstructure:"stored_responses"`
 	// 等待上游响应头的超时时间（秒），0表示无超时
 	// 注意：这不影响流式数据传输，只控制等待响应头的时间
 	ResponseHeaderTimeout int `mapstructure:"response_header_timeout"`
@@ -995,6 +997,8 @@ type GatewayConfig struct {
 	OpenAIHighEffortFirstOutputTimeoutSeconds int `mapstructure:"openai_high_effort_first_output_timeout_seconds"`
 	// 请求体最大字节数，用于网关请求体大小限制
 	MaxBodySize int64 `mapstructure:"max_body_size"`
+	// RequestBodyMemoryBudgetBytes bounds buffered ingress allocations per instance; 0 disables it.
+	RequestBodyMemoryBudgetBytes int64 `mapstructure:"request_body_memory_budget_bytes"`
 	// TextMaxBodySize limits endpoints that cannot carry inline image/video payloads.
 	TextMaxBodySize int64 `mapstructure:"text_max_body_size"`
 	// 非流式上游响应体读取上限（字节），用于防止无界读取导致内存放大
@@ -2437,6 +2441,34 @@ func setDefaults() {
 	viper.SetDefault("idempotency.cleanup_batch_size", 500)
 
 	// Gateway
+	filesDefaults := DefaultFilesConfig()
+	viper.SetDefault("gateway.files.enabled", filesDefaults.Enabled)
+	viper.SetDefault("gateway.files.backend_migration.enabled", filesDefaults.BackendMigration.Enabled)
+	viper.SetDefault("gateway.files.root", filesDefaults.Root)
+	viper.SetDefault("gateway.files.max_file_bytes", filesDefaults.MaxFileBytes)
+	viper.SetDefault("gateway.files.user_quota_bytes", filesDefaults.UserQuotaBytes)
+	viper.SetDefault("gateway.files.global_quota_bytes", filesDefaults.GlobalQuotaBytes)
+	viper.SetDefault("gateway.files.free_space_reserve_bytes", filesDefaults.FreeSpaceReserveBytes)
+	viper.SetDefault("gateway.files.lease_seconds", filesDefaults.LeaseSeconds)
+	viper.SetDefault("gateway.files.user_concurrent_uploads", filesDefaults.UserConcurrentUploads)
+	viper.SetDefault("gateway.files.global_concurrent_uploads", filesDefaults.GlobalConcurrentUploads)
+	viper.SetDefault("gateway.files.upload_timeout_seconds", filesDefaults.UploadTimeoutSeconds)
+	viper.SetDefault("gateway.files.lifecycle_worker_interval_seconds", filesDefaults.LifecycleWorkerIntervalSeconds)
+	viper.SetDefault("gateway.files.lifecycle_worker_batch_size", filesDefaults.LifecycleWorkerBatchSize)
+	viper.SetDefault("gateway.files.cleanup_lease_seconds", filesDefaults.CleanupLeaseSeconds)
+	viper.SetDefault("gateway.files.read_drain_seconds", filesDefaults.ReadDrainSeconds)
+	viper.SetDefault("gateway.files.default_retention_seconds", filesDefaults.DefaultRetentionSeconds)
+	storedResponsesDefaults := DefaultStoredResponsesConfig()
+	viper.SetDefault("gateway.stored_responses.enabled", storedResponsesDefaults.Enabled)
+	viper.SetDefault("gateway.stored_responses.default_store", storedResponsesDefaults.LocalDefaultStore())
+	viper.SetDefault("gateway.stored_responses.native_previous_responses_enabled", storedResponsesDefaults.NativePreviousResponsesEnabled)
+	viper.SetDefault("gateway.stored_responses.retention_days", storedResponsesDefaults.RetentionDays)
+	viper.SetDefault("gateway.stored_responses.lease_seconds", storedResponsesDefaults.LeaseSeconds)
+	viper.SetDefault("gateway.stored_responses.max_response_bytes", storedResponsesDefaults.MaxResponseBytes)
+	viper.SetDefault("gateway.stored_responses.user_max_rows", storedResponsesDefaults.UserMaxRows)
+	viper.SetDefault("gateway.stored_responses.user_max_bytes", storedResponsesDefaults.UserMaxBytes)
+	viper.SetDefault("gateway.stored_responses.global_max_rows", storedResponsesDefaults.GlobalMaxRows)
+	viper.SetDefault("gateway.stored_responses.global_max_bytes", storedResponsesDefaults.GlobalMaxBytes)
 	viper.SetDefault("gateway.response_header_timeout", 600) // 600秒(10分钟)等待上游响应头，LLM高负载时可能排队较久
 	viper.SetDefault("gateway.openai_response_header_timeout", 0)
 	viper.SetDefault("gateway.grok_response_header_timeout", 120)
@@ -2556,6 +2588,7 @@ func setDefaults() {
 	viper.SetDefault("gateway.antigravity_fallback_cooldown_minutes", 1)
 	viper.SetDefault("gateway.antigravity_extra_retries", 10)
 	viper.SetDefault("gateway.max_body_size", int64(256*1024*1024))
+	viper.SetDefault("gateway.request_body_memory_budget_bytes", int64(1<<30))
 	viper.SetDefault("gateway.text_max_body_size", int64(32*1024*1024))
 	viper.SetDefault("gateway.upstream_response_read_max_bytes", DefaultUpstreamResponseReadMaxBytes)
 	viper.SetDefault("gateway.models_list_read_max_bytes", DefaultModelsListReadMaxBytes)
@@ -2737,6 +2770,12 @@ func setEnvReachableDefaults() {
 }
 
 func (c *Config) Validate() error {
+	if err := c.Gateway.Files.Validate(); err != nil {
+		return err
+	}
+	if err := c.Gateway.StoredResponses.Validate(); err != nil {
+		return err
+	}
 	forwardedClientIPHeaders, err := NormalizeForwardedClientIPHeaders(c.Security.ForwardedClientIPHeaders)
 	if err != nil {
 		return fmt.Errorf("security.forwarded_client_ip_headers: %w", err)
@@ -3369,6 +3408,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Idempotency.CleanupBatchSize <= 0 {
 		return fmt.Errorf("idempotency.cleanup_batch_size must be positive")
+	}
+	if c.Gateway.RequestBodyMemoryBudgetBytes < 0 {
+		return fmt.Errorf("gateway.request_body_memory_budget_bytes must be nonnegative")
 	}
 	if c.Gateway.MaxBodySize <= 0 {
 		return fmt.Errorf("gateway.max_body_size must be positive")

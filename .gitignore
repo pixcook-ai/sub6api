@@ -174,3 +174,9 @@ scripts/*
 !scripts/release/**
 __pycache__/
 *.pyc
+
+# Keep only the approved core OAuth delivery plan visible.
+!docs/plans/
+docs/plans/*
+!docs/plans/core-oauth-20261122/
+!docs/plans/core-oauth-20261122/**

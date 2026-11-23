@@ -83,6 +83,10 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	if account == nil {
 		return errors.New("account is nil")
 	}
+	if ManagedOAuthDeclared(account) {
+		return ErrManagedOAuthUnavailable
+	}
+	managedDeployment := openAIManagedDeploymentNoReplay(ctx)
 	// A handler may reuse the same gin context across account failover attempts.
 	// Never let an OAuth attempt's response aliases leak into the next account.
 	setCodexToolNameReverse(c, nil)
@@ -229,6 +233,9 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	}
 
 	parseClientPayload := func(turn int, raw []byte) (openAIWSClientPayload, error) {
+		if err := s.ValidateManagedDeploymentPayload(ctx, raw); err != nil {
+			return openAIWSClientPayload{}, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "managed deployment context must be rebuilt", err)
+		}
 		trimmed := bytes.TrimSpace(raw)
 		if len(trimmed) == 0 {
 			return openAIWSClientPayload{}, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "empty websocket request payload", nil)
@@ -487,6 +494,9 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			// the kernel send buffer before any close frame is queued.
 			eventBytes := buildOpenAIFastPolicyBlockedWSEvent(blocked)
 			if eventBytes != nil {
+				if err := s.RecordManagedDeploymentPayload(ctx, eventBytes); err != nil {
+					return openAIWSClientPayload{}, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "managed deployment resource ownership could not be recorded", err)
+				}
 				writeCtx, cancel := newOpenAIWSDownstreamWriteContext(ctx, hooks, s.openAIWSWriteTimeout())
 				_ = clientConn.Write(writeCtx, coderws.MessageText, eventBytes)
 				cancel()
@@ -516,6 +526,9 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	}
 
 	writeClientMessage := func(message []byte) error {
+		if err := s.RecordManagedDeploymentPayload(ctx, message); err != nil {
+			return NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "managed deployment resource ownership could not be recorded", err)
+		}
 		writeCtx, cancel := newOpenAIWSDownstreamWriteContext(ctx, hooks, s.openAIWSWriteTimeout())
 		defer cancel()
 		message = restoreCodexToolNamesFromContext(c, message)
@@ -634,7 +647,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			}
 			// 剥离本会话已知失效的加密项，阻断同一失效密文随历史反复触发上游拒绝。
 			// 历史序列须同步剥离，否则与已剥离的当前 input 项错位，prefix 复用失配。
-			if invalidDigests := s.sessionInvalidEncryptedContentDigests(groupID, sessionHash); len(invalidDigests) > 0 {
+			if invalidDigests := s.sessionInvalidEncryptedContentDigests(groupID, sessionHash); !managedDeployment && len(invalidDigests) > 0 {
 				strippedPayload, strippedCount := s.stripSessionInvalidEncryptedContentLogged(
 					currentBridgePayload.payloadRaw, invalidDigests, "ingress_ws_http_bridge_invalid_encrypted_lineage_strip", account.ID, turn,
 				)
@@ -675,7 +688,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				bridgeCurrentItemsExist,
 				needsBridgeReplay,
 			)
-			if needsBridgeReplay && turnReplayInputExists {
+			if !managedDeployment && needsBridgeReplay && turnReplayInputExists {
 				updatedPayload, setInputErr := setOpenAIWSPayloadInputSequence(
 					currentBridgePayload.payloadRaw,
 					turnReplayInput,
@@ -731,7 +744,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			}
 			if bridgeErr != nil {
 				var failoverErr *UpstreamFailoverError
-				if turn > 1 && errors.As(bridgeErr, &failoverErr) && failoverErr != nil {
+				if !managedDeployment && turn > 1 && errors.As(bridgeErr, &failoverErr) && failoverErr != nil {
 					retryPayload, retrySafe, retryPayloadErr := buildOpenAIWSCurrentTurnRetryPayload(
 						currentBridgePayload.accountIdentitySourceRaw,
 						turnAccountFailoverInput,
@@ -915,7 +928,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		baseAcquireReq.Headers = req.Headers
 		acquireCancel()
 		var dialErr *openAIWSDialError
-		if acquireErr != nil && s.isAgentIdentityAccount(ctx, account) && errors.As(acquireErr, &dialErr) && isAgentIdentityTaskInvalidWSDialError(dialErr) && !agentTaskRecoveryTried {
+		if !managedDeployment && acquireErr != nil && s.isAgentIdentityAccount(ctx, account) && errors.As(acquireErr, &dialErr) && isAgentIdentityTaskInvalidWSDialError(dialErr) && !agentTaskRecoveryTried {
 			agentTaskRecoveryTried = true
 			if recoveryErr := s.recoverAgentIdentityTask(ctx, account, account.GetCredential("task_id")); recoveryErr != nil {
 				return nil, fmt.Errorf("agent identity task recovery failed: %w", recoveryErr)
@@ -1007,6 +1020,13 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		}
 		turnStart := time.Now()
 		wroteDownstream := false
+		if err := s.ValidateManagedDeploymentPayload(ctx, payload); err != nil {
+			return nil, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "managed deployment context must be rebuilt", err)
+		}
+		payload, scopeErr := scopeManagedDeploymentWirePayload(ctx, payload)
+		if scopeErr != nil {
+			return nil, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid managed deployment affinity payload", scopeErr)
+		}
 		if err := lease.WriteJSONWithContextTimeout(ctx, json.RawMessage(payload), s.openAIWSWriteTimeout()); err != nil {
 			return nil, wrapOpenAIWSIngressTurnError(
 				"write_upstream",
@@ -1090,7 +1110,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				s.handleOpenAIWSErrorEventTransientFailure(ctx, account, mappedModel, lease.HandshakeHeaders(), upstreamMessage)
 				errCodeRaw, errTypeRaw, errMsgRaw := parseOpenAIWSErrorEventFields(upstreamMessage)
 				statusCode := openAIWSRejectedFieldRetryHTTPStatus(upstreamMessage)
-				if !wroteDownstream && statusCode == http.StatusBadRequest && rejectedFieldRetryState != nil {
+				if !managedDeployment && !wroteDownstream && statusCode == http.StatusBadRequest && rejectedFieldRetryState != nil {
 					retryBody, retryReason, changed, retryErr := normalizeOpenAIResponsesRejectedFieldRetryBody(
 						statusCode,
 						payload,
@@ -1115,7 +1135,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				}
 				s.persistOpenAIWSRateLimitSignal(ctx, account, lease.HandshakeHeaders(), upstreamMessage, errCodeRaw, errTypeRaw, errMsgRaw, mappedModel)
 				fallbackReason, _ := classifyOpenAIWSErrorEventFromRaw(errCodeRaw, errTypeRaw, errMsgRaw)
-				if fallbackReason == openAIWSFallbackReasonInvalidEncryptedContent {
+				if !managedDeployment && fallbackReason == openAIWSFallbackReasonInvalidEncryptedContent {
 					// 记录被上游拒绝的密文摘要；错误照旧透传，下一轮进场时按摘要预剥离。
 					if digests := collectOpenAIEncryptedContentDigestsRaw(payload); len(digests) > 0 {
 						s.markOpenAIWSInvalidEncryptedContentLineage(groupID, sessionHash, digests)
@@ -1128,7 +1148,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 					}
 				}
 				errCode, errType, errMessage := summarizeOpenAIWSErrorEventFieldsFromRaw(errCodeRaw, errTypeRaw, errMsgRaw)
-				recoverablePrevNotFound := fallbackReason == openAIWSIngressStagePreviousResponseNotFound &&
+				recoverablePrevNotFound := !managedDeployment && fallbackReason == openAIWSIngressStagePreviousResponseNotFound &&
 					turnPreviousResponseID != "" &&
 					!turnHasFunctionCallOutput &&
 					s.openAIWSIngressPreviousResponseRecoveryEnabled() &&
@@ -1230,6 +1250,10 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 					}
 				}
 				if err := writeClientMessage(clientMessage); err != nil {
+					var ownershipErr *OpenAIWSClientCloseError
+					if managedDeployment && errors.As(err, &ownershipErr) {
+						return nil, ownershipErr
+					}
 					if isOpenAIWSClientDisconnectError(err) {
 						clientDisconnected = true
 						closeStatus, closeReason := summarizeOpenAIWSReadCloseError(err)
@@ -1413,6 +1437,9 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		preferredConnID = ""
 	}
 	recoverIngressPrevResponseNotFound := func(relayErr error, turn int, connID string) bool {
+		if managedDeployment {
+			return false
+		}
 		if !isOpenAIWSIngressPreviousResponseNotFound(relayErr) {
 			return false
 		}
@@ -1480,6 +1507,9 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		return true
 	}
 	retryIngressTurn := func(relayErr error, turn int, connID string) bool {
+		if managedDeployment {
+			return false
+		}
 		if !isOpenAIWSIngressTurnRetryable(relayErr) || turnRetry >= 1 {
 			return false
 		}
@@ -1519,7 +1549,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		skipBeforeTurn = false
 		// 剥离本会话已知失效的加密项，阻断同一失效密文随历史反复触发上游拒绝。
 		// 历史序列须同步剥离，否则与已剥离的当前 input 项错位，prefix 复用失配。
-		if invalidDigests := s.sessionInvalidEncryptedContentDigests(groupID, sessionHash); len(invalidDigests) > 0 {
+		if invalidDigests := s.sessionInvalidEncryptedContentDigests(groupID, sessionHash); !managedDeployment && len(invalidDigests) > 0 {
 			strippedPayload, strippedCount := s.stripSessionInvalidEncryptedContentLogged(
 				currentPayload, invalidDigests, "ingress_ws_invalid_encrypted_lineage_strip", account.ID, turn,
 			)
@@ -1537,6 +1567,9 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		)
 		if boundaryErr != nil {
 			return fmt.Errorf("normalize Codex websocket context-window boundary: %w", boundaryErr)
+		}
+		if managedDeployment && contextWindowBoundary.PreviousResponseIDRemoved {
+			return NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "managed deployment context must be rebuilt", ErrManagedDeploymentContext)
 		}
 		if contextWindowBoundary.Changed {
 			currentPayload = boundaryPayload
@@ -1623,7 +1656,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		replayHasFunctionCallOutput := currentTurnReplayInputExists &&
 			openAIWSRawItemsHasFunctionCallOutput(currentTurnReplayInput)
 		hasFunctionCallOutput = hasFunctionCallOutput || replayHasFunctionCallOutput
-		if storeDisabled && turn > 1 && currentPreviousResponseID != "" {
+		if !managedDeployment && storeDisabled && turn > 1 && currentPreviousResponseID != "" {
 			shouldKeepPreviousResponseID := false
 			strictReason := ""
 			var strictErr error
@@ -1730,6 +1763,10 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		}
 		if shouldPreflightPing {
 			if pingErr := sessionLease.PingWithTimeout(openAIWSProbePingTO); pingErr != nil {
+				if managedDeployment {
+					resetSessionLease(true)
+					return NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "managed deployment continuation connection is unavailable", pingErr)
+				}
 				logOpenAIWSModeInfo(
 					"ingress_ws_upstream_preflight_ping_fail account_id=%d turn=%d conn_id=%s cause=%s",
 					account.ID,
@@ -1860,7 +1897,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				return errOpenAIWSSessionPreempted
 			}
 			var rejectedFieldErr *openAIWSRejectedFieldRetryError
-			if errors.As(relayErr, &rejectedFieldErr) && rejectedFieldErr != nil && len(rejectedFieldErr.body) > 0 {
+			if !managedDeployment && errors.As(relayErr, &rejectedFieldErr) && rejectedFieldErr != nil && len(rejectedFieldErr.body) > 0 {
 				currentPayload = append([]byte(nil), rejectedFieldErr.body...)
 				currentPayloadBytes = len(currentPayload)
 				skipBeforeTurn = true

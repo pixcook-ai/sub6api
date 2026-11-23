@@ -124,22 +124,20 @@ const (
 // 不再在包 init 时固化。同一次请求内应只取一次 UA 字符串并在出站头与
 // billing 两条路径间复用，避免版本缓存翻转瞬间头/体不一致。
 func DefaultHeaders() map[string]string {
-	return map[string]string{
+	headers := map[string]string{
 		// Keep these in sync with recent Claude CLI traffic to reduce the chance
 		// that Claude Code-scoped OAuth credentials are rejected as "non-CLI" usage.
 		// 版本参考：对齐 Parrot (src/transform/cc_mimicry.py:49) 的 CLI_USER_AGENT。
-		"User-Agent":                                DefaultUserAgent(),
-		"X-Stainless-Lang":                          "js",
-		"X-Stainless-Package-Version":               StainlessPackageVersion,
-		"X-Stainless-OS":                            StainlessOS,
-		"X-Stainless-Arch":                          StainlessArch,
-		"X-Stainless-Runtime":                       StainlessRuntime,
-		"X-Stainless-Runtime-Version":               StainlessRuntimeVersion,
-		"X-Stainless-Retry-Count":                   "0",
-		"X-Stainless-Timeout":                       "600",
-		"X-App":                                     "cli",
+		"User-Agent":              DefaultUserAgent(),
+		"X-Stainless-Retry-Count": "0",
+		"X-Stainless-Timeout":     "600",
+		"X-App":                   "cli",
 		"Anthropic-Dangerous-Direct-Browser-Access": "true",
 	}
+	for name, value := range DefaultCompatibilityProfile().Headers() {
+		headers[name] = value
+	}
+	return headers
 }
 
 // Model 表示一个 Claude 模型

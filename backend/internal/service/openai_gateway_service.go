@@ -454,6 +454,9 @@ var ErrNoAvailableCompactAccounts = errors.New("no available accounts support /r
 
 // OpenAIGatewayService handles OpenAI API gateway operations
 type OpenAIGatewayService struct {
+	coreOAuth             *CoreOAuthService
+	managedFiles          *ManagedFileResolver
+	storedResponses       *StoredResponseService
 	accountRepo           AccountRepository
 	usageLogRepo          UsageLogRepository
 	usageBillingRepo      UsageBillingRepository
@@ -1224,6 +1227,28 @@ func hashSensitiveValueForLog(raw string) string {
 	return hex.EncodeToString(sum[:8])
 }
 
+func (s *OpenAIGatewayService) credentialsForRequest(ctx context.Context, account *Account) (context.Context, string, string, error) {
+	if CoreOAuthDeclared(account) && account.Type == AccountTypeOAuth {
+		_, snapshot, err := s.coreOAuthCurrentSnapshot(ctx, account)
+		if err != nil {
+			return ctx, "", "oauth", err
+		}
+		return ctx, snapshot.AccessToken, "oauth", nil
+	}
+	if ManagedOAuthDeclared(account) {
+		var token string
+		var err error
+		if s.openAITokenProvider != nil {
+			ctx, token, err = s.openAITokenProvider.CredentialsForRequest(ctx, account)
+		} else {
+			ctx, token, err = managedOAuthCredentialsForRequest(ctx, s.accountRepo, account)
+		}
+		return ctx, token, "oauth", err
+	}
+	token, kind, err := s.GetAccessToken(ctx, account)
+	return ctx, token, kind, err
+}
+
 // GetAccessToken gets the access token for an OpenAI account
 func (s *OpenAIGatewayService) GetAccessToken(ctx context.Context, account *Account) (string, string, error) {
 	if account.IsShadow() {
@@ -1232,6 +1257,9 @@ func (s *OpenAIGatewayService) GetAccessToken(ctx context.Context, account *Acco
 			return "", "", err
 		}
 		account = credAccount
+	}
+	if CoreOAuthDeclared(account) && account.Type == AccountTypeOAuth {
+		return "", "oauth", ErrCoreOAuthUnavailable
 	}
 	switch account.Type {
 	case AccountTypeOAuth:

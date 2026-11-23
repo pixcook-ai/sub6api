@@ -138,6 +138,9 @@ func (s *OpenAIGatewayService) runCodexTicketAttempt(ctx context.Context, accoun
 }
 
 func (s *OpenAIGatewayService) runCodexTicketAttemptWithChallengeGenerator(ctx context.Context, account *Account, model, trigger string, generateChallenge func() (ModelTraceChallenge, error)) (result CodexTicketHarvestResult, err error) {
+	if ManagedOAuthDeclared(account) {
+		return result, ErrManagedOAuthUnavailable
+	}
 	key := openAICodexTicketKey(account.ID, model)
 	if _, loaded := s.openaiCodexTicketInFlight.LoadOrStore(key, true); loaded {
 		return result, ErrCodexTicketBusy
@@ -156,6 +159,9 @@ func (s *OpenAIGatewayService) runCodexTicketAttemptWithChallengeGenerator(ctx c
 	current, err := s.accountRepo.GetByID(ctx, account.ID)
 	if err != nil {
 		return result, err
+	}
+	if ManagedOAuthDeclared(current) {
+		return result, ErrManagedOAuthUnavailable
 	}
 	if current == nil || current.Status != StatusActive || !CodexTicketHarvestEnabled(current, model) {
 		return result, ErrCodexTicketUnavailable
@@ -207,7 +213,7 @@ func (s *OpenAIGatewayService) runCodexTicketAttemptWithChallengeGenerator(ctx c
 		a.Outcome, a.ReasonCode = "error", "upstream_unavailable"
 		return result, ErrCodexTicketUnavailable
 	}
-	token, _, tokenErr := s.GetAccessToken(ctx, account)
+	ctx, token, _, tokenErr := s.credentialsForRequest(ctx, account)
 	if tokenErr != nil || strings.TrimSpace(token) == "" {
 		a.Outcome, a.ReasonCode = "error", "credentials"
 		return result, nil

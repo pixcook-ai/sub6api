@@ -740,6 +740,15 @@ func lockAndMergeAccountProbeExtra(
 			currentExtra = nil
 		}
 	}
+	_, managedBefore := currentExtra[service.ManagedOAuthExtraKey]
+	_, managedAfter := account.Extra[service.ManagedOAuthExtraKey]
+	if managedBefore || managedAfter {
+		before, _ := json.Marshal(currentExtra[service.ManagedOAuthExtraKey])
+		after, _ := json.Marshal(account.Extra[service.ManagedOAuthExtraKey])
+		if !managedBefore || !managedAfter || !identityUnchanged || string(before) != string(after) {
+			return nil, service.ErrManagedOAuthConflict
+		}
+	}
 	extra := service.MergeOpenAICodexTicketExtra(copyJSONMap(normalizeJSONMap(account.Extra)), currentExtra)
 	extra = service.MergeOpenAIBPSCredentialStateExtra(account, extra, currentExtra, identityUnchanged)
 	for _, key := range []string{
@@ -952,7 +961,7 @@ func (r *accountRepository) UpdateCredentials(ctx context.Context, id int64, cre
 				ELSE extra
 			END,
 			updated_at = NOW()
-		WHERE id = $2 AND deleted_at IS NULL
+		WHERE id = $2 AND deleted_at IS NULL AND NOT (COALESCE(extra,'{}'::jsonb) ? 'managed_oauth')
 	`, string(payload), id)
 	if err != nil {
 		return err
@@ -2756,6 +2765,9 @@ func (r *accountRepository) AutoPauseExpiredAccounts(ctx context.Context, now ti
 }
 
 func (r *accountRepository) UpdateExtra(ctx context.Context, id int64, updates map[string]any) error {
+	if _, exists := updates[service.ManagedOAuthExtraKey]; exists {
+		return service.ErrManagedOAuthRefresh
+	}
 	updates = stripCodexFingerprintSeedFromExtraUpdate(updates)
 	if len(updates) == 0 {
 		return nil
@@ -3030,6 +3042,9 @@ func ollamaCloudUsageSnapshotClearRequested(extra map[string]any) bool {
 }
 
 func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates service.AccountBulkUpdate) (int64, error) {
+	if _, present := updates.Extra[service.ManagedOAuthExtraKey]; present {
+		return 0, service.ErrManagedOAuthRefresh
+	}
 	if len(ids) == 0 {
 		return 0, nil
 	}
@@ -3245,7 +3260,8 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 
 	setClauses = append(setClauses, "updated_at = NOW()")
 
-	whereClause := " WHERE id = ANY($" + itoa(idx) + ") AND deleted_at IS NULL"
+	idsPlaceholder := "$" + itoa(idx)
+	whereClause := " WHERE id = ANY(" + idsPlaceholder + ") AND deleted_at IS NULL"
 	args = append(args, pq.Array(ids))
 	idx++
 	if updates.ProbeEnabled != nil {
@@ -3253,6 +3269,12 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 		args = append(args, service.AccountTypeAPIKey)
 	}
 	query := "UPDATE accounts SET " + joinClauses(setClauses, ", ") + whereClause
+	if len(updates.Credentials) > 0 {
+		// Lock the whole target set, then reject the whole statement if any row is
+		// managed. A mixed batch must never partially write tokens on ordinary rows.
+		query = "WITH managed_targets AS MATERIALIZED (SELECT id, extra FROM accounts WHERE id = ANY(" + idsPlaceholder + ") AND deleted_at IS NULL ORDER BY id FOR NO KEY UPDATE) " + query +
+			" AND id IN (SELECT id FROM managed_targets) AND NOT EXISTS (SELECT 1 FROM managed_targets WHERE COALESCE(extra, '{}'::jsonb) ? 'managed_oauth')"
+	}
 
 	baseCtx := ctx
 	contextTx := dbent.TxFromContext(ctx)
@@ -3280,6 +3302,9 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 	rows, err := result.RowsAffected()
 	if err != nil {
 		return 0, err
+	}
+	if len(updates.Credentials) > 0 && rows == 0 {
+		return 0, service.ErrManagedOAuthConflict
 	}
 	if updates.ProbeEnabled != nil {
 		expectedRows := int64(0)

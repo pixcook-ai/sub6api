@@ -20,6 +20,7 @@ func RegisterAdminRoutes(
 	settingService *service.SettingService,
 	panelRateLimiter *middleware.PanelRateLimiter,
 ) {
+	registerOAuthControllerRoutes(v1, h)
 	// 插件 UI 使用短时能力 URL，仅提供经过安装校验的静态资源。
 	v1.GET("/plugin-ui/:token/*path", h.Admin.Plugin.ServeUIAsset)
 
@@ -45,12 +46,14 @@ func RegisterAdminRoutes(
 
 		// 账号管理
 		registerAccountRoutes(admin, h, stepUpAuth)
+		registerOAuthControllerAdminRoutes(admin, h)
 
 		// 公告管理
 		registerAnnouncementRoutes(admin, h)
 
 		// OpenAI OAuth
 		registerOpenAIOAuthRoutes(admin, h)
+		registerCoreOAuthRoutes(admin, h)
 
 		// Gemini OAuth
 		registerGeminiOAuthRoutes(admin, h)
@@ -373,6 +376,11 @@ func registerGroupRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 }
 
 func registerAccountRoutes(admin *gin.RouterGroup, h *handler.Handlers, stepUpAuth middleware.StepUpAuthMiddleware) {
+	admin.GET("/managed-deployments/:id", h.Admin.Account.GetManagedDeployment)
+	admin.PUT("/managed-deployments/:id", h.Admin.Account.PutManagedDeployment)
+	admin.GET("/managed-deployments/:id/switch-options", h.Admin.Account.GetManagedDeploymentSwitchOptions)
+	admin.POST("/managed-deployments/:id/switch", h.Admin.Account.SwitchManagedDeployment)
+	admin.POST("/managed-deployments/:id/core-runtime", h.Admin.Account.InstallCoreOAuthRuntime)
 	accounts := admin.Group("/accounts")
 	{
 		accounts.GET("", h.Admin.Account.List)
@@ -386,6 +394,7 @@ func registerAccountRoutes(admin *gin.RouterGroup, h *handler.Handlers, stepUpAu
 		accounts.GET("/opencode-go-usage/settings", h.Admin.Account.GetOpenCodeGoUsageSettings)
 		accounts.PUT("/opencode-go-usage/settings", h.Admin.Account.UpdateOpenCodeGoUsageSettings)
 		accounts.GET("/:id", h.Admin.Account.GetByID)
+		accounts.GET("/:id/claude-compatibility", h.Admin.Account.GetClaudeOAuthCompatibility)
 		accounts.GET("/codex-ticket-cadence", h.Admin.Account.GetCodexTicketCadence)
 		accounts.PUT("/codex-ticket-cadence", h.Admin.Account.UpdateCodexTicketCadence)
 		accounts.GET("/codex-ticket-fingerprint", h.Admin.Account.GetCodexFingerprintVersion)
@@ -400,6 +409,10 @@ func registerAccountRoutes(admin *gin.RouterGroup, h *handler.Handlers, stepUpAu
 		accounts.GET("/:id/claude/reset-credits", h.Admin.Account.ClaudeResetCredits)
 		// Same protection as the Codex reset-quota route (admin auth, audit, compliance guard).
 		accounts.POST("/:id/claude/reset-credits/redeem", h.Admin.Account.RedeemClaudeResetCredit)
+		accounts.GET("/create-capabilities", h.Admin.Account.CreateCapabilities)
+		accounts.GET("/:id/managed-credentials", h.Admin.Account.GetManagedOAuthCredentials)
+		accounts.PUT("/:id/managed-credentials", h.Admin.Account.InstallManagedOAuthCredentials)
+		accounts.GET("/:id/managed-credentials/auth-events", h.Admin.Account.ListManagedOAuthAuthEvents)
 		accounts.POST("", h.Admin.Account.Create)
 		accounts.POST("/:id/duplicate", h.Admin.Account.Duplicate)
 		accounts.POST("/check-mixed-channel", h.Admin.Account.CheckMixedChannel)

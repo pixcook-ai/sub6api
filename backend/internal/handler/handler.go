@@ -16,6 +16,7 @@ type AdminHandlers struct {
 	Backup                 *admin.BackupHandler
 	OAuth                  *admin.OAuthHandler
 	OpenAIOAuth            *admin.OpenAIOAuthHandler
+	CoreOAuth              *admin.CoreOAuthHandler
 	GeminiOAuth            *admin.GeminiOAuthHandler
 	AntigravityOAuth       *admin.AntigravityOAuthHandler
 	GrokOAuth              *admin.GrokOAuthHandler
@@ -60,6 +61,8 @@ type Handlers struct {
 	Admin            *AdminHandlers
 	Gateway          *GatewayHandler
 	OpenAIGateway    *OpenAIGatewayHandler
+	Files            *FileHandler
+	StoredResponses  *StoredResponseHandler
 	Setting          *SettingHandler
 	Totp             *TotpHandler
 	Passkey          *PasskeyHandler

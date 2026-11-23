@@ -224,6 +224,10 @@ func (h *OpenAIGatewayHandler) Embeddings(c *gin.Context) {
 		if err != nil {
 			var failoverErr *service.UpstreamFailoverError
 			if errors.As(err, &failoverErr) {
+				if _, managed := service.ManagedDeploymentSessionFromContext(c.Request.Context()); managed {
+					h.handleFailoverExhausted(c, failoverErr, streamStarted)
+					return
+				}
 				if c.Writer.Size() != writerSizeBeforeForward {
 					h.handleFailoverExhausted(c, failoverErr, true)
 					return

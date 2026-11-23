@@ -325,6 +325,33 @@ function mountModal(account = buildAccount(), renderGroupSelector = false) {
 }
 
 describe('EditAccountModal', () => {
+  it('shows read-only Anthropic OAuth diagnostics without adding an attribution setting on save', async () => {
+    const account = { ...buildAccount(), platform: 'anthropic', type: 'oauth', extra: { retained_setting: 'keep' } }
+    updateAccountMock.mockReset().mockResolvedValue(account)
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+    const wrapper = mountModal(account)
+    expect(wrapper.get('[data-testid="claude-compatibility-mode"]').text()).toContain('claudeCompatibility.transparentMode')
+    expect(wrapper.find('[data-testid="claude-oauth-attribution-mode"]').exists()).toBe(false)
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    expect(updateAccountMock.mock.calls[0]?.[1]?.extra).toMatchObject({ retained_setting: 'keep' })
+    expect(updateAccountMock.mock.calls[0]?.[1]?.extra).not.toHaveProperty('claude_oauth_attribution_mode')
+    await wrapper.setProps({ show: false })
+    await wrapper.setProps({ show: true, account: { ...account } })
+    expect(wrapper.find('[data-testid="claude-compatibility-mode"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it.each([['anthropic', 'apikey'], ['anthropic', 'setup-token'], ['openai', 'oauth']])('keeps OAuth-only diagnostics hidden for %s %s', async (platform, type) => {
+    const account = { ...buildAccount(), platform, type, extra: { retained_setting: 'keep' } }
+    updateAccountMock.mockReset().mockResolvedValue(account)
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+    const wrapper = mountModal(account)
+    expect(wrapper.find('[data-testid="claude-compatibility-mode"]').exists()).toBe(false)
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    expect(updateAccountMock.mock.calls[0]?.[1]?.extra || {}).not.toHaveProperty('claude_oauth_attribution_mode')
+    wrapper.unmount()
+  })
+
   beforeEach(() => {
     authIsSimpleMode.value = true
   })

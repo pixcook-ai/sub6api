@@ -408,6 +408,8 @@ type CreateAccountInput struct {
 	GroupIDs           []int64
 	ExpiresAt          *int64
 	AutoPauseOnExpired *bool
+	Schedulable        *bool // Nil preserves the default of enabling scheduling at creation.
+	ManagedOAuth       *ManagedOAuthIdentity
 	ProbeEnabled       *bool
 	// SkipDefaultGroupBind prevents auto-binding to platform default group when GroupIDs is empty.
 	SkipDefaultGroupBind bool
@@ -415,6 +417,7 @@ type CreateAccountInput struct {
 	// This should only be set when the caller has explicitly confirmed the risk.
 	SkipMixedChannelCheck bool
 }
+
 
 // ShadowOptions is the input for CreateShadow.
 // The shadow holds no credentials — the scheduler transparently delegates to the parent account's tokens.

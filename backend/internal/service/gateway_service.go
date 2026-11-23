@@ -285,6 +285,8 @@ func safeHeaderValueForLog(key string, v string) string {
 	switch key {
 	case "authorization", "x-api-key":
 		return redactAuthHeaderValue(v)
+	case "x-claude-code-wiggly-dove", "x-anthropic-additional-protection":
+		return "[redacted]"
 	default:
 		return strings.TrimSpace(v)
 	}
@@ -1300,6 +1302,9 @@ func (s *GatewayService) hashContent(content string) string {
 
 // GetAccessToken 获取账号凭证
 func (s *GatewayService) GetAccessToken(ctx context.Context, account *Account) (string, string, error) {
+	if ManagedOAuthDeclared(account) {
+		return "", "", ErrManagedOAuthUnavailable
+	}
 	switch account.Type {
 	case AccountTypeOAuth, AccountTypeSetupToken:
 		// Both oauth and setup-token use OAuth token flow

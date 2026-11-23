@@ -1,0 +1,122 @@
+{
+  "repository": "pixcook-ai/sub6api",
+  "date": "2026-11-22",
+  "scope": "New specification and its six child issues only; no product-code acceptance claim.",
+  "parent_number": 2,
+  "issues": [
+    {
+      "number": 2,
+      "url": "https://github.com/pixcook-ai/sub6api/issues/2",
+      "state": "open",
+      "labels": [
+        "ready-for-agent"
+      ],
+      "body_sha256": "9f696716a404be601ba7f8c58dc10c2b6d562339a9db9694a5b5e3d12743d801"
+    },
+    {
+      "number": 3,
+      "url": "https://github.com/pixcook-ai/sub6api/issues/3",
+      "state": "open",
+      "labels": [
+        "ready-for-agent"
+      ],
+      "body_sha256": "6c08afa3ed5be15a50e6dd7f8454efb24ec03edb012219022318995758faabf6"
+    },
+    {
+      "number": 4,
+      "url": "https://github.com/pixcook-ai/sub6api/issues/4",
+      "state": "open",
+      "labels": [
+        "ready-for-agent"
+      ],
+      "body_sha256": "11d8ab3875dbc7a342a2bd13cfc487aeca35b1632fb179ffcecbf16e5b69807b"
+    },
+    {
+      "number": 5,
+      "url": "https://github.com/pixcook-ai/sub6api/issues/5",
+      "state": "open",
+      "labels": [
+        "ready-for-agent"
+      ],
+      "body_sha256": "00e37088c1e2bf58bb3d47f0d3cf1d12c425dc3a18f086b05a624c8687b0b226"
+    },
+    {
+      "number": 6,
+      "url": "https://github.com/pixcook-ai/sub6api/issues/6",
+      "state": "open",
+      "labels": [
+        "ready-for-agent"
+      ],
+      "body_sha256": "ec93936417e0f2d7c8b5e3d7ae18d25d01e0efbc983d6bfd7ec30f0732f0e211"
+    },
+    {
+      "number": 7,
+      "url": "https://github.com/pixcook-ai/sub6api/issues/7",
+      "state": "open",
+      "labels": [
+        "ready-for-agent"
+      ],
+      "body_sha256": "a228c9fcca1666d61dd4af88eefad12c154807b1692693cee79f8c4fdac093b2"
+    },
+    {
+      "number": 8,
+      "url": "https://github.com/pixcook-ai/sub6api/issues/8",
+      "state": "open",
+      "labels": [
+        "ready-for-agent"
+      ],
+      "body_sha256": "51432871cf2622f298a619af549ec3eb6da0c8657141749803f6fba9e18266dc"
+    }
+  ],
+  "sub_issues": [
+    3,
+    4,
+    5,
+    6,
+    7,
+    8
+  ],
+  "native_dependencies": [
+    {
+      "child": 3,
+      "blocked_by": []
+    },
+    {
+      "child": 4,
+      "blocked_by": [
+        3
+      ]
+    },
+    {
+      "child": 5,
+      "blocked_by": [
+        3,
+        4
+      ]
+    },
+    {
+      "child": 6,
+      "blocked_by": [
+        4
+      ]
+    },
+    {
+      "child": 7,
+      "blocked_by": [
+        4,
+        6
+      ]
+    },
+    {
+      "child": 8,
+      "blocked_by": [
+        3,
+        4,
+        5,
+        6,
+        7
+      ]
+    }
+  ],
+  "live_acceptance": "pending user official authorization and final integration evidence"
+}

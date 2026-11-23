@@ -49,6 +49,7 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 }
 
 func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.Context, resp *http.Response, c *gin.Context, account *Account, startTime time.Time, originalModel, mappedModel, reasoningEffort string) (*openaiStreamingResult, error) {
+	bindManagedOAuthResponseAttempt(c, resp)
 	timing := openAIForwardTimingFromContext(c)
 	observer := upstreamResponseModelObserverFromContext(c)
 	if observer == nil {
@@ -424,6 +425,17 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 		if scanErr == nil {
 			return nil, nil, false
 		}
+		var local *StoredResponseLocalError
+		if errors.As(scanErr, &local) {
+			scanErr = withStoredResponseFailureUsage(ctx, scanErr)
+			var observed *storedResponseUsageError
+			if errors.As(scanErr, &observed) {
+				mergeOpenAIUsageNonZero(usage, observed.usage)
+			} else {
+				scanErr = &storedResponseUsageError{err: scanErr, usage: *usage}
+			}
+			return resultWithUsage(), scanErr, true
+		}
 		if errors.Is(scanErr, errOpenAIFirstOutputScannerLimit) && !firstOutputProgressObserved {
 			logger.LegacyPrintf("service.openai_gateway", "SSE token exceeded guarded first-output limit: account=%d limit=%d error=%v", account.ID, openAIFirstOutputStageMaxBytes+openAIFirstOutputScannerFramingAllowance, scanErr)
 			failoverErr := s.newOpenAIStreamFailoverError(
@@ -557,10 +569,12 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 				}
 				outputStarted := openAIStreamClientOutputStarted(c, clientOutputStarted)
 				if !outputStarted && !cyberHit {
-					if compactErr := newOpenAICompactFallbackSignal(c, dataBytes, failedMessage); compactErr != nil {
-						sawFailedEvent = true
-						streamEarlyErr = compactErr
-						return
+					if !openAIInferenceNoReplay(ctx) {
+						if compactErr := newOpenAICompactFallbackSignal(c, dataBytes, failedMessage); compactErr != nil {
+							sawFailedEvent = true
+							streamEarlyErr = compactErr
+							return
+						}
 					}
 				}
 				if outputStarted && !cyberHit {
@@ -1606,6 +1620,12 @@ func openAICacheCreationTokensFromUsage(value gjson.Result) int {
 func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, resp *http.Response, c *gin.Context, account *Account, originalModel, mappedModel string) (*openaiNonStreamingResult, error) {
 	body, err := ReadUpstreamResponseBody(resp.Body, s.cfg, c, openAITooLargeError)
 	if err != nil {
+		err = withStoredResponseFailureUsage(ctx, err)
+		var observed *storedResponseUsageError
+		if errors.As(err, &observed) {
+			usage := observed.usage
+			return &openaiNonStreamingResult{OpenAIUsage: &usage, usage: &usage}, err
+		}
 		return nil, err
 	}
 	observer := upstreamResponseModelObserverFromContext(c)
@@ -1722,6 +1742,7 @@ func bodyHasSSEFraming(body []byte) bool {
 }
 
 func (s *OpenAIGatewayService) handleSSEToJSON(resp *http.Response, c *gin.Context, account *Account, body []byte, originalModel, mappedModel string) (*openaiNonStreamingResult, error) {
+	bindManagedOAuthResponseAttempt(c, resp)
 	bodyText := string(body)
 	terminalType, terminalPayload, terminalOK := extractOpenAISSETerminalEvent(bodyText)
 	if terminalOK && (terminalType == "response.failed" || terminalType == "error") {
@@ -1729,8 +1750,10 @@ func (s *OpenAIGatewayService) handleSSEToJSON(resp *http.Response, c *gin.Conte
 		if msg == "" {
 			msg = "Upstream compact response failed"
 		}
-		if compactErr := newOpenAICompactFallbackSignal(c, terminalPayload, msg); compactErr != nil {
-			return nil, compactErr
+		if !openAIManagedDeploymentNoReplayFromGin(c) {
+			if compactErr := newOpenAICompactFallbackSignal(c, terminalPayload, msg); compactErr != nil {
+				return nil, compactErr
+			}
 		}
 		if failoverErr := s.nonStreamingTerminalFailureFailover(c, resp, account, false, terminalType, terminalPayload, msg, mappedModel); failoverErr != nil {
 			return nil, failoverErr

@@ -29,6 +29,7 @@ type openAIWSClientFrameConn struct {
 	// model identifier they supplied for the current turn.
 	restoreResponseModel func([]byte) []byte
 	restoreToolNames     func([]byte) []byte
+	recordPayload        func([]byte) error
 }
 
 // openAIWSPolicyEnforcingFrameConn wraps a client-side FrameConn and runs
@@ -358,6 +359,7 @@ func (l *openAIWSPassthroughTurnLifecycle) finishTerminalWrite(succeeded bool, o
 }
 
 type openAIWSPassthroughFirstOutputFrameConn struct {
+	preparePayload    func([]byte) ([]byte, error)
 	inner             openaiwsv2.FrameConn
 	resolveDeadline   func(payload []byte) openAIWSPassthroughFirstOutputDeadline
 	activeReadTimeout time.Duration
@@ -459,6 +461,13 @@ func (c *openAIWSPassthroughFirstOutputFrameConn) ReadFrame(ctx context.Context)
 func (c *openAIWSPassthroughFirstOutputFrameConn) WriteFrame(ctx context.Context, msgType coderws.MessageType, payload []byte) error {
 	if c == nil || c.inner == nil {
 		return errOpenAIWSConnClosed
+	}
+	if c.preparePayload != nil && (msgType == coderws.MessageText || msgType == coderws.MessageBinary) {
+		var err error
+		payload, err = c.preparePayload(payload)
+		if err != nil {
+			return err
+		}
 	}
 	generation := uint64(0)
 	if msgType == coderws.MessageText && strings.TrimSpace(gjson.GetBytes(payload, "type").String()) == "response.create" {
@@ -651,6 +660,11 @@ func (c *openAIWSClientFrameConn) WriteFrame(ctx context.Context, msgType coderw
 			payload = c.restoreToolNames(payload)
 		}
 	}
+	if c.recordPayload != nil {
+		if err := c.recordPayload(payload); err != nil {
+			return err
+		}
+	}
 	return c.conn.Write(ctx, msgType, payload)
 }
 
@@ -684,6 +698,10 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	}
 	if account == nil {
 		return errors.New("account is nil")
+	}
+	managedDeployment := openAIManagedDeploymentNoReplay(ctx)
+	if err := s.ValidateManagedDeploymentPayload(ctx, firstClientMessage); err != nil {
+		return NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "managed deployment context must be rebuilt", err)
 	}
 	if err := validateOpenAIWSBearerToken(account, token); err != nil {
 		return err
@@ -794,6 +812,9 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		// No explicit flush hop is required here.
 		eventBytes := buildOpenAIFastPolicyBlockedWSEvent(blocked)
 		if eventBytes != nil {
+			if err := s.RecordManagedDeploymentPayload(ctx, eventBytes); err != nil {
+				return NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "managed deployment resource ownership could not be recorded", err)
+			}
 			writeCtx, cancelWrite := context.WithTimeout(ctx, s.openAIWSWriteTimeout())
 			_ = clientConn.Write(writeCtx, coderws.MessageText, eventBytes)
 			cancelWrite()
@@ -898,6 +919,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			return fmt.Errorf("refresh ws authentication headers: %w", err)
 		}
 		dialCtx, cancelDial := context.WithTimeout(ctx, s.openAIWSDialTimeout())
+		headers = scopeManagedDeploymentWireHeaders(ctx, headers)
 		sentHeaders := cloneHeader(headers)
 		upstreamConn, statusCode, handshakeHeaders, err = dialer.Dial(dialCtx, wsURL, headers, proxyURL)
 		cancelDial()
@@ -913,14 +935,14 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			responseBody = handshakeErr.Body
 		}
 		dialErr := &openAIWSDialError{StatusCode: statusCode, ResponseHeaders: cloneHeader(handshakeHeaders), ResponseBody: responseBody, Err: err}
-		if s.isAgentIdentityAccount(ctx, account) && isAgentIdentityTaskInvalidWSDialError(dialErr) && !agentTaskRecoveryTried {
+		if !managedDeployment && s.isAgentIdentityAccount(ctx, account) && isAgentIdentityTaskInvalidWSDialError(dialErr) && !agentTaskRecoveryTried {
 			agentTaskRecoveryTried = true
 			if recoveryErr := s.recoverAgentIdentityTask(ctx, account, account.GetCredential("task_id")); recoveryErr != nil {
 				return fmt.Errorf("agent identity task recovery failed: %w", recoveryErr)
 			}
 			continue
 		}
-		if statusCode == http.StatusUnauthorized {
+		if !managedDeployment && statusCode == http.StatusUnauthorized {
 			if !oauthRecoveryTried {
 				oauthRecoveryTried = true
 				var recovered bool
@@ -960,6 +982,9 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		return errors.New("openai ws passthrough upstream connection does not support frame relay")
 	}
 	relayUpstreamFrameConn := &openAIWSPassthroughFirstOutputFrameConn{
+		preparePayload: func(raw []byte) ([]byte, error) {
+			return scopeManagedDeploymentWirePayload(ctx, raw)
+		},
 		inner:             upstreamFrameConn,
 		activeReadTimeout: s.openAIWSPassthroughIdleTimeout(),
 		deadlineChanged:   make(chan struct{}, 1),
@@ -1007,6 +1032,12 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		restoreToolNames: func(payload []byte) []byte {
 			return restoreCodexToolNamesFromContext(c, payload)
 		},
+		recordPayload: func(payload []byte) error {
+			if err := s.RecordManagedDeploymentPayload(ctx, payload); err != nil {
+				return NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "managed deployment resource ownership could not be recorded", err)
+			}
+			return nil
+		},
 	}
 	policyClientConn := &openAIWSPolicyEnforcingFrameConn{
 		inner: clientFrameConn,
@@ -1015,6 +1046,9 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		// capturedSessionModel 的读写都发生在该 goroutine 内，因此无需
 		// 加锁/原子化。
 		filter: func(msgType coderws.MessageType, payload []byte) (out []byte, blocked *OpenAIFastBlockedError, filterErr error) {
+			if err := s.ValidateManagedDeploymentPayload(ctx, payload); err != nil {
+				return payload, nil, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "managed deployment context must be rebuilt", err)
+			}
 			if msgType != coderws.MessageText && msgType != coderws.MessageBinary {
 				return payload, nil, nil
 			}
@@ -1169,6 +1203,11 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 				acceptedTurnStartedAt.Store(&responseCreateAtCopy)
 				acceptedTurn = true
 			}
+			if policyErr == nil && blocked == nil {
+				if err := s.ValidateManagedDeploymentPayload(ctx, out); err != nil {
+					return out, nil, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "managed deployment context must be rebuilt", err)
+				}
+			}
 			if hooks != nil && hooks.ObserveFrame != nil {
 				hooks.ObserveFrame("client", 0, out)
 			}
@@ -1183,10 +1222,17 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			if eventBytes == nil {
 				return
 			}
+			if err := s.RecordManagedDeploymentPayload(ctx, eventBytes); err != nil {
+				_ = clientConn.Close(coderws.StatusPolicyViolation, "managed deployment resource ownership could not be recorded")
+				return
+			}
 			writeCtx, cancel := context.WithTimeout(ctx, s.openAIWSWriteTimeout())
 			_ = clientConn.Write(writeCtx, coderws.MessageText, eventBytes)
 			cancel()
 		},
+	}
+	if err := s.ValidateManagedDeploymentPayload(ctx, firstClientMessage); err != nil {
+		return NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "managed deployment context must be rebuilt", err)
 	}
 	upstreamFirstMessageSent := false
 	firstWriteCtx, cancelFirstWrite := context.WithTimeout(ctx, s.openAIWSWriteTimeout())
@@ -1213,7 +1259,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			if (msgType == coderws.MessageText || msgType == coderws.MessageBinary) && strings.TrimSpace(gjson.GetBytes(payload, "type").String()) == "response.create" {
 				return msgType, payload, nil
 			}
-			if writeErr := upstreamFrameConn.WriteFrame(readCtx, msgType, payload); writeErr != nil {
+			if writeErr := relayUpstreamFrameConn.WriteFrame(readCtx, msgType, payload); writeErr != nil {
 				return msgType, payload, writeErr
 			}
 		}

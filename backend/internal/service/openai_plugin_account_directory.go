@@ -143,6 +143,9 @@ func (s *OpenAIGatewayService) ResolvePluginOutboundIdentity(ctx context.Context
 	if account.Type != AccountTypeOAuth || !account.IsOpenAIOAuthLike() {
 		return nil, nil
 	}
+	if ManagedOAuthDeclared(account) {
+		return nil, ErrManagedOAuthUnavailable
+	}
 	token, _, err := s.GetAccessToken(ctx, account)
 	if err != nil {
 		return nil, err

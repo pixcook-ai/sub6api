@@ -1,0 +1,44 @@
+{
+  "package": "@anthropic-ai/claude-code-darwin-arm64",
+  "version": "2.1.330",
+  "metadata_url": "https://registry.npmjs.org/@anthropic-ai%2fclaude-code-darwin-arm64/2.1.330",
+  "tarball_url": "https://registry.npmjs.org/@anthropic-ai/claude-code-darwin-arm64/-/claude-code-darwin-arm64-2.1.330.tgz",
+  "dist_integrity": "sha512-rgzAjrRJJsIdZXGF9CCFFbURxKuJNobRr+krV3dNmqNJWIws74rLD0CABe4+nXlx/9WwRECTrveprWB96mubqw==",
+  "integrity_verified": true,
+  "registry_signature_verified": false,
+  "tarball_sha256": "b8c91d706567b670e4f2b6112199c5db3125ca237ac214e6143e7094bd0cb33b",
+  "tarball_bytes": 164285735,
+  "executable_sha256": "f7c5093b9dd6560d08af28bc27b123fb55091deae3180ac39df199522da86815",
+  "executable_matches_verified_archive": true,
+  "captured_at": "2026-11-22T16:27:28Z",
+  "capture_scope": "official-cli-local-http-synthetic-token",
+  "upstream_account_used": false,
+  "wiggly_absence_is_not_global_absence": true,
+  "registry_manifest_path": "native-npm-manifest.json",
+  "captures": [
+    {
+      "mode": "default",
+      "fixture": "claude-2.1.330-attribution-default.json",
+      "fixture_sha256": "71970b37f9492b6f567184d2c08ca3e9791527b5eed2bcd7972a2eea3a90f863",
+      "exit_code": 0,
+      "request_count": 1,
+      "messages_requests": 1,
+      "completed": true
+    },
+    {
+      "mode": "off",
+      "fixture": "claude-2.1.330-attribution-off.json",
+      "fixture_sha256": "31b2bd820665fb211befaaca2c508298cb7cb6bb15097f74bd9ff9d30204ba26",
+      "exit_code": 0,
+      "request_count": 1,
+      "messages_requests": 1,
+      "completed": true
+    }
+  ],
+  "sanitization": {
+    "authorization": "redacted",
+    "metadata_ids": "fixed synthetic values",
+    "ephemeral_paths": "controlled-runtime placeholder",
+    "wire_content_length": "original received value; sanitized JSON may differ"
+  }
+}

@@ -5,6 +5,8 @@ package service
 var SensitiveCredentialKeys = []string{
 	// OAuth
 	"access_token", "refresh_token", "id_token", "agent_private_key",
+	// Managed backend control credentials
+	"core_oauth_control_key", "bps_files_service_key", "bps_responses_service_key",
 	// API Key 类
 	"api_key", "session_key", "cookie",
 	// Grok Web SSO / password (must never persist or echo after Build OAuth)

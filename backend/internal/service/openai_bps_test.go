@@ -557,6 +557,29 @@ func TestOpenAIBPSFailedJSONPreservesUsage(t *testing.T) {
 	require.False(t, result.SucceededForScheduling())
 }
 
+func TestOpenAIBPSFailedStreamBeforeCreatedPreservesResponsesProtocol(t *testing.T) {
+	s, a := bpsFixture()
+	s.httpUpstream = &bpsHTTPStub{
+		contentType: "text/event-stream",
+		body: bpsEvent("response.failed", map[string]any{
+			"response": map[string]any{
+				"id":     "resp_failed_first",
+				"status": "failed",
+				"error":  map[string]any{"code": "server_error", "message": "upstream failed before response.created"},
+			},
+		}),
+	}
+	c, rec := bpsContext(1, "/responses")
+	result, err := s.Forward(c.Request.Context(), c, a, bpsRequestBody("task", true))
+	require.Error(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, "response.failed", result.UpstreamTerminalEvent)
+	require.Equal(t, "text/event-stream", rec.Header().Get("Content-Type"))
+	require.Contains(t, rec.Body.String(), "event: response.failed")
+	require.Contains(t, rec.Body.String(), "bps_response_failed")
+	require.NotContains(t, rec.Body.String(), `"error":{"message":"BPS upstream request failed"}`)
+}
+
 func TestOpenAIBPSStrictReasoningAndAuthRecovery(t *testing.T) {
 	s, a := bpsFixture()
 	c, _ := bpsContext(1, "/responses")

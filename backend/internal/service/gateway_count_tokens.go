@@ -58,6 +58,7 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 	}
 
 	body := parsed.Body.Bytes()
+	captureClaudeOAuthCompatibilitySource(c, account, body)
 	replaceBody := func(next []byte) error {
 		if err := parsed.ReplaceBody(next); err != nil {
 			return fmt.Errorf("rewrite count_tokens body: %w", err)
@@ -546,6 +547,7 @@ func (s *GatewayService) buildCountTokensRequestAnthropicVertex(
 
 // buildCountTokensRequest 构建 count_tokens 上游请求
 func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Context, account *Account, body []byte, token, tokenType, modelID string, mimicClaudeCode bool) (*http.Request, []byte, error) {
+	compatibilityBody := body
 	body = stripDeferredToolCacheControl(body)
 	if account.Platform == PlatformAnthropic && account.Type == AccountTypeServiceAccount {
 		body = sanitizeCountTokensRequestBody(body)
@@ -577,6 +579,7 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 	if c != nil && c.Request != nil {
 		clientHeaders = c.Request.Header
 	}
+	compatibilityInput := claudeOAuthCompatibilityInput(c, account, compatibilityBody, clientHeaders)
 
 	// OAuth 账号：应用统一指纹和重写 userID（受设置开关控制）
 	// 如果启用了会话ID伪装，会在重写后替换 session 部分为固定值
@@ -705,6 +708,7 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 	// 账号级请求头覆写（仅 anthropic/openai api_key 账号启用时生效；OAuth 路径 no-op）
 	account.ApplyHeaderOverrides(req.Header)
 	filterSonnet55ToolsetBetaHeader(req.Header, body, modelID)
+	finalizeClaudeOAuthCompatibility(account, compatibilityInput, req, body, "count_tokens")
 
 	if c != nil && tokenType == "oauth" {
 		c.Set(claudeMimicDebugInfoKey, buildClaudeMimicDebugLine(req, body, account, tokenType, mimicClaudeCode))

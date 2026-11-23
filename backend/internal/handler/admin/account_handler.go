@@ -11,6 +11,7 @@ import (
 	"log"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -133,22 +134,24 @@ func NewAccountHandler(
 
 // CreateAccountRequest represents create account request
 type CreateAccountRequest struct {
-	Name                    string         `json:"name" binding:"required"`
-	Notes                   *string        `json:"notes"`
-	Platform                string         `json:"platform" binding:"required"`
-	Type                    string         `json:"type" binding:"required,oneof=oauth setup-token apikey upstream bedrock service_account"`
-	Credentials             map[string]any `json:"credentials" binding:"required"`
-	Extra                   map[string]any `json:"extra"`
-	ProxyID                 *int64         `json:"proxy_id"`
-	Concurrency             int            `json:"concurrency"`
-	Priority                int            `json:"priority"`
-	RateMultiplier          *float64       `json:"rate_multiplier"`
-	LoadFactor              *int           `json:"load_factor"`
-	GroupIDs                []int64        `json:"group_ids"`
-	ExpiresAt               *int64         `json:"expires_at"`
-	AutoPauseOnExpired      *bool          `json:"auto_pause_on_expired"`
-	ProbeEnabled            *bool          `json:"upstream_billing_probe_enabled"`
-	ConfirmMixedChannelRisk *bool          `json:"confirm_mixed_channel_risk"` // 用户确认混合渠道风险
+	Name                    string                        `json:"name" binding:"required"`
+	Notes                   *string                       `json:"notes"`
+	Platform                string                        `json:"platform" binding:"required"`
+	Type                    string                        `json:"type" binding:"required,oneof=oauth setup-token apikey upstream bedrock service_account"`
+	Credentials             map[string]any                `json:"credentials" binding:"required"`
+	Extra                   map[string]any                `json:"extra"`
+	ProxyID                 *int64                        `json:"proxy_id"`
+	Concurrency             int                           `json:"concurrency"`
+	Priority                int                           `json:"priority"`
+	RateMultiplier          *float64                      `json:"rate_multiplier"`
+	LoadFactor              *int                          `json:"load_factor"`
+	GroupIDs                []int64                       `json:"group_ids"`
+	ExpiresAt               *int64                        `json:"expires_at"`
+	AutoPauseOnExpired      *bool                         `json:"auto_pause_on_expired"`
+	Schedulable             *bool                         `json:"schedulable"`
+	ManagedOAuth            *service.ManagedOAuthIdentity `json:"managed_oauth"`
+	ProbeEnabled            *bool                         `json:"upstream_billing_probe_enabled"`
+	ConfirmMixedChannelRisk *bool                         `json:"confirm_mixed_channel_risk"` // 用户确认混合渠道风险
 }
 
 // UpdateAccountRequest represents update account request
@@ -1062,6 +1065,12 @@ func (h *AccountHandler) CheckMixedChannel(c *gin.Context) {
 	response.Success(c, gin.H{"has_risk": false})
 }
 
+// CreateCapabilities reports creation semantics for administrative integrations.
+// GET /api/v1/admin/accounts/create-capabilities
+func (h *AccountHandler) CreateCapabilities(c *gin.Context) {
+	response.Success(c, gin.H{"schedulable_on_create": true, "managed_oauth_contract": service.ManagedOAuthContract})
+}
+
 // Create handles creating a new account
 // POST /api/v1/admin/accounts
 func (h *AccountHandler) Create(c *gin.Context) {
@@ -1108,6 +1117,8 @@ func (h *AccountHandler) Create(c *gin.Context) {
 			GroupIDs:              req.GroupIDs,
 			ExpiresAt:             req.ExpiresAt,
 			AutoPauseOnExpired:    req.AutoPauseOnExpired,
+			Schedulable:           req.Schedulable,
+			ManagedOAuth:          req.ManagedOAuth,
 			ProbeEnabled:          req.ProbeEnabled,
 			SkipMixedChannelCheck: skipCheck,
 		})
@@ -1118,7 +1129,9 @@ func (h *AccountHandler) Create(c *gin.Context) {
 		// Antigravity OAuth: 新账号直接设置隐私
 		h.adminService.ForceAntigravityPrivacy(ctx, account)
 		// OpenAI OAuth: 新账号直接设置隐私
-		h.adminService.ForceOpenAIPrivacy(ctx, account)
+		if !service.ManagedOAuthDeclared(account) {
+			h.adminService.ForceOpenAIPrivacy(ctx, account)
+		}
 		return h.buildAccountResponseWithRuntime(ctx, account), nil
 	})
 	if err != nil {
@@ -1148,6 +1161,85 @@ func (h *AccountHandler) Create(c *gin.Context) {
 	h.scheduleOpenAIResponsesProbe(createdAccount)
 	h.scheduleGrokImportProbe(createdAccount)
 	response.Success(c, result.Data)
+}
+
+type coreRuntimeShellRequest struct {
+	Provider string `json:"provider"`
+	Name     string `json:"name"`
+	GroupID  int64  `json:"group_id"`
+	BaseURL  string `json:"base_url"`
+	APIKey   string `json:"api_key"`
+}
+
+// CreateCoreRuntimeShell creates an OpenAI runtime account for the native core
+// OAuth installer. Shells start paused and carry no core ownership marker.
+func (h *AccountHandler) CreateCoreRuntimeShell(c *gin.Context) {
+	if _, ok := coreOAuthAdminActor(c); !ok {
+		return
+	}
+	var req coreRuntimeShellRequest
+	if !decodeCoreOAuthBody(c, &req) || h == nil || h.adminService == nil {
+		if h == nil || h.adminService == nil {
+			response.ErrorFrom(c, service.ErrCoreOAuthUnavailable)
+		}
+		return
+	}
+	if (req.Provider != service.CoreOAuthProviderCodex && req.Provider != service.CoreOAuthProviderExcel) || req.GroupID <= 0 || len(req.Name) > 200 || strings.TrimSpace(req.Name) != req.Name {
+		response.ErrorFrom(c, service.ErrCoreOAuthInvalidInput)
+		return
+	}
+	group, err := h.adminService.GetGroup(c.Request.Context(), req.GroupID)
+	if err != nil || group == nil || group.Platform != service.PlatformOpenAI || !group.IsActive() {
+		response.ErrorFrom(c, service.ErrCoreOAuthInvalidInput)
+		return
+	}
+	schedulable := false
+	input := &service.CreateAccountInput{
+		Platform:             service.PlatformOpenAI,
+		GroupIDs:             []int64{req.GroupID},
+		Schedulable:          &schedulable,
+		SkipDefaultGroupBind: true,
+		Extra: map[string]any{
+			service.CoreOAuthRuntimeShellExtraKey: map[string]any{"provider": req.Provider, "group_id": req.GroupID},
+		},
+	}
+	if req.Provider == service.CoreOAuthProviderCodex {
+		if req.BaseURL != "" || req.APIKey != "" {
+			response.ErrorFrom(c, service.ErrCoreOAuthInvalidInput)
+			return
+		}
+		input.Type = service.AccountTypeOAuth
+		input.Name = req.Name
+		if input.Name == "" {
+			input.Name = "Sub6 Codex Runtime"
+		}
+		input.Credentials = map[string]any{}
+	} else {
+		if !validCoreRuntimeBaseURL(req.BaseURL) || len(req.APIKey) < 1 || len(req.APIKey) > 4096 || strings.TrimSpace(req.APIKey) != req.APIKey || strings.ContainsAny(req.APIKey, "\r\n\x00") {
+			response.ErrorFrom(c, service.ErrCoreOAuthInvalidInput)
+			return
+		}
+		input.Type = service.AccountTypeAPIKey
+		input.Name = req.Name
+		if input.Name == "" {
+			input.Name = "Sub6 Excel Runtime"
+		}
+		input.Credentials = map[string]any{"base_url": strings.TrimRight(req.BaseURL, "/"), "api_key": req.APIKey}
+	}
+	if err := h.adminService.ValidateAccountGroupBindings(c.Request.Context(), input.GroupIDs); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	account, err := h.adminService.CreateAccount(c.Request.Context(), input)
+	if response.ErrorFrom(c, err) {
+		return
+	}
+	response.Success(c, h.buildAccountResponseWithRuntime(c.Request.Context(), account))
+}
+
+func validCoreRuntimeBaseURL(value string) bool {
+	parsed, err := url.Parse(value)
+	return err == nil && parsed.Host != "" && (parsed.Scheme == "https" || parsed.Scheme == "http") && parsed.User == nil && parsed.RawQuery == "" && parsed.Fragment == ""
 }
 
 // Duplicate handles creating an independent account from an existing account's configuration.
@@ -1454,6 +1546,9 @@ func (h *AccountHandler) PreviewFromCRS(c *gin.Context) {
 // refreshSingleAccount refreshes credentials for a single OAuth account.
 // Returns (updatedAccount, warning, error) where warning is used for Antigravity ProjectIDMissing scenario.
 func (h *AccountHandler) refreshSingleAccount(ctx context.Context, account *service.Account) (*service.Account, string, error) {
+	if service.ManagedOAuthDeclared(account) {
+		return nil, "", service.ErrManagedOAuthRefresh
+	}
 	if account.IsOpenAIBPS() {
 		return nil, "", infraerrors.BadRequest("BPS_MANUAL_TOKEN_ONLY", "Replace access_token in the BPS account settings; automatic refresh is unsupported")
 	}
@@ -1673,6 +1768,10 @@ func (h *AccountHandler) ApplyOAuthCredentials(c *gin.Context) {
 	}
 	if existing.IsOpenAIBPS() {
 		response.BadRequest(c, "Replace access_token through the BPS account editor")
+		return
+	}
+	if service.ManagedOAuthDeclared(existing) {
+		response.ErrorFrom(c, service.ErrManagedOAuthRefresh)
 		return
 	}
 	if !existing.IsOAuth() {
@@ -2198,6 +2297,8 @@ func (h *AccountHandler) BatchCreate(c *gin.Context) {
 				GroupIDs:              item.GroupIDs,
 				ExpiresAt:             item.ExpiresAt,
 				AutoPauseOnExpired:    item.AutoPauseOnExpired,
+				Schedulable:           item.Schedulable,
+				ManagedOAuth:          item.ManagedOAuth,
 				SkipMixedChannelCheck: skipCheck,
 			})
 			if err != nil {
@@ -2210,7 +2311,7 @@ func (h *AccountHandler) BatchCreate(c *gin.Context) {
 				continue
 			}
 			// 收集需要异步设置隐私的 OAuth 账号
-			if account.Type == service.AccountTypeOAuth {
+			if account.Type == service.AccountTypeOAuth && !service.ManagedOAuthDeclared(account) {
 				switch account.Platform {
 				case service.PlatformAntigravity:
 					antigravityPrivacyAccounts = append(antigravityPrivacyAccounts, account)

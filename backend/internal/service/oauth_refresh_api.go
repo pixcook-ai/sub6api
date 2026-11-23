@@ -180,6 +180,9 @@ func (api *OAuthRefreshAPI) RefreshIfNeeded(
 	if account == nil {
 		return nil, errors.New("oauth refresh account is nil")
 	}
+	if ManagedOAuthDeclared(account) {
+		return nil, ErrManagedOAuthRefresh
+	}
 	if executor == nil {
 		return nil, errors.New("oauth refresh executor is nil")
 	}
@@ -233,6 +236,9 @@ func (api *OAuthRefreshAPI) RefreshIfNeeded(
 			return nil, fmt.Errorf("%w: account is not active", errOAuthRefreshAccountStateChanged)
 		}
 		return &OAuthRefreshResult{Account: freshAccount}, nil
+	}
+	if ManagedOAuthDeclared(freshAccount) {
+		return nil, ErrManagedOAuthRefresh
 	}
 	if requestPath && freshAccount.Platform == PlatformGrok {
 		if eligibilityErr := grokOAuthRequestAccountEligibilityError(freshAccount); eligibilityErr != nil {

@@ -138,6 +138,7 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 	reqStream bool,
 	startTime time.Time,
 ) (*OpenAIForwardResult, error) {
+	managedDeployment := openAIInferenceNoReplay(ctx)
 	requestedModel := reqModel
 	upstreamPassthroughModel := ""
 	responsesLite := account != nil && account.IsOpenAI() &&
@@ -364,7 +365,7 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 	}
 
 	// Get access token
-	token, _, err := s.GetAccessToken(ctx, account)
+	ctx, token, _, err := s.credentialsForRequest(ctx, account)
 	if err != nil {
 		return nil, err
 	}
@@ -414,14 +415,16 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 			probeBody := s.readUpstreamErrorBody(resp)
 			_ = resp.Body.Close()
 			resp.Body = io.NopCloser(bytes.NewReader(probeBody))
-			if retryBody, reason, changed, retryErr := normalizeOpenAIResponsesRejectedFieldRetryBody(resp.StatusCode, body, probeBody); retryErr != nil {
-				return nil, fmt.Errorf("normalize passthrough rejected Responses field retry body: %w", retryErr)
-			} else if changed && rejectedFieldRetryState.Allow(retryBody) {
-				body = retryBody
-				logger.LegacyPrintf("service.openai_gateway", "[OpenAI] Retrying passthrough request after %s (account: %s)", reason, account.Name)
-				continue
+			if !managedDeployment {
+				if retryBody, reason, changed, retryErr := normalizeOpenAIResponsesRejectedFieldRetryBody(resp.StatusCode, body, probeBody); retryErr != nil {
+					return nil, fmt.Errorf("normalize passthrough rejected Responses field retry body: %w", retryErr)
+				} else if changed && rejectedFieldRetryState.Allow(retryBody) {
+					body = retryBody
+					logger.LegacyPrintf("service.openai_gateway", "[OpenAI] Retrying passthrough request after %s (account: %s)", reason, account.Name)
+					continue
+				}
 			}
-			if !agentTaskRecoveryTried && s.isAgentIdentityAccount(ctx, account) && isAgentIdentityTaskInvalidHTTPResponse(resp.StatusCode, probeBody) {
+			if !managedDeployment && !agentTaskRecoveryTried && s.isAgentIdentityAccount(ctx, account) && isAgentIdentityTaskInvalidHTTPResponse(resp.StatusCode, probeBody) {
 				agentTaskRecoveryTried = true
 				expectedTaskID := account.GetCredential("task_id")
 				if recoveryErr := s.recoverAgentIdentityTask(ctx, account, expectedTaskID); recoveryErr != nil {
@@ -430,21 +433,23 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 				continue
 			}
 			upstreamMsg := sanitizeUpstreamErrorMessage(strings.TrimSpace(extractUpstreamErrorMessage(probeBody)))
-			if retryBody, fallbackModel, retry := s.prepareOpenAICompactFallbackRetry(
-				c, account, requestedModel, body, resp.StatusCode, upstreamMsg, probeBody, compactModelFallbackRetried,
-			); retry {
-				s.appendOpenAICompactFallbackRetryOps(c, account, resp, probeBody, upstreamMsg, true)
-				fromModel := strings.TrimSpace(gjson.GetBytes(body, "model").String())
-				body = retryBody
-				upstreamPassthroughModel = fallbackModel
-				compactModelFallbackRetried = true
-				SetOpsUpstreamModel(c, fallbackModel)
-				logger.LegacyPrintf(
-					"service.openai_gateway",
-					"[OpenAI passthrough] Retrying explicit compact request once with fallback model (account: %s, from: %s, to: %s, upstream_code: %s)",
-					account.Name, fromModel, fallbackModel, extractUpstreamErrorCode(probeBody),
-				)
-				continue
+			if !managedDeployment {
+				if retryBody, fallbackModel, retry := s.prepareOpenAICompactFallbackRetry(
+					c, account, requestedModel, body, resp.StatusCode, upstreamMsg, probeBody, compactModelFallbackRetried,
+				); retry {
+					s.appendOpenAICompactFallbackRetryOps(c, account, resp, probeBody, upstreamMsg, true)
+					fromModel := strings.TrimSpace(gjson.GetBytes(body, "model").String())
+					body = retryBody
+					upstreamPassthroughModel = fallbackModel
+					compactModelFallbackRetried = true
+					SetOpsUpstreamModel(c, fallbackModel)
+					logger.LegacyPrintf(
+						"service.openai_gateway",
+						"[OpenAI passthrough] Retrying explicit compact request once with fallback model (account: %s, from: %s, to: %s, upstream_code: %s)",
+						account.Name, fromModel, fallbackModel, extractUpstreamErrorCode(probeBody),
+					)
+					continue
+				}
 			}
 
 			// 透传模式默认保持原样代理；容量错误以及 API-key 上游的瞬时
@@ -474,13 +479,15 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		if reqStream {
 			result, handleErr := s.handleStreamingResponsePassthrough(ctx, resp, c, account, startTime, reqModel, upstreamPassthroughModel)
 			if handleErr != nil {
-				if retryBody, fallbackModel, retry := s.applyOpenAIPassthroughCompactFallbackFromSignal(
-					c, account, requestedModel, body, handleErr, compactModelFallbackRetried, resp,
-				); retry {
-					body = retryBody
-					upstreamPassthroughModel = fallbackModel
-					compactModelFallbackRetried = true
-					continue
+				if !managedDeployment {
+					if retryBody, fallbackModel, retry := s.applyOpenAIPassthroughCompactFallbackFromSignal(
+						c, account, requestedModel, body, handleErr, compactModelFallbackRetried, resp,
+					); retry {
+						body = retryBody
+						upstreamPassthroughModel = fallbackModel
+						compactModelFallbackRetried = true
+						continue
+					}
 				}
 				if signal, ok := asOpenAICompactFallbackSignal(handleErr); ok {
 					_ = resp.Body.Close()
@@ -501,13 +508,15 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		} else {
 			result, handleErr := s.handleNonStreamingResponsePassthrough(ctx, resp, c, account, reqModel, upstreamPassthroughModel)
 			if handleErr != nil {
-				if retryBody, fallbackModel, retry := s.applyOpenAIPassthroughCompactFallbackFromSignal(
-					c, account, requestedModel, body, handleErr, compactModelFallbackRetried, resp,
-				); retry {
-					body = retryBody
-					upstreamPassthroughModel = fallbackModel
-					compactModelFallbackRetried = true
-					continue
+				if !managedDeployment {
+					if retryBody, fallbackModel, retry := s.applyOpenAIPassthroughCompactFallbackFromSignal(
+						c, account, requestedModel, body, handleErr, compactModelFallbackRetried, resp,
+					); retry {
+						body = retryBody
+						upstreamPassthroughModel = fallbackModel
+						compactModelFallbackRetried = true
+						continue
+					}
 				}
 				if signal, ok := asOpenAICompactFallbackSignal(handleErr); ok {
 					_ = resp.Body.Close()
@@ -821,6 +830,9 @@ func stripOpenAILegacyResponsesBeta(headers http.Header) {
 }
 
 func shouldFailoverOpenAIPassthroughResponse(account *Account, statusCode int, responseBody []byte) bool {
+	if statusCode == http.StatusUnauthorized && (ManagedOAuthDeclared(account) || CoreOAuthDeclared(account)) {
+		return false
+	}
 	if hit, _, _ := detectOpenAICyberPolicy(responseBody); hit {
 		return false
 	}
@@ -1683,6 +1695,10 @@ func (s *OpenAIGatewayService) handleOpenAIStreamTerminalAccountSideEffects(
 	canonicalModel ...string,
 ) (int, bool) {
 	statusCode := openAIStreamFailureStatus(payload, message)
+	if statusCode == http.StatusUnauthorized && ManagedOAuthDeclared(account) {
+		s.recordManagedOAuthStreamUnauthorized(c, account)
+		return statusCode, false
+	}
 	switch statusCode {
 	case http.StatusForbidden:
 		if !openAIStream403AccountFailure(payload, message) {
@@ -1905,6 +1921,7 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 	originalModel string,
 	mappedModel string,
 ) (*openaiStreamingResultPassthrough, error) {
+	bindManagedOAuthResponseAttempt(c, resp)
 	timing := openAIForwardTimingFromContext(c)
 	observer := upstreamResponseModelObserverFromContext(c)
 	if observer == nil {
@@ -2149,8 +2166,10 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 				}
 				outputStarted := openAIStreamClientOutputStarted(c, clientOutputStarted)
 				if !outputStarted && !cyberHit {
-					if compactErr := newOpenAICompactFallbackSignal(c, dataBytes, failedMessage); compactErr != nil {
-						return resultWithUsage(), compactErr
+					if !openAIInferenceNoReplay(ctx) {
+						if compactErr := newOpenAICompactFallbackSignal(c, dataBytes, failedMessage); compactErr != nil {
+							return resultWithUsage(), compactErr
+						}
 					}
 				}
 				if outputStarted && !cyberHit {
@@ -2435,6 +2454,7 @@ func (s *OpenAIGatewayService) handleNonStreamingResponsePassthrough(
 // preserving passthrough payloads, except compact-only model remapping may
 // rewrite model fields back to the original requested model.
 func (s *OpenAIGatewayService) handlePassthroughSSEToJSON(resp *http.Response, c *gin.Context, account *Account, body []byte, originalModel string, mappedModel string) (*openaiNonStreamingResultPassthrough, error) {
+	bindManagedOAuthResponseAttempt(c, resp)
 	bodyText := string(body)
 	terminalType, terminalPayload, terminalOK := extractOpenAISSETerminalEvent(bodyText)
 	if terminalOK && (terminalType == "response.failed" || terminalType == "error") {
@@ -2442,8 +2462,10 @@ func (s *OpenAIGatewayService) handlePassthroughSSEToJSON(resp *http.Response, c
 		if msg == "" {
 			msg = "Upstream compact response failed"
 		}
-		if compactErr := newOpenAICompactFallbackSignal(c, terminalPayload, msg); compactErr != nil {
-			return nil, compactErr
+		if !openAIManagedDeploymentNoReplayFromGin(c) {
+			if compactErr := newOpenAICompactFallbackSignal(c, terminalPayload, msg); compactErr != nil {
+				return nil, compactErr
+			}
 		}
 		if failoverErr := s.nonStreamingTerminalFailureFailover(c, resp, account, true, terminalType, terminalPayload, msg, mappedModel); failoverErr != nil {
 			return nil, failoverErr

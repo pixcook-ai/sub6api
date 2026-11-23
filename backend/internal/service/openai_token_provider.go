@@ -133,14 +133,30 @@ func (p *OpenAITokenProvider) ensureMetrics() {
 	}
 }
 
-// GetAccessToken returns a valid access_token.
+// CredentialsForRequest binds managed AT and identity/revision in one database
+// read; callers must use the returned context when constructing the request.
+func (p *OpenAITokenProvider) CredentialsForRequest(ctx context.Context, account *Account) (context.Context, string, error) {
+	if ManagedOAuthDeclared(account) {
+		return managedOAuthCredentialsForRequest(ctx, p.accountRepo, account)
+	}
+	token, err := p.GetAccessToken(ctx, account)
+	return ctx, token, err
+}
+
+// GetAccessToken returns a valid access_token. Request senders use CredentialsForRequest.
 func (p *OpenAITokenProvider) GetAccessToken(ctx context.Context, account *Account) (string, error) {
 	p.ensureMetrics()
 	if account == nil {
 		return "", errors.New("account is nil")
 	}
+	if CoreOAuthDeclared(account) {
+		return "", ErrCoreOAuthUnavailable
+	}
 	if account.Platform != PlatformOpenAI || account.Type != AccountTypeOAuth {
 		return "", errors.New("not an openai oauth account")
+	}
+	if ManagedOAuthDeclared(account) {
+		return managedOAuthAccessToken(ctx, p.accountRepo, account)
 	}
 	if p.refreshAPI != nil {
 		if _, rejected := p.refreshAPI.openAIFailures.Load(account.ID); rejected {

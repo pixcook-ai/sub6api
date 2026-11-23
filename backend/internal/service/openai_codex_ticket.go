@@ -301,6 +301,7 @@ func (s *OpenAIGatewayService) storeOpenAICodexTicket(ctx context.Context, accou
 	s.openaiCodexTickets.Store(openAICodexTicketKey(account.ID, model), ticket)
 	return nil
 }
+
 // applyOpenAICodexTicket 在出站请求上补齐 x-codex-turn-state：仅当请求没有回带
 // 该头时注入已捕获的有效门票（客户端自己回合内的回带保持原样，见
 // applyOpenAICodexTicketWithGeneration）。请求路径不现场打票；仅在无票策略
@@ -473,6 +474,9 @@ func (s *OpenAIGatewayService) openAICodexTicketBlocksAccount(account *Account, 
 }
 
 func (s *OpenAIGatewayService) fireOpenAICodexTicketProbe(ctx context.Context, account *Account, token, model, proxyURL string, challenge ModelTraceChallenge, attemptTimeout time.Duration) (output string, state string, cookie string, status int, err error) {
+	if ManagedOAuthDeclared(account) {
+		return "", "", "", 0, ErrManagedOAuthUnavailable
+	}
 	attemptCtx, cancel := context.WithTimeout(ctx, attemptTimeout)
 	defer cancel()
 	body, replayHeaders, err := s.buildCodexProbeRequest(attemptCtx, account, model, challenge)
@@ -881,7 +885,7 @@ func IsMaskedProxyURL(raw string) bool {
 // Credential shadows do not own tickets. Keep their existing forwarding policy
 // instead of imposing a gate for a key the harvester never populates.
 func isOpenAICodexTicketAccount(account *Account) bool {
-	return account != nil && account.IsOpenAIOAuthLike() && !account.IsShadow()
+	return account != nil && !ManagedOAuthDeclared(account) && account.IsOpenAIOAuthLike() && !account.IsShadow()
 }
 
 // IsOpenAICodexTicketPrivateExtraKey also covers the retired account-level proxy

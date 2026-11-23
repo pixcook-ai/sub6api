@@ -181,6 +181,9 @@ func (a *Account) EffectiveLoadFactor() int {
 }
 
 func (a *Account) IsSchedulable() bool {
+	if ManagedOAuthDeclared(a) && !ManagedOAuthSchedulingReady(a) {
+		return false
+	}
 	if a.IsOpenAIBPS() {
 		state := a.OpenAIBPSCredentialState(time.Now())
 		if state.Status == "expired" || state.Status == "revoked" || state.Status == "auth_failed" {
@@ -222,7 +225,7 @@ func (a *Account) IsSchedulable() bool {
 // 手动 Schedulable 开关:spark 影子拥有独立 spark 配额窗口,母账号 global 429(走 RateLimitResetAt)
 // 不应连坐 spark(否则重新耦合影子架构本应解耦的两条 429 道)。nil receiver 返回 false。
 func (a *Account) IsCredentialUsableForShadow() bool {
-	if a == nil || !a.IsActive() {
+	if a == nil || !a.IsActive() || ManagedOAuthDeclared(a) {
 		return false
 	}
 	now := time.Now()
@@ -1896,9 +1899,15 @@ func (a *Account) SupportsOpenAIEndpointCapability(capability OpenAIEndpointCapa
 		}
 	}
 	switch capability {
+	case OpenAIEndpointCapabilityBPSFiles:
+		_, err := BPSFilesConfigForAccount(a)
+		return err == nil
+	case OpenAIEndpointCapabilityBPSLocalResponses:
+		_, err := BPSStoredResponsesConfigForAccount(a)
+		return err == nil
 	case OpenAIEndpointCapabilityChatCompletions:
 	case OpenAIEndpointCapabilityLive:
-		return a.Platform == PlatformOpenAI &&
+		return !ManagedOAuthDeclared(a) && a.Platform == PlatformOpenAI &&
 			a.Type == AccountTypeOAuth &&
 			!a.IsOpenAIPersonalAccessToken() &&
 			!a.IsOpenAIAgentIdentity()
@@ -2164,6 +2173,9 @@ func (a *Account) IsOpenAIPassthroughEnabled() bool {
 // 1. 按账号类型读取分类型字段
 // 2. 分类型字段缺失时，回退兼容字段
 func (a *Account) IsOpenAIResponsesWebSocketV2Enabled() bool {
+	if ManagedOAuthDeclared(a) || CoreOAuthDeclared(a) {
+		return false
+	}
 	if a == nil || !a.IsOpenAI() || a.Extra == nil {
 		return false
 	}
@@ -2232,6 +2244,9 @@ func normalizeOpenAIWSIngressDefaultMode(mode string) string {
 // 3. 兼容 enabled 旧字段（bool）
 // 4. defaultMode（非法时回退 ctx_pool）
 func (a *Account) ResolveOpenAIResponsesWebSocketV2Mode(defaultMode string) string {
+	if ManagedOAuthDeclared(a) {
+		return OpenAIWSIngressModeOff
+	}
 	resolvedDefault := normalizeOpenAIWSIngressDefaultMode(defaultMode)
 	if a == nil || !a.IsOpenAI() {
 		return OpenAIWSIngressModeOff

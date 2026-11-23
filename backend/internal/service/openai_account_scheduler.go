@@ -2130,6 +2130,15 @@ func (s *OpenAIGatewayService) SelectAccountWithSchedulerForCapability(
 	useUpstreamTokenCost bool,
 	platformOverride ...string,
 ) (*AccountSelectionResult, OpenAIAccountScheduleDecision, error) {
+	if plan := ManagedFilePlanFromContext(ctx); plan != nil {
+		return s.SelectAccountWithSchedulerForManagedFiles(ctx, groupID, sessionHash, requestedModel, plan.RequiredAccountID)
+	}
+	if pinned, ok := StoredResponseAccountPinFromContext(ctx); ok {
+		if session, managed := ManagedDeploymentSessionFromContext(ctx); managed && session.Binding.AccountID != pinned {
+			return nil, OpenAIAccountScheduleDecision{}, ErrBPSRequestAuthorizationRevoked
+		}
+		return s.SelectStoredResponseNativeAccount15(ctx, groupID, pinned, requestedModel)
+	}
 	platform := PlatformOpenAI
 	if len(platformOverride) > 0 {
 		platform = platformOverride[0]
@@ -2328,6 +2337,9 @@ func (s *OpenAIGatewayService) selectAccountWithSchedulerOnce(
 		ctx = s.withOpenAIProfitControlGate(ctx, groupID)
 	}
 	platform = NormalizeOpenAICompatiblePlatform(platform)
+	if session, managed := ManagedDeploymentSessionFromContext(ctx); managed {
+		return s.selectManagedDeploymentAccount(ctx, session, OpenAIAccountScheduleRequest{GroupID: groupID, Platform: platform, RequestedModel: requestedModel, RequiredTransport: requiredTransport, RequiredCapability: requiredCapability, RequiredImageCapability: requiredImageCapability, RequireCompact: requireCompact, ExcludedIDs: excludedIDs, RequirePrivacySet: s.openAIGroupRequiresPrivacySet(ctx, groupID)})
+	}
 	if targetAccountID, ok := ctx.Value(codexTicketDiagnosticTargetKey{}).(int64); ok && targetAccountID > 0 {
 		accounts, err := s.listSchedulableAccounts(ctx, groupID, platform)
 		if err != nil {

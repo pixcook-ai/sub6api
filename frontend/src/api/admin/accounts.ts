@@ -71,6 +71,40 @@ export async function list(
   return data
 }
 
+export type ClaudeOAuthCompatibilityMode = 'transparent'
+
+export interface ClaudeOAuthCompatibilityObservation {
+  observed_at: string
+  endpoint: 'messages' | 'count_tokens'
+  mode: ClaudeOAuthCompatibilityMode
+  client_version: string
+  incoming_attribution_blocks: number
+  outgoing_attribution_blocks: number
+  cc_gateway_present: boolean
+  cch_present: boolean
+  unknown_attribution_fields: number
+  wiggly_present: boolean
+  wiggly_forwarded: boolean
+  additional_protection_present: boolean
+  additional_protection_forwarded: boolean
+  body_changed: boolean
+  metadata_changed: boolean
+  beta_changed: boolean
+  integrity_status: string
+  reasons: string[]
+}
+
+export interface ClaudeOAuthCompatibilityResponse {
+  account_id: number
+  attribution_mode: ClaudeOAuthCompatibilityMode
+  observation: ClaudeOAuthCompatibilityObservation | null
+}
+
+export async function getClaudeOAuthCompatibility(accountId: number): Promise<ClaudeOAuthCompatibilityResponse> {
+  const { data } = await apiClient.get<ClaudeOAuthCompatibilityResponse>(`/admin/accounts/${accountId}/claude-compatibility`)
+  return data
+}
+
 export interface AccountListWithEtagResult {
   notModified: boolean
   etag: string | null
@@ -1146,6 +1180,7 @@ export const accountsAPI = {
   duplicate,
   update,
   getGrokMediaEligibility,
+  getClaudeOAuthCompatibility,
   updateGrokMediaEligibility,
   checkMixedChannelRisk,
   delete: deleteAccount,

@@ -2,6 +2,12 @@
 
 > 本文档记录项目环境配置、常见坑点和注意事项，供 Claude Code 和团队成员参考。
 
+## Pixcook 工作区约定
+
+本目录 `sub6api/` 是 Pixcook 当前的 Sub2API 开发基座，功能开发、测试与集成在此进行。仓库职责与参考仓库边界见 [工作区 CLAUDE.md](../CLAUDE.md#开发底座与参考仓库)。下文保留上游项目的开发指南，环境配置须按本机与目标环境核实。
+
+Claude SDK 请求头需要自定义或迁移已有账号缓存时，阅读 [Claude 请求兼容配置](docs/claude-compatibility-profile.md)。该配置与 CLI 版本、设备身份及 TLS 模板分别管理。
+
 ## 一、项目基本信息
 
 | 项目 | 说明 |

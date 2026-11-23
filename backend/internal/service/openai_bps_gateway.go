@@ -29,7 +29,8 @@ func WriteOpenAIBPSError(c *gin.Context, err error) {
 	if failure.Status == 400 || failure.Status == 409 {
 		payload["type"] = "invalid_request_error"
 	}
-	if c.Writer.Written() && strings.Contains(c.Writer.Header().Get("Content-Type"), "text/event-stream") {
+	if c.GetBool("bps_first_event_failed") || (c.Writer.Written() && strings.Contains(c.Writer.Header().Get("Content-Type"), "text/event-stream")) {
+		setBPSEventStreamHeaders(c)
 		MarkOpsStreamError(c, failure.Code, failure.Message, failure.Status)
 		sequence := c.GetInt("bps_sequence")
 		responseID := c.GetString("bps_response_id")
@@ -42,6 +43,14 @@ func WriteOpenAIBPSError(c *gin.Context, err error) {
 		return
 	}
 	c.JSON(failure.Status, gin.H{"error": payload})
+}
+
+func setBPSEventStreamHeaders(c *gin.Context) {
+	if !c.Writer.Written() {
+		c.Header("Content-Type", "text/event-stream")
+		c.Header("Cache-Control", "no-cache")
+		c.Header("X-Accel-Buffering", "no")
+	}
 }
 
 func buildOpenAIBPSRequest(ctx context.Context, account *Account, body []byte) (*http.Request, error) {
@@ -305,11 +314,7 @@ func (s *OpenAIGatewayService) forwardOpenAIBPS(ctx context.Context, c *gin.Cont
 		if !r.Stream {
 			return nil
 		}
-		if !c.Writer.Written() {
-			c.Header("Content-Type", "text/event-stream")
-			c.Header("Cache-Control", "no-cache")
-			c.Header("X-Accel-Buffering", "no")
-		}
+		setBPSEventStreamHeaders(c)
 		payload["type"] = event
 		payload["sequence_number"] = sequence
 		sequence++
@@ -338,6 +343,9 @@ func (s *OpenAIGatewayService) forwardOpenAIBPS(ctx context.Context, c *gin.Cont
 			return nil
 		}
 		if typ == "response.failed" || typ == "response.incomplete" || typ == "error" {
+			if r.Stream && !c.Writer.Written() && strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream") {
+				c.Set("bps_first_event_failed", true)
+			}
 			if v, ok := payload["response"].(map[string]any); ok {
 				result.Usage = bpsReadUsage(v)
 			}

@@ -14,6 +14,7 @@ import (
 
 	"github.com/MACOS-DO/sub4api/internal/config"
 	"github.com/MACOS-DO/sub4api/internal/pkg/apicompat"
+	coderws "github.com/coder/websocket"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 )
@@ -242,6 +243,10 @@ func skipOpenAIWSJSONValue(payload []byte, i int) int {
 }
 
 func prepareOpenAIWSHTTPBridgeBody(account *Account, payload []byte) ([]byte, error) {
+	return prepareOpenAIWSHTTPBridgeBodyWithNativeHistory(account, payload, false)
+}
+
+func prepareOpenAIWSHTTPBridgeBodyWithNativeHistory(account *Account, payload []byte, preserveHistory bool) ([]byte, error) {
 	var body map[string]any
 	if err := decodeOpenAIJSONUseNumber(payload, &body); err != nil {
 		return nil, err
@@ -251,7 +256,9 @@ func prepareOpenAIWSHTTPBridgeBody(account *Account, payload []byte) ([]byte, er
 	}
 	delete(body, "type")
 	delete(body, "generate")
-	delete(body, "previous_response_id")
+	if !preserveHistory {
+		delete(body, "previous_response_id")
+	}
 	deleteOpenAIResponsesNoneReasoningEffortFromObject(account, body)
 	body["stream"] = true
 	return json.Marshal(body)
@@ -433,9 +440,20 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 	if writeClientMessage == nil {
 		return nil, errors.New("client websocket writer is nil")
 	}
+	managedDeployment := openAIManagedDeploymentNoReplay(ctx)
+	if err := s.ValidateManagedDeploymentPayload(ctx, payload); err != nil {
+		return nil, err
+	}
+	downstreamWrite := writeClientMessage
+	writeClientMessage = func(raw []byte) error {
+		if err := s.RecordManagedDeploymentPayload(ctx, raw); err != nil {
+			return NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "managed deployment resource ownership could not be recorded", err)
+		}
+		return downstreamWrite(raw)
+	}
 	responseModelObserver := &upstreamResponseModelObserver{}
 
-	body, err := prepareOpenAIWSHTTPBridgeBody(account, payload)
+	body, err := prepareOpenAIWSHTTPBridgeBodyWithNativeHistory(account, payload, managedDeployment)
 	if err != nil {
 		return nil, fmt.Errorf("prepare http bridge body: %w", err)
 	}
@@ -568,26 +586,28 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, openAIWSHTTPBridgeErrorBodyLimitBytes))
 		_ = resp.Body.Close()
 		markOpenAICyberPolicyEvent(c, respBody, resp.StatusCode, nil)
-		if resp.StatusCode == http.StatusBadRequest &&
+		if !managedDeployment && resp.StatusCode == http.StatusBadRequest &&
 			extractUpstreamErrorCode(respBody) == openAIWSFallbackReasonInvalidEncryptedContent {
 			s.markOpenAIWSInvalidEncryptedContentLineageFromPayload(
 				c, body, "ingress_ws_http_bridge_invalid_encrypted_lineage_mark", account.ID, turn,
 			)
 		}
-		retryBody, retryReason, changed, retryErr := normalizeOpenAIResponsesRejectedFieldRetryBody(resp.StatusCode, body, respBody)
-		if retryErr != nil {
-			return nil, fmt.Errorf("normalize websocket http bridge rejected field retry: %w", retryErr)
-		}
-		if changed && rejectedFieldRetryState.Allow(retryBody) {
-			logOpenAIWSModeInfo(
-				"ingress_ws_http_bridge_rejected_field_retry account_id=%d turn=%d reason=%s",
-				account.ID,
-				turn,
-				truncateOpenAIWSLogValue(retryReason, openAIWSLogValueMaxLen),
-			)
-			body = retryBody
-			payloadBytes = len(body)
-			continue
+		if !managedDeployment {
+			retryBody, retryReason, changed, retryErr := normalizeOpenAIResponsesRejectedFieldRetryBody(resp.StatusCode, body, respBody)
+			if retryErr != nil {
+				return nil, fmt.Errorf("normalize websocket http bridge rejected field retry: %w", retryErr)
+			}
+			if changed && rejectedFieldRetryState.Allow(retryBody) {
+				logOpenAIWSModeInfo(
+					"ingress_ws_http_bridge_rejected_field_retry account_id=%d turn=%d reason=%s",
+					account.ID,
+					turn,
+					truncateOpenAIWSLogValue(retryReason, openAIWSLogValueMaxLen),
+				)
+				body = retryBody
+				payloadBytes = len(body)
+				continue
+			}
 		}
 
 		upstreamMsg := sanitizeUpstreamErrorMessage(strings.TrimSpace(extractUpstreamErrorMessage(respBody)))
@@ -721,6 +741,10 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 		pendingClientMessageBytes = 0
 		for _, message := range messages {
 			if err := writeClientMessage(message); err != nil {
+				var ownershipErr *OpenAIWSClientCloseError
+				if managedDeployment && errors.As(err, &ownershipErr) {
+					return ownershipErr
+				}
 				if isOpenAIWSClientDisconnectError(err) {
 					clientDisconnected = true
 					return nil
@@ -819,7 +843,7 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 				if account.Platform == PlatformGrok {
 					statusCode = openAIWSErrorHTTPStatusFromRaw(errCodeRaw, errTypeRaw)
 				}
-				if reason, _ := classifyOpenAIWSErrorEventFromRaw(errCodeRaw, errTypeRaw, errMessage); reason == openAIWSFallbackReasonInvalidEncryptedContent {
+				if reason, _ := classifyOpenAIWSErrorEventFromRaw(errCodeRaw, errTypeRaw, errMessage); !managedDeployment && reason == openAIWSFallbackReasonInvalidEncryptedContent {
 					s.markOpenAIWSInvalidEncryptedContentLineageFromPayload(
 						c, body, "ingress_ws_http_bridge_invalid_encrypted_lineage_mark", account.ID, turn,
 					)
@@ -909,6 +933,10 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 				messages = append(messages, clientMessage)
 				for _, message := range messages {
 					if err := writeClientMessage(message); err != nil {
+						var ownershipErr *OpenAIWSClientCloseError
+						if managedDeployment && errors.As(err, &ownershipErr) {
+							return nil, ownershipErr
+						}
 						if isOpenAIWSClientDisconnectError(err) {
 							clientDisconnected = true
 							closeStatus, closeReason := summarizeOpenAIWSReadCloseError(err)

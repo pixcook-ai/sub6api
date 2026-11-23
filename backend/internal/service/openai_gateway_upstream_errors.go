@@ -251,6 +251,9 @@ func (s *OpenAIGatewayService) shouldFailoverUpstreamError(statusCode int) bool 
 }
 
 func (s *OpenAIGatewayService) shouldFailoverOpenAIUpstreamResponse(account *Account, statusCode int, upstreamMsg string, upstreamBody []byte) bool {
+	if statusCode == http.StatusUnauthorized && (ManagedOAuthDeclared(account) || CoreOAuthDeclared(account)) {
+		return false
+	}
 	// cyber_policy is request-scoped even when an intermediary wraps the
 	// provider response in a retryable 5xx status. Never punish or rotate the
 	// selected credential for it.
@@ -385,6 +388,12 @@ func (s *OpenAIGatewayService) newOpenAIAccountFailoverErrorWithClassificationHe
 	shouldDisable bool,
 	retryableOnSameAccount bool,
 ) *UpstreamFailoverError {
+	if statusCode == http.StatusUnauthorized && CoreOAuthDeclared(account) {
+		return &UpstreamFailoverError{StatusCode: statusCode, ResponseBody: responseBody, ResponseHeaders: responseHeaders, Stage: GatewayFailureStageAccountAuth, Scope: GatewayFailureScopeRequest, Reason: GatewayFailureReason("core_oauth_upstream_unauthorized"), NextAccountAction: NextAccountStop, ClientStatusCode: http.StatusUnauthorized, ClientMessage: "Core OAuth upstream rejected authorization"}
+	}
+	if statusCode == http.StatusUnauthorized && ManagedOAuthDeclared(account) {
+		return &UpstreamFailoverError{StatusCode: statusCode, ResponseBody: responseBody, ResponseHeaders: responseHeaders, Stage: GatewayFailureStageAccountAuth, Scope: GatewayFailureScopeRequest, Reason: GatewayFailureReason("managed_oauth_external_recovery_required"), NextAccountAction: NextAccountStop, ClientStatusCode: http.StatusUnauthorized, ClientMessage: "Managed OAuth authorization requires controller recovery"}
+	}
 	oauth429Retry := s.shouldRetryOpenAIOAuth429OnSameAccountWithResponse(account, statusCode, shouldDisable, classificationHeaders, responseBody)
 	failoverErr := newOpenAIUpstreamFailoverError(
 		statusCode,

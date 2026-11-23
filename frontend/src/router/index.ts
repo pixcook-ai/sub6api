@@ -530,6 +530,12 @@ const routes: RouteRecordRaw[] = [
     }
   },
   {
+    path: '/admin/core-oauth',
+    name: 'AdminCoreOAuth',
+    component: () => import('@/views/admin/CoreOAuthView.vue'),
+    meta: { requiresAuth: true, requiresAdmin: true, title: 'OAuth Authorizations', titleKey: 'nav.coreOAuth' }
+  },
+  {
     path: '/admin/plugins',
     name: 'AdminPlugins',
     component: () => import('@/views/admin/PluginsView.vue'),

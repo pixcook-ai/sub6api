@@ -57,7 +57,7 @@ func (api *OAuthRefreshAPI) recordOpenAIRefreshFailure(account *Account, err *op
 }
 
 func canRecoverOpenAIOAuth(account *Account) bool {
-	return account != nil && account.IsOpenAIOAuth() && !account.IsOpenAIPersonalAccessToken() &&
+	return account != nil && !ManagedOAuthDeclared(account) && !CoreOAuthDeclared(account) && account.IsOpenAIOAuth() && !account.IsOpenAIPersonalAccessToken() &&
 		!account.IsOpenAIAgentIdentity() && !strings.HasPrefix(strings.TrimSpace(account.GetOpenAIAccessToken()), "at-") &&
 		strings.TrimSpace(account.GetOpenAIRefreshToken()) != ""
 }

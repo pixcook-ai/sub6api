@@ -840,7 +840,11 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 		isOAuth = true
 		// Agent Identity signs each request and does not retain the OAuth token.
 		if !credentialAccount.IsOpenAIAgentIdentity() {
-			authToken = credentialAccount.GetOpenAIAccessToken()
+			var tokenErr error
+			ctx, authToken, tokenErr = openAIProbeCredentialsForRequest(ctx, s.accountRepo, credentialAccount)
+			if tokenErr != nil {
+				return s.sendErrorAndEnd(c, "Managed OAuth credentials are unavailable")
+			}
 		}
 		if authToken == "" && !credentialAccount.IsOpenAIAgentIdentity() {
 			return s.sendErrorAndEnd(c, "No access token available")
@@ -973,7 +977,7 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 			s.reconcileOpenAI429State(ctx, account, resp.Header, body)
 		}
 		// 401 Unauthorized: 标记账号为永久错误
-		if resp.StatusCode == http.StatusUnauthorized && s.accountRepo != nil {
+		if resp.StatusCode == http.StatusUnauthorized && s.accountRepo != nil && !ManagedOAuthDeclared(credentialAccount) {
 			errMsg := fmt.Sprintf("Authentication failed (401): %s", string(body))
 			_ = s.accountRepo.SetError(ctx, account.ID, errMsg)
 		}
@@ -2197,7 +2201,11 @@ func (s *AccountTestService) testOpenAICompactConnection(c *gin.Context, account
 	case credentialAccount.IsOAuth():
 		isOAuth = true
 		if !credentialAccount.IsOpenAIAgentIdentity() {
-			authToken = credentialAccount.GetOpenAIAccessToken()
+			var tokenErr error
+			ctx, authToken, tokenErr = openAIProbeCredentialsForRequest(ctx, s.accountRepo, credentialAccount)
+			if tokenErr != nil {
+				return s.sendErrorAndEnd(c, "Managed OAuth credentials are unavailable")
+			}
 		}
 		if authToken == "" && !credentialAccount.IsOpenAIAgentIdentity() {
 			return s.sendErrorAndEnd(c, "No access token available")
@@ -2325,7 +2333,7 @@ func (s *AccountTestService) testOpenAICompactConnection(c *gin.Context, account
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		if resp.StatusCode == http.StatusUnauthorized && s.accountRepo != nil {
+		if resp.StatusCode == http.StatusUnauthorized && s.accountRepo != nil && !ManagedOAuthDeclared(credentialAccount) {
 			errMsg := fmt.Sprintf("Authentication failed (401): %s", string(body))
 			_ = s.accountRepo.SetError(ctx, account.ID, errMsg)
 		}
@@ -3121,7 +3129,11 @@ func (s *AccountTestService) testOpenAIImageOAuth(c *gin.Context, ctx context.Co
 	}
 	authToken := ""
 	if !credentialAccount.IsOpenAIAgentIdentity() {
-		authToken = credentialAccount.GetOpenAIAccessToken()
+		var tokenErr error
+		ctx, authToken, tokenErr = openAIProbeCredentialsForRequest(ctx, s.accountRepo, credentialAccount)
+		if tokenErr != nil {
+			return s.sendErrorAndEnd(c, "Managed OAuth credentials are unavailable")
+		}
 	}
 	if authToken == "" && !credentialAccount.IsOpenAIAgentIdentity() {
 		return s.sendErrorAndEnd(c, "No access token available")
