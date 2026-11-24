@@ -30,12 +30,15 @@ func (s *openaiOAuthService) ExchangeCode(ctx context.Context, code, codeVerifie
 		return nil, infraerrors.Newf(http.StatusBadGateway, "OPENAI_OAUTH_CLIENT_INIT_FAILED", "create HTTP client: %v", err)
 	}
 
-	if redirectURI == "" {
-		redirectURI = openai.DefaultRedirectURI
-	}
 	clientID = strings.TrimSpace(clientID)
 	if clientID == "" {
 		clientID = openai.ClientID
+	}
+	if redirectURI == "" {
+		redirectURI = openai.DefaultRedirectURI
+		if clientID == openai.BPSExcelClientID {
+			redirectURI = openai.BPSExcelCallback
+		}
 	}
 
 	formData := url.Values{}
@@ -47,14 +50,11 @@ func (s *openaiOAuthService) ExchangeCode(ctx context.Context, code, codeVerifie
 
 	var tokenResp openai.TokenResponse
 
-	authUA, authOriginator := service.CodexCanonicalAuthIdentity()
-	resp, err := client.R().
-		SetContext(ctx).
-		SetHeader("User-Agent", authUA).
-		SetHeader("originator", authOriginator).
-		SetFormDataFromValues(formData).
-		SetSuccessResult(&tokenResp).
-		Post(s.tokenURL)
+	request, tokenURL, err := s.tokenRequest(ctx, client, clientID)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := request.SetFormDataFromValues(formData).SetSuccessResult(&tokenResp).Post(tokenURL)
 
 	if err != nil {
 		if shouldReturnOpenAINoProxyHint(ctx, proxyURL, err) {
@@ -108,15 +108,20 @@ func (s *openaiOAuthService) refreshTokenWithClientID(ctx context.Context, refre
 
 	var tokenResp openai.TokenResponse
 
-	authUA, authOriginator := service.CodexCanonicalAuthIdentity()
-	resp, err := client.R().
-		SetContext(ctx).
-		SetHeader("User-Agent", authUA).
-		SetHeader("originator", authOriginator).
-		SetHeader("Content-Type", "application/json").
-		SetBodyJsonMarshal(refreshRequest).
-		SetSuccessResult(&tokenResp).
-		Post(s.tokenURL)
+	request, tokenURL, err := s.tokenRequest(ctx, client, clientID)
+	if err != nil {
+		return nil, err
+	}
+	if clientID == openai.BPSExcelClientID {
+		request.SetFormDataFromValues(url.Values{
+			"client_id":     {clientID},
+			"grant_type":    {"refresh_token"},
+			"refresh_token": {refreshToken},
+		})
+	} else {
+		request.SetHeader("Content-Type", "application/json").SetBodyJsonMarshal(refreshRequest)
+	}
+	resp, err := request.SetSuccessResult(&tokenResp).Post(tokenURL)
 
 	if err != nil {
 		if shouldReturnOpenAINoProxyHint(ctx, proxyURL, err) {
@@ -130,6 +135,27 @@ func (s *openaiOAuthService) refreshTokenWithClientID(ctx context.Context, refre
 	}
 
 	return &tokenResp, nil
+}
+
+// The Excel client has its own token endpoint contract; never reuse the
+// Codex request identity for its authorization-code or refresh grants.
+func (s *openaiOAuthService) tokenRequest(ctx context.Context, client *req.Client, clientID string) (*req.Request, string, error) {
+	request := client.R().SetContext(ctx)
+	if clientID != openai.BPSExcelClientID {
+		authUA, authOriginator := service.CodexCanonicalAuthIdentity()
+		return request.SetHeader("User-Agent", authUA).SetHeader("originator", authOriginator), s.tokenURL, nil
+	}
+	endpoint, err := url.Parse(s.tokenURL)
+	if err != nil {
+		return nil, "", infraerrors.New(http.StatusBadGateway, "OPENAI_OAUTH_CLIENT_INIT_FAILED", "Invalid OAuth token endpoint")
+	}
+	query := endpoint.Query()
+	query.Set("unified", "true")
+	endpoint.RawQuery = query.Encode()
+	request.SetHeader("User-Agent", openai.BPSOAuthUserAgent).
+		SetHeader("Accept-Language", openai.BPSOAuthAcceptLanguage).
+		SetHeader("Accept", "application/json")
+	return request, endpoint.String(), nil
 }
 
 func createOpenAIReqClient(proxyURL string) (*req.Client, error) {

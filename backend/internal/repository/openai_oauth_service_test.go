@@ -107,6 +107,40 @@ func (s *OpenAIOAuthServiceSuite) TestExchangeCode_DefaultRedirectURI() {
 	require.Equal(s.T(), "rt", resp.RefreshToken)
 }
 
+func (s *OpenAIOAuthServiceSuite) TestExchangeCode_ExcelIdentity() {
+	type capturedRequest struct {
+		headers http.Header
+		query   url.Values
+		form    url.Values
+	}
+	received := make(chan capturedRequest, 1)
+	s.setupServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		received <- capturedRequest{headers: r.Header.Clone(), query: r.URL.Query(), form: r.PostForm}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"access_token":"excel-at","refresh_token":"excel-rt","token_type":"bearer","expires_in":3600}`)
+	}))
+	s.svc.tokenURL = s.srv.URL + "?source=excel&unified=false&unified=old"
+
+	resp, err := s.svc.ExchangeCode(s.ctx, "excel-code", "excel-verifier", "", "", openai.BPSExcelClientID)
+	require.NoError(s.T(), err)
+	require.Equal(s.T(), "excel-at", resp.AccessToken)
+	request := <-received
+	require.Equal(s.T(), []string{"true"}, request.query["unified"])
+	require.Equal(s.T(), "excel", request.query.Get("source"))
+	require.Equal(s.T(), "authorization_code", request.form.Get("grant_type"))
+	require.Equal(s.T(), openai.BPSExcelClientID, request.form.Get("client_id"))
+	require.Equal(s.T(), openai.BPSExcelCallback, request.form.Get("redirect_uri"))
+	require.Equal(s.T(), "excel-code", request.form.Get("code"))
+	require.Equal(s.T(), "excel-verifier", request.form.Get("code_verifier"))
+	require.Equal(s.T(), openai.BPSOAuthUserAgent, request.headers.Get("User-Agent"))
+	require.Equal(s.T(), openai.BPSOAuthAcceptLanguage, request.headers.Get("Accept-Language"))
+	require.Empty(s.T(), request.headers.Get("originator"))
+}
+
 func (s *OpenAIOAuthServiceSuite) TestRefreshToken_JSONContract() {
 	errCh := make(chan string, 1)
 	s.setupServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -152,6 +186,43 @@ func (s *OpenAIOAuthServiceSuite) TestRefreshToken_JSONContract() {
 	}
 	require.Equal(s.T(), "at2", resp.AccessToken)
 	require.Equal(s.T(), "rt2", resp.RefreshToken)
+}
+
+func (s *OpenAIOAuthServiceSuite) TestRefreshToken_ExcelIdentity() {
+	type capturedRequest struct {
+		headers http.Header
+		query   url.Values
+		form    url.Values
+	}
+	received := make(chan capturedRequest, 1)
+	s.setupServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		received <- capturedRequest{headers: r.Header.Clone(), query: r.URL.Query(), form: r.PostForm}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"access_token":"excel-at2","refresh_token":"excel-rt2","token_type":"bearer","expires_in":3600}`)
+	}))
+	s.svc.tokenURL = s.srv.URL + "?source=excel&unified=false"
+
+	resp, err := s.svc.RefreshTokenWithClientID(s.ctx, "excel-rt", "", openai.BPSExcelClientID)
+	require.NoError(s.T(), err)
+	require.Equal(s.T(), "excel-at2", resp.AccessToken)
+	request := <-received
+	require.Equal(s.T(), []string{"true"}, request.query["unified"])
+	require.Equal(s.T(), "excel", request.query.Get("source"))
+	mediaType, _, err := mime.ParseMediaType(request.headers.Get("Content-Type"))
+	require.NoError(s.T(), err)
+	require.Equal(s.T(), "application/x-www-form-urlencoded", mediaType)
+	require.Equal(s.T(), url.Values{
+		"client_id":     {openai.BPSExcelClientID},
+		"grant_type":    {"refresh_token"},
+		"refresh_token": {"excel-rt"},
+	}, request.form)
+	require.Equal(s.T(), openai.BPSOAuthUserAgent, request.headers.Get("User-Agent"))
+	require.Equal(s.T(), openai.BPSOAuthAcceptLanguage, request.headers.Get("Accept-Language"))
+	require.Empty(s.T(), request.headers.Get("originator"))
 }
 
 // TestRefreshToken_DefaultsToOpenAIClientID 验证未指定 client_id 时默认使用 OpenAI ClientID，
@@ -217,6 +288,34 @@ func (s *OpenAIOAuthServiceSuite) TestNonSuccessStatusDoesNotExposeProviderBody(
 	require.NotContains(s.T(), err.Error(), "unsupported_country_region_territory")
 	require.NotContains(s.T(), err.Error(), "Country, region, or territory not supported")
 	require.NotContains(s.T(), err.Error(), "provider-secret-marker")
+}
+
+func (s *OpenAIOAuthServiceSuite) TestExchangeCode_ExcelRejectionRedaction() {
+	for _, tt := range []struct {
+		name   string
+		body   string
+		reason string
+	}{
+		{"region", `{"error":{"code":"unsupported_country_region_territory","message":"provider-secret-marker"}}`, "OPENAI_OAUTH_REGION_UNSUPPORTED"},
+		{"other", `{"error":{"code":"provider-private-code","message":"provider-secret-marker"}}`, "OPENAI_OAUTH_TOKEN_EXCHANGE_FAILED"},
+	} {
+		s.Run(tt.name, func() {
+			if s.srv != nil {
+				s.srv.Close()
+			}
+			s.setupServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusForbidden)
+				_, _ = io.WriteString(w, tt.body)
+			}))
+			_, err := s.svc.ExchangeCode(s.ctx, "excel-code", "excel-verifier", openai.BPSExcelCallback, "", openai.BPSExcelClientID)
+			require.Error(s.T(), err)
+			require.Equal(s.T(), tt.reason, infraerrors.Reason(err))
+			require.ErrorContains(s.T(), err, "status 403")
+			require.NotContains(s.T(), err.Error(), "provider-secret-marker")
+			require.NotContains(s.T(), err.Error(), "provider-private-code")
+			require.NotContains(s.T(), err.Error(), "unsupported_country_region_territory")
+		})
+	}
 }
 
 func (s *OpenAIOAuthServiceSuite) TestRequestError_ClosedServer() {
