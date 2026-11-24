@@ -124,6 +124,7 @@
               <div v-if="!installBPSAccount" class="space-y-1"><label for="install-bps-api-key" class="block text-sm font-medium text-gray-700 dark:text-gray-200">Inference API key</label><input id="install-bps-api-key" v-model="installBPSAPIKey" data-field="install-bps-api-key" :class="fieldClass" type="password" maxlength="4096" autocomplete="new-password" :disabled="mutationBusy"></div>
               <div class="space-y-1"><label for="install-control-url" class="block text-sm font-medium text-gray-700 dark:text-gray-200">Worker 控制根 URL</label><input id="install-control-url" v-model="installControlURL" data-field="install-control-url" :class="fieldClass" type="url" maxlength="2048" autocomplete="off" :disabled="mutationBusy" aria-describedby="install-control-note"></div>
               <div class="space-y-1"><label for="install-control-key" class="block text-sm font-medium text-gray-700 dark:text-gray-200">独立 Control key</label><input id="install-control-key" v-model="installControlKey" data-field="install-control-key" :class="fieldClass" type="password" maxlength="4096" autocomplete="new-password" :disabled="mutationBusy" aria-describedby="install-control-note"></div>
+              <div class="space-y-1"><label for="install-files-key" class="block text-sm font-medium text-gray-700 dark:text-gray-200">独立 Files service key</label><input id="install-files-key" v-model="installFilesServiceKey" data-field="install-files-key" :class="fieldClass" type="password" maxlength="4096" autocomplete="new-password" :disabled="mutationBusy" aria-describedby="install-files-note"><p id="install-files-note" class="text-xs text-gray-500 dark:text-gray-400">必须与 worker 的 BPS_LOCAL_SERVICE_KEY 相同，且不同于 API key 和 Control key。</p></div>
             </div>
             <p id="install-control-note" class="text-xs text-gray-500 dark:text-gray-400">控制 URL 须与 inference 同源；control key 至少 32 字节，且必须独立于 inference 和 Files service key。key 仅用于本次提交，随后清空。首次安装两项必填；已校验的同身份修复可同时留空复用服务端配置。</p>
             <div class="space-y-1">
@@ -444,6 +445,7 @@ const installCodexAccount = ref<number | ''>('')
 const installBackend = ref('')
 const installControlURL = ref('')
 const installControlKey = ref('')
+const installFilesServiceKey = ref('')
 const installProvider = ref<CoreOAuthProvider | ''>('')
 const installConfirmed = ref(false)
 const contextKey = computed(() => JSON.stringify([deploymentID.value.trim(), requestedModel.value.trim(), [...requiredCapabilities.value].sort()]))
@@ -524,6 +526,7 @@ async function selectProvider(provider: CoreOAuthProvider) {
 function toggleInstall() {
   showInstall.value = !showInstall.value
   installControlKey.value = ''
+  installFilesServiceKey.value = ''
   installConfirmed.value = false
 }
 function generateDeploymentID() {
@@ -576,9 +579,12 @@ const canInstallRuntime = computed(() => {
   const validControl = hasControl
     ? validControlURL(controlURL) && new TextEncoder().encode(installControlKey.value).length >= 32
     : installRevision.value > 0
+  const filesKeyLength = new TextEncoder().encode(installFilesServiceKey.value).length
+  const validFilesKey = filesKeyLength >= 32 || (!installFilesServiceKey.value && installRevision.value > 0)
   return !mutationBusy.value && !loading.value && !loadError.value && validSwitchContext.value && installConfirmed.value &&
     Number.isSafeInteger(installRevision.value) && installRevision.value >= 0 &&
     providerAvailable('codex') && providerAvailable('bps_excel') && !!selectedProfile('codex')?.authorized && !!selectedProfile('bps_excel')?.authorized &&
+    validFilesKey &&
     positiveID(installGroup.value) && positiveID(installBPSAccount.value) && positiveID(installCodexAccount.value) &&
     installBPSAccount.value !== installCodexAccount.value && !!installBackend.value.trim() && !!installProvider.value && validControl
 })
@@ -589,11 +595,14 @@ async function installRuntime() {
   if (!canInstallRuntime.value || !codex || !excel || !provider) return
   const controlKey = installControlKey.value
   installControlKey.value = ''
+  const filesServiceKey = installFilesServiceKey.value
+  installFilesServiceKey.value = ''
   const input = {
     ...switchContext(), group_id: Number(installGroup.value),
     bps_profile_ref: excel.profile_ref, codex_profile_ref: codex.profile_ref,
     bps_account_id: Number(installBPSAccount.value), codex_account_id: Number(installCodexAccount.value),
     bps_backend_id: installBackend.value.trim(), bps_control_url: installControlURL.value.trim(), bps_control_key: controlKey,
+    bps_files_service_key: filesServiceKey,
     expected_route_revision: installRevision.value, selected_provider: provider, schedule_new_sessions: true as const,
   }
   switchBusy.value = true
@@ -614,7 +623,7 @@ async function installRuntime() {
       switchState.value = null
     }
   } finally {
-    if (alive) { switchBusy.value = false; installConfirmed.value = false; installControlKey.value = '' }
+    if (alive) { switchBusy.value = false; installConfirmed.value = false; installControlKey.value = ''; installFilesServiceKey.value = '' }
   }
   if (alive && conflict) await previewSwitch(true)
 }
@@ -627,6 +636,7 @@ onBeforeUnmount(() => {
   alive = false
   stepUp.onCancel()
   installControlKey.value = ''
+  installFilesServiceKey.value = ''
   clearInterval(expiryTimer)
   for (const provider of providers) clearTransient(provider.id)
 })

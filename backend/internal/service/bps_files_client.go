@@ -50,7 +50,9 @@ type BPSFilesBackend struct {
 }
 
 func NewBPSFilesBackend(c BPSFilesBackendConfig, upstream HTTPUpstream, cfg *config.Config) (*BPSFilesBackend, error) {
-	if upstream == nil || c.AccountID <= 0 || c.Concurrency <= 0 || !bpsFilesOpaque(c.ServiceKey, 4096) || managedfiles.ValidateIdentity(c.Expected) != nil {
+	validIdentity := managedfiles.ValidateIdentity(c.Expected) == nil
+	validDiscoveryIdentity := c.Expected.BackendID != "" && c.Expected.CredentialGeneration != "" && c.Expected.SubjectFingerprint == ""
+	if upstream == nil || c.AccountID <= 0 || c.Concurrency <= 0 || !bpsFilesOpaque(c.ServiceKey, 4096) || (!validIdentity && !validDiscoveryIdentity) {
 		return nil, bpsFilesError("invalid_backend_config")
 	}
 	normalized, err := validateOutboundURLWithConfig(cfg, c.ControlURL)
@@ -195,6 +197,20 @@ func bpsFilesExactShape(value any, t reflect.Type) bool {
 	return false
 }
 func (b *BPSFilesBackend) Describe(ctx context.Context) (managedfiles.DescribeResult, error) {
+	return b.describe(ctx, false)
+}
+
+// DescribeIdentity is used only while installing a managed binding, when the
+// worker is authoritative for its subject fingerprint. Runtime clients must
+// use Describe and provide the complete expected identity.
+func (b *BPSFilesBackend) DescribeIdentity(ctx context.Context) (managedfiles.DescribeResult, error) {
+	if b == nil || b.config.Expected.SubjectFingerprint != "" {
+		return managedfiles.DescribeResult{}, bpsFilesError("invalid_backend_config")
+	}
+	return b.describe(ctx, true)
+}
+
+func (b *BPSFilesBackend) describe(ctx context.Context, discoverIdentity bool) (managedfiles.DescribeResult, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	var result managedfiles.DescribeResult
@@ -207,7 +223,11 @@ func (b *BPSFilesBackend) Describe(ctx context.Context) (managedfiles.DescribeRe
 		return managedfiles.DescribeResult{}, err
 	}
 	l := result.Limits
-	if result.Contract != managedfiles.Contract || result.JSONProfile != managedfiles.JSONProfile || result.Identity != b.config.Expected || !result.Capabilities.BatchAdmit || !result.Capabilities.EnsureUpload || l.FileBytes <= 0 || l.FileBytes > managedfiles.MaxFileBytes || l.MessageBytes <= 0 || l.MessageBytes > managedfiles.MaxMessageBytes || l.MessagePositions <= 0 || l.MessagePositions > managedfiles.MaxMessagePositions || l.StagingBytes <= 0 || l.AdmissionBytes <= 0 || l.ConcurrentAdmissions <= 0 || l.LiveAdmissions <= 0 || l.AdmissionTTLSeconds <= 0 || l.ManifestBytes <= 0 || l.ManifestBytes > managedfiles.MaxJSONBytes || l.UniqueFiles <= 0 || l.UniqueFiles > managedfiles.MaxUniqueFiles || l.FreeSpaceReserveBytes < 0 || l.AdmitTimeoutSeconds <= 0 || l.EnsureTimeoutSeconds <= 0 {
+	identityMatches := result.Identity == b.config.Expected
+	if discoverIdentity {
+		identityMatches = result.Identity.BackendID == b.config.Expected.BackendID && result.Identity.CredentialGeneration == b.config.Expected.CredentialGeneration && result.Identity.SubjectFingerprint != ""
+	}
+	if result.Contract != managedfiles.Contract || result.JSONProfile != managedfiles.JSONProfile || !identityMatches || managedfiles.ValidateIdentity(result.Identity) != nil || !result.Capabilities.BatchAdmit || !result.Capabilities.EnsureUpload || l.FileBytes <= 0 || l.FileBytes > managedfiles.MaxFileBytes || l.MessageBytes <= 0 || l.MessageBytes > managedfiles.MaxMessageBytes || l.MessagePositions <= 0 || l.MessagePositions > managedfiles.MaxMessagePositions || l.StagingBytes <= 0 || l.AdmissionBytes <= 0 || l.ConcurrentAdmissions <= 0 || l.LiveAdmissions <= 0 || l.AdmissionTTLSeconds <= 0 || l.ManifestBytes <= 0 || l.ManifestBytes > managedfiles.MaxJSONBytes || l.UniqueFiles <= 0 || l.UniqueFiles > managedfiles.MaxUniqueFiles || l.FreeSpaceReserveBytes < 0 || l.AdmitTimeoutSeconds <= 0 || l.EnsureTimeoutSeconds <= 0 {
 		return managedfiles.DescribeResult{}, bpsFilesError("invalid_description")
 	}
 	return result, nil

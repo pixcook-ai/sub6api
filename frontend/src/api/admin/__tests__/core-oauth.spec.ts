@@ -75,6 +75,7 @@ describe('核心 OAuth API 安全协议', () => {
       group_id: 1, bps_profile_ref: 'excel-profile', codex_profile_ref: 'codex-profile',
       bps_account_id: 11, codex_account_id: 12, bps_backend_id: 'worker-1',
       bps_control_url: 'https://worker.example.invalid', bps_control_key: 'fixture-independent-control-key-1234567890',
+      bps_files_service_key: 'fixture-independent-files-key-1234567890',
       expected_route_revision: 0, selected_provider: 'bps_excel' as const, requested_model: 'operator-model',
       required_capabilities: ['responses' as const], schedule_new_sessions: true as const,
     }

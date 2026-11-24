@@ -294,6 +294,7 @@ type CoreOAuthRuntimeInstallRequest struct {
 	BPSBackendID          string                     `json:"bps_backend_id"`
 	BPSControlURL         string                     `json:"bps_control_url"`
 	BPSControlKey         string                     `json:"bps_control_key"`
+	BPSFilesServiceKey    string                     `json:"bps_files_service_key"`
 	ExpectedRouteRevision int64                      `json:"expected_route_revision"`
 	SelectedProvider      string                     `json:"selected_provider"`
 	RequestedModel        string                     `json:"requested_model"`
@@ -346,6 +347,10 @@ func (s *OpenAIGatewayService) InstallCoreOAuthRuntime(ctx context.Context, id s
 	if existing != nil && (existing.RouteRevision != in.ExpectedRouteRevision || existing.BPS != d.BPS || existing.Codex != d.Codex || existing.GroupID != in.GroupID) {
 		return nil, ErrManagedDeploymentConflict
 	}
+	filesServiceKey, err := coreOAuthFilesServiceKey(bpsAccount, d.BPS, bps, existing, in.BPSFilesServiceKey)
+	if err != nil {
+		return nil, err
+	}
 	selected := codexAccount
 	if in.SelectedProvider == CoreOAuthProviderExcel {
 		selected = bpsAccount
@@ -393,7 +398,14 @@ func (s *OpenAIGatewayService) InstallCoreOAuthRuntime(ctx context.Context, id s
 	if err = s.publishCoreOAuthWorker(ctx, bpsAccount, d.BPS, bps); err != nil {
 		return nil, err
 	}
-	bpsUpdate, err := prepareCoreOAuthRuntimeUpdate(bpsAccount, d.BPS, bps)
+	filesIdentity, err := s.discoverCoreOAuthWorkerFiles(ctx, bpsAccount, d.BPS, bps, filesServiceKey)
+	if err != nil {
+		return nil, err
+	}
+	if err = validateCoreOAuthFilesIdentity(bpsAccount, filesIdentity); err != nil {
+		return nil, err
+	}
+	bpsUpdate, err := prepareCoreOAuthFilesRuntimeUpdate(s, bpsAccount, d.BPS, bps, in.BPSControlURL, filesServiceKey, filesIdentity)
 	if err != nil {
 		return nil, err
 	}

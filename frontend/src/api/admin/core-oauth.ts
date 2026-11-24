@@ -96,6 +96,7 @@ export interface CoreRuntimeInstallInput extends ManagedSwitchInput {
   bps_backend_id: string
   bps_control_url: string
   bps_control_key: string
+  bps_files_service_key: string
 }
 
 export interface CoreRuntimeShellInput {

@@ -515,7 +515,7 @@ describe('核心双 OAuth 授权管理', () => {
     expect(wrapper.text()).toContain('新会话已选择 Codex')
   })
 
-  it('首次安装需要两份有效授权、显式空账号与独立 control key，并在提交后清空 key', async () => {
+  it('首次安装需要两份有效授权、显式空账号与独立 control/files key，并在提交后清空 key', async () => {
     api.listProfiles.mockResolvedValue(authorizedProfiles())
     const wrapper = mountView()
     await flushPromises()
@@ -523,13 +523,17 @@ describe('核心双 OAuth 授权管理', () => {
     expect(api.createRuntimeShell).toHaveBeenNthCalledWith(1, { provider: 'bps_excel', group_id: 1, base_url: 'https://worker.example.invalid/v1', api_key: 'inference-key-test-only' })
     expect(api.createRuntimeShell).toHaveBeenNthCalledWith(2, { provider: 'codex', group_id: 1 })
     const key = 'fixture-independent-control-key-1234567890'
+    const filesKey = 'fixture-independent-files-key-1234567890'
     const keyInput = wrapper.get('[data-field="install-control-key"]')
+    const filesKeyInput = wrapper.get('[data-field="install-files-key"]')
     expect(keyInput.attributes('type')).toBe('password')
     await keyInput.setValue('short')
     await wrapper.get('[data-field="install-provider"]').setValue('bps_excel')
     await wrapper.get('[data-field="install-confirm"]').setValue(true)
     expect(wrapper.get('[data-action="install-runtime"]').attributes('disabled')).toBeDefined()
     await keyInput.setValue(key)
+    expect(wrapper.get('[data-action="install-runtime"]').attributes('disabled')).toBeDefined()
+    await filesKeyInput.setValue(filesKey)
     expect(wrapper.get('[data-action="install-runtime"]').attributes('disabled')).toBeUndefined()
     await wrapper.get('[data-form="install"]').trigger('submit')
     await flushPromises()
@@ -537,11 +541,14 @@ describe('核心双 OAuth 授权管理', () => {
       group_id: 1, bps_profile_ref: 'excel-profile', codex_profile_ref: 'codex-profile',
       bps_account_id: 11, codex_account_id: 12, bps_backend_id: 'worker-1',
       bps_control_url: 'https://worker.example.invalid', bps_control_key: key,
+      bps_files_service_key: filesKey,
       expected_route_revision: 0, selected_provider: 'bps_excel', requested_model: 'operator-model',
       required_capabilities: ['responses'], schedule_new_sessions: true,
     })
     expect((keyInput.element as HTMLInputElement).value).toBe('')
+    expect((filesKeyInput.element as HTMLInputElement).value).toBe('')
     expect(wrapper.html()).not.toContain(key)
+    expect(wrapper.html()).not.toContain(filesKey)
     expect(wrapper.text()).toContain('核心运行时已安装')
   })
 
@@ -552,6 +559,16 @@ describe('核心双 OAuth 授权管理', () => {
     expect(wrapper.text()).toContain('两份有效授权')
     expect(wrapper.get('[data-action="install-runtime"]').attributes('disabled')).toBeDefined()
     expect(api.installCoreRuntime).not.toHaveBeenCalled()
+  })
+
+  it('折叠安装表单时清空暂存的 Files service key', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+    await wrapper.get('[data-action="show-install"]').trigger('click')
+    await wrapper.get('[data-field="install-files-key"]').setValue('fixture-independent-files-key-1234567890')
+    await wrapper.get('[data-action="show-install"]').trigger('click')
+    await wrapper.get('[data-action="show-install"]').trigger('click')
+    expect((wrapper.get('[data-field="install-files-key"]').element as HTMLInputElement).value).toBe('')
   })
 
   it('创建运行账号失败会清空 inference API key，不回显或继续创建 Codex 账号', async () => {
@@ -590,6 +607,7 @@ describe('核心双 OAuth 授权管理', () => {
     expect(api.createRuntimeShell).toHaveBeenLastCalledWith({ provider: 'codex', group_id: 1 })
     expect(wrapper.text()).toContain('已创建 Excel #11 与 Codex #12')
     await wrapper.get('[data-field="install-control-key"]').setValue('fixture-independent-control-key-1234567890')
+    await wrapper.get('[data-field="install-files-key"]').setValue('fixture-independent-files-key-1234567890')
     await wrapper.get('[data-form="install"]').trigger('submit')
     await flushPromises()
     expect(api.installCoreRuntime).toHaveBeenCalledWith('deployment-1', expect.objectContaining({
@@ -600,16 +618,20 @@ describe('核心双 OAuth 授权管理', () => {
   it('安装失败同样清空 control key，不回显错误中的凭据或自动重试', async () => {
     api.listProfiles.mockResolvedValue(authorizedProfiles())
     const key = 'fixture-independent-control-key-1234567890'
+    const filesKey = 'fixture-independent-files-key-1234567890'
     api.installCoreRuntime.mockRejectedValue({ code: 'MANAGED_DEPLOYMENT_UNAVAILABLE', message: key })
     const wrapper = mountView()
     await flushPromises()
     await prepareInstall(wrapper)
     await wrapper.get('[data-field="install-control-key"]').setValue(key)
+    await wrapper.get('[data-field="install-files-key"]').setValue(filesKey)
     await wrapper.get('[data-form="install"]').trigger('submit')
     await flushPromises()
     expect(api.installCoreRuntime).toHaveBeenCalledTimes(1)
     expect((wrapper.get('[data-field="install-control-key"]').element as HTMLInputElement).value).toBe('')
+    expect((wrapper.get('[data-field="install-files-key"]').element as HTMLInputElement).value).toBe('')
     expect(wrapper.html()).not.toContain(key)
+    expect(wrapper.html()).not.toContain(filesKey)
     expect(wrapper.text()).toContain('目标提供方暂不可用')
     expect(wrapper.get('[data-action="install-runtime"]').attributes('disabled')).toBeDefined()
   })
@@ -621,6 +643,7 @@ describe('核心双 OAuth 授权管理', () => {
     await previewSwitch(wrapper)
     await prepareInstall(wrapper)
     await wrapper.get('[data-field="install-control-url"]').setValue('')
+    await wrapper.get('[data-field="install-files-key"]').setValue('')
     expect(wrapper.get('[data-action="install-runtime"]').attributes('disabled')).toBeUndefined()
     await wrapper.get('[data-form="install"]').trigger('submit')
     await flushPromises()
