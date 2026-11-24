@@ -29,6 +29,8 @@ var (
 	ErrCoreOAuthProviderRejected      = infraerrors.New(http.StatusBadRequest, "CORE_OAUTH_PROVIDER_REJECTED", "The provider rejected authorization")
 	ErrCoreOAuthRegionUnsupported     = infraerrors.New(http.StatusBadRequest, "CORE_OAUTH_REGION_UNSUPPORTED", "The provider rejected this network region; select a supported proxy and start a new authorization")
 	ErrCoreOAuthStorage               = infraerrors.New(http.StatusServiceUnavailable, "CORE_OAUTH_STORAGE_FAILED", "Core OAuth secure storage is unavailable")
+	ErrCoreOAuthHandoffPending        = infraerrors.New(http.StatusConflict, "CORE_OAUTH_HANDOFF_PENDING", "Core OAuth ownership handoff is pending")
+	ErrCoreOAuthHandoffExpired        = infraerrors.New(http.StatusConflict, "CORE_OAUTH_HANDOFF_EXPIRED", "Core OAuth ownership handoff has expired and remains locked")
 	// Aliases keep handler terminology aligned with fixed public error codes.
 	ErrCoreOAuthInvalidInput  = ErrCoreOAuthInvalid
 	ErrCoreOAuthStorageFailed = ErrCoreOAuthStorage
@@ -66,6 +68,37 @@ type CoreOAuthUnauthorizedInput struct {
 	FailedRevision int64
 	StatusCode     int
 	Origin         string
+}
+
+// CoreOAuthHandoffInput is an internal, actor-bound receiver request. The
+// opaque payload is staged without authenticating its source or importing it. It is retained only
+// inside the encrypted profile record and never appears in a public response.
+type CoreOAuthHandoffInput struct {
+	OperationID      string    `json:"operation_id"`
+	Provider         string    `json:"provider"`
+	ProfileRef       string    `json:"profile_ref"` // Destination Sub6 profile.
+	SourceProfileRef string    `json:"source_profile_ref"`
+	Subject          string    `json:"subject"`
+	WorkspaceID      string    `json:"workspace_id"`
+	IdentityEpoch    string    `json:"identity_epoch"`
+	TokenRevision    int64     `json:"token_revision"`
+	ExpiresAt        time.Time `json:"expires_at"`
+	ProtectedPayload string    `json:"protected_payload"`
+	ActorID          int64     `json:"-"`
+}
+
+type CoreOAuthHandoffReceipt struct {
+	OperationID       string    `json:"operation_id"`
+	Provider          string    `json:"provider"`
+	ProfileRef        string    `json:"profile_ref"`
+	SourceProfileRef  string    `json:"source_profile_ref"`
+	Subject           string    `json:"subject"`
+	WorkspaceID       string    `json:"workspace_id"`
+	IdentityEpoch     string    `json:"identity_epoch"`
+	TokenRevision     int64     `json:"token_revision"`
+	Status            string    `json:"status"`
+	ExpiresAt         time.Time `json:"expires_at"`
+	TransferSupported bool      `json:"transfer_supported"`
 }
 
 type CoreOAuthAttemptView struct {

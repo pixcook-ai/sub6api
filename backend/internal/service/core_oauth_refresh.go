@@ -128,6 +128,12 @@ func (s *CoreOAuthService) persistRefreshUncertain(ctx context.Context, record *
 }
 
 func (s *CoreOAuthService) refreshFence(ctx context.Context, record *coreOAuthRecord) error {
+	if record.Handoff != nil && record.Handoff.Status == "pending" {
+		if !record.Handoff.ExpiresAt.After(time.Now().UTC()) {
+			return ErrCoreOAuthHandoffExpired
+		}
+		return ErrCoreOAuthHandoffPending
+	}
 	if op := record.Operation; op != nil {
 		switch {
 		case op.Kind == "refresh_uncertain":
@@ -151,6 +157,12 @@ func (s *CoreOAuthService) RecoverUnauthorized(ctx context.Context, input CoreOA
 	record, err := s.load(ctx, input.ProfileRef)
 	if err != nil {
 		return nil, err
+	}
+	if record.Handoff != nil && record.Handoff.Status == "pending" {
+		if !record.Handoff.ExpiresAt.After(time.Now().UTC()) {
+			return nil, ErrCoreOAuthHandoffExpired
+		}
+		return nil, ErrCoreOAuthHandoffPending
 	}
 	view := s.view(record)
 	// Only an upstream OAuth 401 for the exact current identity revision can

@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -44,6 +46,21 @@ type coreOAuthOperation struct {
 	Kind      string
 	ExpiresAt time.Time
 }
+type coreOAuthHandoffRecord struct {
+	OperationID      string
+	Provider         string
+	ProfileRef       string
+	SourceProfileRef string
+	Subject          string
+	WorkspaceID      string
+	IdentityEpoch    string
+	TokenRevision    int64
+	PayloadDigest    string
+	ProtectedPayload string
+	ActorID          int64
+	Status           string
+	ExpiresAt        time.Time
+}
 type coreOAuthRecord struct {
 	Contract           string
 	ProfileRef         string
@@ -56,10 +73,54 @@ type coreOAuthRecord struct {
 	TokenRevision      int64
 	Attempt            *coreOAuthStoredAttempt
 	Operation          *coreOAuthOperation
+	Handoff            *coreOAuthHandoffRecord
 	NeedsAuthorization bool
 	LastErrorCode      string
 	CreatedAt          time.Time
 	UpdatedAt          time.Time
+}
+
+func coreOAuthHandoffReceipt(record *coreOAuthRecord) *CoreOAuthHandoffReceipt {
+	if record == nil || record.Handoff == nil {
+		return nil
+	}
+	h := record.Handoff
+	return &CoreOAuthHandoffReceipt{OperationID: h.OperationID, Provider: h.Provider, ProfileRef: h.ProfileRef,
+		SourceProfileRef: h.SourceProfileRef,
+		Subject:          h.Subject, WorkspaceID: h.WorkspaceID, IdentityEpoch: h.IdentityEpoch,
+		TokenRevision: h.TokenRevision, Status: h.Status, ExpiresAt: h.ExpiresAt, TransferSupported: false}
+}
+
+func validCoreOAuthHandoffPayload(input CoreOAuthHandoffInput) bool {
+	if input.ActorID <= 0 || input.OperationID == "" || input.ProfileRef == "" || input.SourceProfileRef == "" || input.Provider == "" ||
+		input.Subject == "" || input.WorkspaceID == "" || input.IdentityEpoch == "" || input.TokenRevision < 1 ||
+		input.ExpiresAt.IsZero() {
+		return false
+	}
+	return coreOAuthRef(input.OperationID) && coreOAuthRef(input.ProfileRef) && coreOAuthHandoffSourceRef(input.SourceProfileRef) &&
+		coreOAuthRef(input.IdentityEpoch) && coreOAuthProvider(input.Provider) &&
+		coreOAuthIdentityText(input.Subject) && coreOAuthIdentityText(input.WorkspaceID) && coreOAuthProtectedPayload(input.ProtectedPayload)
+}
+
+func coreOAuthHandoffSourceRef(value string) bool {
+	return strings.HasPrefix(value, "oauth_") && coreOAuthRef(strings.TrimPrefix(value, "oauth_"))
+}
+
+func coreOAuthProtectedPayload(value string) bool {
+	if len(value) < 32 || len(value) > 256<<10 {
+		return false
+	}
+	for _, r := range value {
+		if !(r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-' || r == '_' || r == '=') {
+			return false
+		}
+	}
+	return true
+}
+
+func coreOAuthHandoffDigest(value string) string {
+	sum := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(sum[:])
 }
 
 func NewCoreOAuthService(repo CoreOAuthRepository, encryptor SecretEncryptor, protocols map[string]CoreOAuthProtocol, proxyRepo ProxyRepository) (*CoreOAuthService, error) {
@@ -130,10 +191,27 @@ func (s *CoreOAuthService) unseal(row CoreOAuthSealedProfile) (*coreOAuthRecord,
 	var record coreOAuthRecord
 	decoder := json.NewDecoder(strings.NewReader(plaintext))
 	decoder.DisallowUnknownFields()
-	if decoder.Decode(&record) != nil || decoder.Decode(new(any)) != io.EOF || record.Contract != CoreOAuthContract || record.ProfileRef != row.ProfileRef || record.Version != row.Version || !coreOAuthProvider(record.Provider) || record.TokenRevision < 0 {
+	if decoder.Decode(&record) != nil || decoder.Decode(new(any)) != io.EOF || record.Contract != CoreOAuthContract || record.ProfileRef != row.ProfileRef || record.Version != row.Version || !coreOAuthProvider(record.Provider) || record.TokenRevision < 0 || !coreOAuthHandoffRecordValid(&record) {
 		return nil, ErrCoreOAuthStorage
 	}
 	return &record, nil
+}
+
+func coreOAuthHandoffRecordValid(record *coreOAuthRecord) bool {
+	if record.Handoff == nil {
+		return true
+	}
+	h := record.Handoff
+	if h.ProfileRef != record.ProfileRef || h.Provider != record.Provider || !coreOAuthRef(h.OperationID) ||
+		!coreOAuthHandoffSourceRef(h.SourceProfileRef) || !coreOAuthIdentityText(h.Subject) || !coreOAuthIdentityText(h.WorkspaceID) ||
+		!coreOAuthRef(h.IdentityEpoch) || h.TokenRevision < 1 || h.ActorID <= 0 || h.ExpiresAt.IsZero() || len(h.PayloadDigest) != 64 {
+		return false
+	}
+	if h.Status == "abandoned" {
+		return h.ProtectedPayload == ""
+	}
+	return h.Status == "pending" && record.Grant == nil && record.NeedsAuthorization && record.Operation == nil && record.Attempt == nil &&
+		coreOAuthProtectedPayload(h.ProtectedPayload) && h.PayloadDigest == coreOAuthHandoffDigest(h.ProtectedPayload)
 }
 func (s *CoreOAuthService) load(ctx context.Context, ref string) (*coreOAuthRecord, error) {
 	if s == nil {
@@ -233,6 +311,12 @@ func (s *CoreOAuthService) StartAuthorization(ctx context.Context, ref string, a
 	if err != nil {
 		return nil, err
 	}
+	if record.Handoff != nil && record.Handoff.Status == "pending" {
+		if !record.Handoff.ExpiresAt.After(time.Now().UTC()) {
+			return nil, ErrCoreOAuthHandoffExpired
+		}
+		return nil, ErrCoreOAuthHandoffPending
+	}
 	protocol := s.protocols[record.Provider]
 	if protocol == nil {
 		return nil, ErrCoreOAuthUnavailable
@@ -291,6 +375,12 @@ func (s *CoreOAuthService) CompleteAuthorization(ctx context.Context, ref string
 	record, err := s.load(ctx, ref)
 	if err != nil {
 		return nil, err
+	}
+	if record.Handoff != nil && record.Handoff.Status == "pending" {
+		if !record.Handoff.ExpiresAt.After(time.Now().UTC()) {
+			return nil, ErrCoreOAuthHandoffExpired
+		}
+		return nil, ErrCoreOAuthHandoffPending
 	}
 	attempt := record.Attempt
 	if attempt == nil || attempt.ID != input.AttemptID {
@@ -385,6 +475,12 @@ func (s *CoreOAuthService) CancelAuthorization(ctx context.Context, ref, attempt
 	if err != nil {
 		return nil, err
 	}
+	if record.Handoff != nil && record.Handoff.Status == "pending" {
+		if !record.Handoff.ExpiresAt.After(time.Now().UTC()) {
+			return nil, ErrCoreOAuthHandoffExpired
+		}
+		return nil, ErrCoreOAuthHandoffPending
+	}
 	if record.Attempt == nil || record.Attempt.ID != attemptID {
 		return nil, ErrCoreOAuthConflict
 	}
@@ -412,6 +508,95 @@ func (s *CoreOAuthService) CancelAuthorization(ctx context.Context, ref, attempt
 	view := s.view(record)
 	return &view, nil
 }
+
+// BeginHandoff records a receiver-side ownership transaction without importing
+// a refresh token. It is deliberately a durable closed-world fence: until a
+// future authenticated transfer protocol is implemented, the profile remains
+// blocked until the reservation is explicitly abandoned; expiry never unlocks it.
+func (s *CoreOAuthService) BeginHandoff(ctx context.Context, ref string, input CoreOAuthHandoffInput) (*CoreOAuthHandoffReceipt, error) {
+	if s == nil || !validCoreOAuthHandoffPayload(input) || input.ProfileRef != ref {
+		return nil, ErrCoreOAuthInvalid
+	}
+	record, err := s.load(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
+	digest := coreOAuthHandoffDigest(input.ProtectedPayload)
+	if existing := record.Handoff; existing != nil {
+		if existing.OperationID == input.OperationID && existing.ActorID == input.ActorID && existing.PayloadDigest == digest &&
+			existing.Provider == input.Provider && existing.ProfileRef == input.ProfileRef && existing.SourceProfileRef == input.SourceProfileRef && existing.Subject == input.Subject &&
+			existing.WorkspaceID == input.WorkspaceID && existing.IdentityEpoch == input.IdentityEpoch && existing.TokenRevision == input.TokenRevision && existing.ExpiresAt.Equal(input.ExpiresAt) {
+			return coreOAuthHandoffReceipt(record), nil
+		}
+		return nil, ErrCoreOAuthConflict
+	}
+	if !input.ExpiresAt.After(time.Now().UTC()) || input.ExpiresAt.After(time.Now().UTC().Add(15*time.Minute)) {
+		return nil, ErrCoreOAuthInvalid
+	}
+	if record.Provider != input.Provider {
+		return nil, ErrCoreOAuthConflict
+	}
+	if record.Grant != nil || !record.NeedsAuthorization || record.Operation != nil || record.Attempt != nil {
+		return nil, ErrCoreOAuthConflict
+	}
+	record.Handoff = &coreOAuthHandoffRecord{OperationID: input.OperationID, Provider: input.Provider, ProfileRef: input.ProfileRef,
+		SourceProfileRef: input.SourceProfileRef,
+		Subject:          input.Subject, WorkspaceID: input.WorkspaceID, IdentityEpoch: input.IdentityEpoch, TokenRevision: input.TokenRevision,
+		PayloadDigest: digest, ProtectedPayload: input.ProtectedPayload, ActorID: input.ActorID, Status: "pending", ExpiresAt: input.ExpiresAt.UTC()}
+	if err := s.save(ctx, record); err != nil {
+		return nil, err
+	}
+	return coreOAuthHandoffReceipt(record), nil
+}
+
+func (s *CoreOAuthService) GetHandoff(ctx context.Context, ref, operationID string, actorID int64) (*CoreOAuthHandoffReceipt, error) {
+	if actorID <= 0 || !coreOAuthRef(ref) || !coreOAuthRef(operationID) {
+		return nil, ErrCoreOAuthInvalid
+	}
+	record, err := s.load(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
+	if record.Handoff == nil || record.Handoff.OperationID != operationID {
+		return nil, ErrCoreOAuthConflict
+	}
+	if record.Handoff.ActorID != actorID {
+		return nil, ErrCoreOAuthAttemptForbidden
+	}
+	return coreOAuthHandoffReceipt(record), nil
+}
+
+// AbandonHandoff terminates a receiver reservation that has never activated a
+// grant. It does not restore source authority or import the staged payload.
+func (s *CoreOAuthService) AbandonHandoff(ctx context.Context, ref, operationID string, actorID int64) (*CoreOAuthHandoffReceipt, error) {
+	if actorID <= 0 || !coreOAuthRef(ref) || !coreOAuthRef(operationID) {
+		return nil, ErrCoreOAuthInvalid
+	}
+	record, err := s.load(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
+	h := record.Handoff
+	if h == nil || h.OperationID != operationID {
+		return nil, ErrCoreOAuthConflict
+	}
+	if h.ActorID != actorID {
+		return nil, ErrCoreOAuthAttemptForbidden
+	}
+	if h.Status == "abandoned" {
+		return coreOAuthHandoffReceipt(record), nil
+	}
+	if h.Status != "pending" || record.Grant != nil || record.Operation != nil || record.Attempt != nil {
+		return nil, ErrCoreOAuthConflict
+	}
+	h.Status = "abandoned"
+	h.ProtectedPayload = ""
+	if err := s.save(ctx, record); err != nil {
+		return nil, err
+	}
+	return coreOAuthHandoffReceipt(record), nil
+}
+
 func coreOAuthStoreGrant(grant CoreOAuthGrant) *coreOAuthStoredGrant {
 	return &coreOAuthStoredGrant{AccessToken: grant.AccessToken, RefreshToken: grant.RefreshToken, IDToken: grant.IDToken, ClientID: grant.ClientID, Subject: grant.Subject, WorkspaceID: grant.WorkspaceID, Email: grant.Email, ExpiresAt: grant.ExpiresAt}
 }
@@ -475,6 +660,11 @@ func (s *CoreOAuthService) view(record *coreOAuthRecord) CoreOAuthProfile {
 				view.NeedsAuthorization = true
 			}
 		}
+	}
+	if record.Handoff != nil && record.Handoff.Status == "pending" {
+		view.Status = "handoff_pending"
+		view.Authorized = false
+		view.NeedsAuthorization = true
 	}
 	return view
 }

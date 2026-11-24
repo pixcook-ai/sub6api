@@ -33,7 +33,7 @@ CoreOAuthUnauthorizedInput: ProfileRef string, IdentityEpoch string, FailedRevis
 ## Safe DTO
 CoreOAuthProfile wire keys: profile_ref,provider,name,status,authorized,needs_authorization,subject,workspace_id,email,client_id,identity_epoch,token_revision,expires_at,attempt,last_error_code,created_at,updated_at.
 expires_at: RFC3339 string or null; attempt: null or {attempt_id,provider,status,expires_at}. Fields for unknown identity are empty strings; token_revision initially0.
-Profile status: empty,authorizing,authorized,refreshing,refresh_uncertain,reauthorization_required. authorized is true only when an existing usable grant exists; starting authorization preserves an earlier usable grant.
+Profile status: empty,authorizing,authorized,refreshing,refresh_uncertain,reauthorization_required,handoff_pending. `handoff_pending` is a sealed, non-authorized receiver transaction; refresh, authorization and credential snapshots remain blocked, including after its expiry, until explicitly abandoned with the original administrator and operation ID. Abandonment erases the staged payload, retains a terminal receipt, and permits a fresh native authorization; it never restores source authority or activates imported credentials. Receiver begin/read/abandon are internal service seams with no HTTP transfer endpoint. `authorized` is true only when an existing usable grant exists; starting authorization preserves an earlier usable grant.
 Attempt status: pending,exchanging,consumed,canceled,expired,failed. No actor/state/verifier/callback/tokens in profile DTO.
 CoreOAuthAuthorization: {profile:CoreOAuthProfile,attempt_id,authorization_url,redirect_uri,expires_at}.
 ActorID is trusted middleware context, never client JSON. Refresh token/access token/ID token never returned.
@@ -46,3 +46,5 @@ Distinct account Extra marker core_oauth, contract sub6-core-oauth/v1. CoreOAuth
 
 ## Restart and refresh ownership
 Private encrypted profile includes grant, actor-bound attempt metadata and durable refresh operation marker. PKCE objects remain process-local; unfinished attempts after process restart explicitly expire and require a new authorization. Profile/RT remains durable. Cross-instance CAS claim precedes token request; sent/unknown refresh is never blindly retried with old RT. No dependency on toSub2 process/Keychain.
+
+Receiver handoff service contracts (internal only): `BeginHandoff` stages an opaque payload against an empty destination; `GetHandoff` reads the original actor/operation-bound receipt; `AbandonHandoff` records `abandoned` without activating or retaining that payload. Source references use toSub2 `oauth_<uuid>` format; destination references remain Sub6 UUIDs. Matching begin retries, including after expiry, return the existing receipt and never extend expiry or reactivate an abandoned transaction. New expired reservations are rejected. `transfer_supported` is always false at this phase.
