@@ -38,10 +38,11 @@ type BPSOAuthTransaction struct {
 }
 
 func NewBPSOAuthTransaction() (*BPSOAuthTransaction, error) {
-	state, err := GenerateState()
+	stateBytes, err := GenerateRandomBytes(24)
 	if err != nil {
 		return nil, err
 	}
+	state := "bps." + base64.RawURLEncoding.EncodeToString(stateBytes) + ".PC"
 	verifier, err := GenerateCodeVerifier()
 	if err != nil {
 		return nil, err
@@ -50,7 +51,8 @@ func NewBPSOAuthTransaction() (*BPSOAuthTransaction, error) {
 		"client_id": {BPSExcelClientID}, "response_type": {"code"},
 		"redirect_uri": {BPSExcelCallback}, "scope": {"openid offline_access email profile organization.read"},
 		"audience": {"https://api.openai.com/v1"}, "code_challenge_method": {"S256"},
-		"code_challenge": {GenerateCodeChallenge(verifier)}, "state": {state}, "platform": {"OfficeOnline"},
+		// The official Excel client identifies the desktop authorization flow as PC.
+		"code_challenge": {GenerateCodeChallenge(verifier)}, "state": {state}, "platform": {"PC"},
 	}
 	expiry := time.Now().Add(10 * time.Minute)
 	return &BPSOAuthTransaction{AuthorizationURL: BPSAuthorizeURL + "?" + query.Encode(), RedirectURI: BPSExcelCallback,

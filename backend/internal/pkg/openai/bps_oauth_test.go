@@ -10,6 +10,7 @@ import (
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -176,7 +177,7 @@ func TestBPSOAuthAuthorizationUsesOfficialClientAndCallback(t *testing.T) {
 		"client_id":     "app_fnr0pYvVwwFDocDumLG3H2Bp",
 		"redirect_uri":  "https://bps.openai.com/basispoints/extension/360590d7-f8f9-4d88-bf75-0edfe0a4b9f3/auth/callback",
 		"response_type": "code", "scope": "openid offline_access email profile organization.read",
-		"audience": "https://api.openai.com/v1", "code_challenge_method": "S256", "platform": "OfficeOnline",
+		"audience": "https://api.openai.com/v1", "code_challenge_method": "S256", "platform": "PC",
 	}
 	query := u.Query()
 	for name, expected := range want {
@@ -184,7 +185,7 @@ func TestBPSOAuthAuthorizationUsesOfficialClientAndCallback(t *testing.T) {
 			t.Errorf("incorrect BPS authorization field %s", name)
 		}
 	}
-	if len(query.Get("state")) < 43 || len(query.Get("code_challenge")) != 43 || transaction.RedirectURI != want["redirect_uri"] {
+	if !regexp.MustCompile(`^bps\.[A-Za-z0-9_-]{32}\.PC$`).MatchString(query.Get("state")) || len(query.Get("code_challenge")) != 43 || transaction.RedirectURI != want["redirect_uri"] {
 		t.Fatal("missing state, S256 challenge, or official callback")
 	}
 	if transaction.ExpiresAt.Before(time.Now()) || transaction.ExpiresAt.After(time.Now().Add(11*time.Minute)) {

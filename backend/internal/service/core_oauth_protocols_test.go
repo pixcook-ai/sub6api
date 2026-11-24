@@ -36,12 +36,12 @@ func TestCoreOAuthCodexRefreshErrorClassification(t *testing.T) {
 func TestCoreOAuthBPSRegionErrorHasSafeProfileCode(t *testing.T) {
 	err := coreOAuthBPSError(&openai.BPSOAuthError{Code: "bps_region_unsupported", StatusCode: http.StatusForbidden, Permanent: true})
 	var classified *CoreOAuthProtocolError
-	if !errors.As(err, &classified) || classified == nil || classified.SafeCode != "CORE_OAUTH_REGION_UNSUPPORTED" || classified.OutcomeUnknown {
+	if !errors.As(err, &classified) || classified == nil || classified.SafeCode != "CORE_OAUTH_REGION_UNSUPPORTED" || classified.OutcomeUnknown || !classified.Permanent {
 		t.Fatalf("region error classification = %#v", classified)
 	}
 
 	unknown := coreOAuthBPSError(&openai.BPSOAuthError{Code: "provider-private-code", StatusCode: http.StatusForbidden})
-	if !errors.As(unknown, &classified) || classified == nil || classified.SafeCode != "" || classified.OutcomeUnknown {
+	if !errors.As(unknown, &classified) || classified == nil || classified.SafeCode != "" || classified.OutcomeUnknown || classified.Permanent {
 		t.Fatalf("unknown provider error classification = %#v", classified)
 	}
 }
