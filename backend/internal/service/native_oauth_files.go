@@ -9,6 +9,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/MACOS-DO/sub4api/internal/pkg/managedfiles"
+	"github.com/MACOS-DO/sub4api/internal/pkg/openai_compat"
 )
 
 func (s *OpenAIGatewayService) discoverCoreOAuthWorkerFiles(ctx context.Context, account *Account, binding ManagedDeploymentBinding, snapshot *CoreOAuthCredentialSnapshot, serviceKey string) (managedfiles.Identity, error) {
@@ -112,6 +113,11 @@ func prepareCoreOAuthFilesRuntimeUpdate(service *OpenAIGatewayService, account *
 	update.Credentials["bps_files_backend_id"] = identity.BackendID
 	update.Credentials["bps_files_subject_fingerprint"] = identity.SubjectFingerprint
 	update.Credentials["bps_files_credential_generation"] = identity.CredentialGeneration
-	update.Credentials[openAIEndpointCapabilitiesCredentialKey] = []string{string(OpenAIEndpointCapabilityBPSFiles)}
+	update.Credentials[openAIEndpointCapabilitiesCredentialKey] = []string{
+		string(OpenAIEndpointCapabilityChatCompletions),
+		string(OpenAIEndpointCapabilityResponses),
+		string(OpenAIEndpointCapabilityBPSFiles),
+	}
+	update.Extra[openai_compat.ExtraKeyResponsesSupported] = true
 	return update, nil
 }

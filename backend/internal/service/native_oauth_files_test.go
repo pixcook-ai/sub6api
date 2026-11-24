@@ -11,6 +11,7 @@ import (
 
 	"github.com/MACOS-DO/sub4api/internal/config"
 	"github.com/MACOS-DO/sub4api/internal/pkg/managedfiles"
+	"github.com/MACOS-DO/sub4api/internal/pkg/openai_compat"
 	"github.com/MACOS-DO/sub4api/internal/pkg/tlsfingerprint"
 	"github.com/stretchr/testify/require"
 )
@@ -109,7 +110,7 @@ func TestCoreOAuthRuntimeFilesUpdateStoresOnlyBoundFileServiceIdentity(t *testin
 	binding := ManagedDeploymentBinding{Provider: CoreOAuthProviderExcel, AccountID: 7, BackendID: "worker-1", BindingRef: "bind_33333333-3333-4333-8333-333333333333",
 		ProfileRef: "oauth_" + snapshot.Profile.ProfileRef, Subject: snapshot.Profile.Subject, WorkspaceID: snapshot.Profile.WorkspaceID, IdentityEpoch: snapshot.Profile.IdentityEpoch}
 	account := &Account{ID: 7, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Concurrency: 3, Schedulable: false, GroupIDs: []int64{1}, Credentials: map[string]any{"api_key": "inference-key", "base_url": "https://worker.example/v1", "core_oauth_control_key": workerTestKey},
-		Extra: map[string]any{"core_oauth_runtime_shell": map[string]any{"provider": "bps_excel", "group_id": float64(1)}}}
+		Extra: map[string]any{"core_oauth_runtime_shell": map[string]any{"provider": "bps_excel", "group_id": float64(1)}, openai_compat.ExtraKeyResponsesSupported: true}}
 	service := &OpenAIGatewayService{cfg: &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{AllowInsecureHTTP: true}}}}
 	identity := managedfiles.Identity{BackendID: binding.BackendID, SubjectFingerprint: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", CredentialGeneration: binding.IdentityEpoch}
 	got, err := prepareCoreOAuthFilesRuntimeUpdate(service, account, binding, snapshot, "https://worker.example", coreOAuthFilesTestKey, identity)
@@ -121,7 +122,13 @@ func TestCoreOAuthRuntimeFilesUpdateStoresOnlyBoundFileServiceIdentity(t *testin
 	require.Equal(t, coreOAuthFilesTestKey, got.Credentials["bps_files_service_key"])
 	require.Equal(t, identity.SubjectFingerprint, got.Credentials["bps_files_subject_fingerprint"])
 	require.Equal(t, identity.CredentialGeneration, got.Credentials["bps_files_credential_generation"])
-	require.Equal(t, []string{string(OpenAIEndpointCapabilityBPSFiles)}, got.Credentials[openAIEndpointCapabilitiesCredentialKey])
+	require.Equal(t, []string{string(OpenAIEndpointCapabilityChatCompletions), string(OpenAIEndpointCapabilityResponses), string(OpenAIEndpointCapabilityBPSFiles)}, got.Credentials[openAIEndpointCapabilitiesCredentialKey])
+	updatedAccount := &Account{ID: account.ID, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Concurrency: account.Concurrency,
+		Extra: got.Extra, Credentials: got.Credentials}
+	require.True(t, updatedAccount.SupportsOpenAIEndpointCapability(OpenAIEndpointCapabilityResponses))
+	require.True(t, updatedAccount.SupportsOpenAIEndpointCapability(OpenAIEndpointCapabilityBPSFiles))
+	_, err = BPSFilesConfigForAccount(updatedAccount)
+	require.NoError(t, err)
 	require.Equal(t, workerTestKey, got.Credentials["core_oauth_control_key"])
 	require.Equal(t, "inference-key", got.Credentials["api_key"])
 	require.NotContains(t, got.Credentials, "access_token")
@@ -153,7 +160,7 @@ func TestCoreOAuthRuntimeFilesUpdateRejectsMalformedAndMismatchedIdentity(t *tes
 	binding := ManagedDeploymentBinding{Provider: CoreOAuthProviderExcel, AccountID: 7, BackendID: "worker-1", BindingRef: "bind_33333333-3333-4333-8333-333333333333",
 		ProfileRef: "oauth_" + snapshot.Profile.ProfileRef, Subject: snapshot.Profile.Subject, WorkspaceID: snapshot.Profile.WorkspaceID, IdentityEpoch: snapshot.Profile.IdentityEpoch}
 	account := &Account{ID: 7, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Concurrency: 3, GroupIDs: []int64{1}, Credentials: map[string]any{"api_key": "inference-key", "base_url": "https://worker.example/v1", "core_oauth_control_key": workerTestKey},
-		Extra: map[string]any{"core_oauth_runtime_shell": map[string]any{"provider": "bps_excel", "group_id": float64(1)}}}
+		Extra: map[string]any{"core_oauth_runtime_shell": map[string]any{"provider": "bps_excel", "group_id": float64(1)}, openai_compat.ExtraKeyResponsesSupported: true}}
 	good := managedfiles.Identity{BackendID: binding.BackendID, SubjectFingerprint: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", CredentialGeneration: binding.IdentityEpoch}
 	for _, tc := range []struct {
 		name     string
