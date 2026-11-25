@@ -6465,7 +6465,8 @@ const handleOpenAIExchange = async (authCode: string) => {
     }
     const credentials = oauthClient.buildCredentials(tokenInfo)
     const oauthExtra = oauthClient.buildExtraInfo(tokenInfo) as Record<string, unknown> | undefined
-    const extra = buildOpenAIExtra(oauthExtra)
+    // openai_bps accounts must not carry openai-only extras (timezone, WS mode, long-context billing).
+    const extra = isOpenAIBPSOAuth.value ? oauthExtra : buildOpenAIExtra(oauthExtra)
     const shouldCreateOpenAI = form.platform === 'openai'
 
     // Add model mapping for OpenAI OAuth accounts（透传模式下不应用）
