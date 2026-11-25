@@ -3970,6 +3970,7 @@ import {
   type AuthInputMethod
 } from '@/composables/useAccountOAuth'
 import { OPENAI_EXCEL_OAUTH_CLIENT_ID, useOpenAIOAuth } from '@/composables/useOpenAIOAuth'
+import { extractApiErrorMessage } from '@/utils/apiError'
 import { useGeminiOAuth } from '@/composables/useGeminiOAuth'
 import { useAntigravityOAuth } from '@/composables/useAntigravityOAuth'
 import { useGrokOAuth } from '@/composables/useGrokOAuth'
@@ -6509,7 +6510,7 @@ const handleOpenAIExchange = async (authCode: string) => {
     emit('created')
     handleClose()
   } catch (error: any) {
-    oauthClient.error.value = error.response?.data?.detail || t('admin.accounts.oauth.authFailed')
+    oauthClient.error.value = extractApiErrorMessage(error, t('admin.accounts.oauth.authFailed'))
     appStore.showError(oauthClient.error.value)
   } finally {
     oauthClient.loading.value = false
