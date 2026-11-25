@@ -3,6 +3,7 @@ package admin
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -73,6 +74,14 @@ type transferHTTPProtocol struct {
 	refreshes atomic.Int64
 }
 
+func transferHTTPJWT(claims map[string]any) string {
+	payload, err := json.Marshal(claims)
+	if err != nil {
+		panic("synthetic JWT claims must marshal")
+	}
+	return "header." + base64.RawURLEncoding.EncodeToString(payload) + ".signature"
+}
+
 func (*transferHTTPProtocol) Begin(context.Context, service.CoreOAuthTransport) (*service.CoreOAuthProtocolAttempt, error) {
 	return nil, errors.New("unexpected authorization")
 }
@@ -124,9 +133,9 @@ func (u transferHTTPUpstream) DoWithTLS(r *http.Request, proxy string, id int64,
 	return u.Do(r, proxy, id, concurrency)
 }
 
-// This is actual loopback HTTP and actual production receiver state/crypto.
-// Authentication actor and old-source storage/fences are synthetic fixtures;
-// no real OAuth, database, worker process, or upstream is contacted.
+// This is actual loopback HTTP and production source/receiver OAuth services.
+// The source vault is synthetic AES-GCM storage and the receiver repository is
+// encrypted in-memory; no real OAuth, database, Keychain, or upstream is used.
 func TestCoreOAuthTransferProductionClientHTTPIntegration(t *testing.T) {
 	node, err := exec.LookPath("node")
 	if err != nil {
@@ -140,11 +149,19 @@ func TestCoreOAuthTransferProductionClientHTTPIntegration(t *testing.T) {
 			encryptor, err := repository.NewAESEncryptor(cfg)
 			require.NoError(t, err)
 			store := &transferHTTPSealedRepo{rows: map[string]service.CoreOAuthSealedProfile{}}
-			protocol := &transferHTTPProtocol{grant: service.CoreOAuthGrant{AccessToken: "synthetic-http-access-original", RefreshToken: "synthetic-http-refresh-original",
-				IDToken: "synthetic-http-id-token", ClientID: "app_EMoamEEZ73f0CkXaXp7hrann", Subject: "http-subject", WorkspaceID: "http-workspace", Email: "synthetic-http@example.invalid", ExpiresAt: time.Now().UTC().Add(time.Hour)}}
+			expiresAt := time.Now().UTC().Add(time.Hour)
+			protocol := &transferHTTPProtocol{grant: service.CoreOAuthGrant{RefreshToken: "synthetic-http-refresh-original",
+				ClientID: "app_EMoamEEZ73f0CkXaXp7hrann", Subject: "http-subject", WorkspaceID: "http-workspace", Email: "synthetic-http@example.invalid", ExpiresAt: expiresAt}}
 			if provider == service.CoreOAuthProviderExcel {
 				protocol.grant.ClientID = "app_fnr0pYvVwwFDocDumLG3H2Bp"
 			}
+			protocol.grant.AccessToken = transferHTTPJWT(map[string]any{"sub": protocol.grant.Subject,
+				"exp": expiresAt.Unix(), "client_id": protocol.grant.ClientID,
+				"https://api.openai.com/auth":    map[string]string{"chatgpt_account_id": protocol.grant.WorkspaceID},
+				"https://api.openai.com/profile": map[string]string{"email": protocol.grant.Email}})
+			protocol.grant.IDToken = transferHTTPJWT(map[string]any{"sub": protocol.grant.Subject, "aud": protocol.grant.ClientID,
+				"client_id": protocol.grant.ClientID, "exp": expiresAt.Unix(), "email": protocol.grant.Email,
+				"https://api.openai.com/auth": map[string]string{"chatgpt_account_id": protocol.grant.WorkspaceID}})
 			newCore := func() *service.CoreOAuthService {
 				core, err := service.NewCoreOAuthService(store, encryptor, map[string]service.CoreOAuthProtocol{provider: protocol}, nil)
 				require.NoError(t, err)
@@ -243,6 +260,9 @@ func TestCoreOAuthTransferProductionClientHTTPIntegration(t *testing.T) {
 				Provider                                                      string                          `json:"provider"`
 				Status                                                        string                          `json:"status"`
 				Receipt                                                       service.CoreOAuthHandoffReceipt `json:"receipt"`
+				SourceCredentialAbsent                                        bool                            `json:"sourceCredentialAbsent"`
+				SourceRefreshRejectedAfterRestart                             bool                            `json:"sourceRefreshRejectedAfterRestart"`
+				SourcePrepareRejectedAfterRestart                             bool                            `json:"sourcePrepareRejectedAfterRestart"`
 				Preparations, Revocations, Seals, Accepts, Released, Requests int
 			}
 			if json.Unmarshal(output, &result) != nil {
@@ -255,6 +275,9 @@ func TestCoreOAuthTransferProductionClientHTTPIntegration(t *testing.T) {
 			require.Equal(t, 1, result.Seals)
 			require.Equal(t, 1, result.Accepts)
 			require.Equal(t, 1, result.Released)
+			require.True(t, result.SourceCredentialAbsent)
+			require.True(t, result.SourceRefreshRejectedAfterRestart)
+			require.True(t, result.SourcePrepareRejectedAfterRestart)
 			require.Equal(t, int64(1), accounts.reads.Load(), "accepted receipt replay must not reverify old authority")
 			if provider == service.CoreOAuthProviderExcel {
 				require.Equal(t, int64(1), proofReads.Load(), "receiver must verify the saved worker over HTTP")
@@ -263,7 +286,7 @@ func TestCoreOAuthTransferProductionClientHTTPIntegration(t *testing.T) {
 			core = newCore()
 			snapshot, err := core.CredentialSnapshot(context.Background(), profile.ProfileRef)
 			require.NoError(t, err)
-			require.Equal(t, g.AccessToken, snapshot.AccessToken)
+			require.True(t, g.AccessToken == snapshot.AccessToken, "received credential mismatch; token contents withheld")
 			refreshed, err := core.Refresh(context.Background(), profile.ProfileRef, 7)
 			require.NoError(t, err)
 			require.Equal(t, int64(8), refreshed.TokenRevision)
@@ -271,7 +294,7 @@ func TestCoreOAuthTransferProductionClientHTTPIntegration(t *testing.T) {
 			core = newCore()
 			snapshot, err = core.CredentialSnapshot(context.Background(), profile.ProfileRef)
 			require.NoError(t, err)
-			require.Equal(t, "synthetic-http-access-rotated", snapshot.AccessToken)
+			require.True(t, snapshot.AccessToken == "synthetic-http-access-rotated", "refreshed credential mismatch; token contents withheld")
 			accepted, err := core.GetHandoff(context.Background(), profile.ProfileRef, operation, 42)
 			require.NoError(t, err)
 			require.Equal(t, result.Receipt, *accepted)
