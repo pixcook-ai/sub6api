@@ -15,22 +15,36 @@
     <p v-if="editing && draft.token.trim()" class="input-hint">{{ t('admin.accounts.bps.newTokenPending') }}</p>
     <div>
       <label class="input-label">{{ t('admin.accounts.modelMapping') }}</label>
-      <ModelWhitelistSelector v-model="selectedModels" platform="openai" />
+      <ModelWhitelistSelector v-model="selectedModels" platform="openai" :candidate-models="upstreamModels" />
       <p class="input-hint">{{ t('admin.accounts.bps.modelsHint') }}</p>
     </div>
   </section>
 </template>
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { adminAPI } from '@/api/admin'
 import ModelWhitelistSelector from './ModelWhitelistSelector.vue'
 import type { BPSAccountDraft, BPSCredentialState } from '@/utils/openaiBps'
 import { useBPSCredentialState } from '@/composables/useBPSCredentialState'
 import BPSCredentialStatus from './BPSCredentialStatus.vue'
-const props = defineProps<{ editing?: boolean; expiresAt?: string; credentialState?: BPSCredentialState; accountStatus?: string; schedulable?: boolean }>()
+const props = defineProps<{ accountId?: number; editing?: boolean; expiresAt?: string; credentialState?: BPSCredentialState; accountStatus?: string; schedulable?: boolean }>()
 const { state: savedState } = useBPSCredentialState(() => ({ platform: 'openai_bps', credentials: { expires_at: props.expiresAt }, bps_credential_state: props.credentialState, status: props.accountStatus, schedulable: props.schedulable }))
 const draft = defineModel<BPSAccountDraft>({ required: true })
 const { t } = useI18n()
+// Models the BPS upstream says this account may use; empty until loaded or when unavailable.
+const upstreamModels = ref<string[]>([])
+const loadUpstreamModels = async () => {
+  if (!props.accountId) return
+  try {
+    const models = await adminAPI.accounts.getAvailableModels(props.accountId)
+    upstreamModels.value = models.map(model => model.id).filter(Boolean)
+  } catch {
+    upstreamModels.value = []
+  }
+}
+onMounted(loadUpstreamModels)
+watch(() => props.accountId, loadUpstreamModels)
 // Same selector as the reference repo; each chosen model maps to itself unless a mapping already exists.
 const selectedModels = computed<string[]>({
   get: () => draft.value.models.map(row => row.from).filter(Boolean),

@@ -2863,11 +2863,35 @@ func (h *AccountHandler) GetAvailableModels(c *gin.Context) {
 	}
 
 	if account.IsOpenAIBPS() {
-		ids := service.OpenAIBPSDefaultModels()
-		if mapping := account.GetModelMapping(); len(mapping) > 0 {
-			ids = make([]string, 0, len(mapping))
-			for id := range mapping {
-				ids = append(ids, id)
+		var ids []string
+		fetched := false
+		// The BPS upstream catalog is authoritative; mapping entries only add aliases
+		// whose target the upstream allows.
+		if h.codexTicketGateway != nil {
+			if upstream, fetchErr := h.codexTicketGateway.FetchOpenAIBPSModelIDs(c.Request.Context(), account); fetchErr == nil {
+				fetched = true
+				allowed := make(map[string]struct{}, len(upstream))
+				for _, id := range upstream {
+					allowed[id] = struct{}{}
+				}
+				ids = append(ids, upstream...)
+				for alias, target := range account.GetModelMapping() {
+					if _, ok := allowed[target]; !ok {
+						continue
+					}
+					if _, dup := allowed[alias]; !dup {
+						ids = append(ids, alias)
+					}
+				}
+			}
+		}
+		if !fetched {
+			ids = service.OpenAIBPSDefaultModels()
+			if mapping := account.GetModelMapping(); len(mapping) > 0 {
+				ids = make([]string, 0, len(mapping))
+				for id := range mapping {
+					ids = append(ids, id)
+				}
 			}
 		}
 		sort.Strings(ids)

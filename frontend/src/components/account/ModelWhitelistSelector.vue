@@ -162,6 +162,8 @@ const props = defineProps<{
   modelMappings?: { from: string; to: string }[]
   platform?: string
   platforms?: string[]
+  /** When set, these (upstream-discovered) models replace the local catalog. */
+  candidateModels?: string[]
   accountId?: number
   syncCredentials?: {
     platform: string
@@ -225,6 +227,9 @@ const canSyncUpstream = computed(() => {
 })
 
 const availableOptions = computed(() => {
+  if (props.candidateModels && props.candidateModels.length > 0) {
+    return props.candidateModels.map(model => ({ value: model, label: model }))
+  }
   if (normalizedPlatforms.value.length === 0) {
     return allModels
   }
@@ -290,6 +295,13 @@ const handleEnter = () => {
 
 const fillRelated = () => {
   const newModels = [...props.modelValue]
+  if (props.candidateModels && props.candidateModels.length > 0) {
+    for (const model of props.candidateModels) {
+      if (!newModels.includes(model)) newModels.push(model)
+    }
+    emit('update:modelValue', newModels)
+    return
+  }
   for (const platform of normalizedPlatforms.value) {
     for (const model of getModelsByPlatform(platform)) {
       if (!newModels.includes(model)) {
