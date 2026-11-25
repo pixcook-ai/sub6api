@@ -52,7 +52,9 @@ func TestOpenAIBPSAvailableModels_IntersectsMappingWithUpstreamCatalog(t *testin
 
 	ids, ok := svc.OpenAIBPSAvailableModels(context.Background(), &groupID)
 	require.True(t, ok)
-	require.Equal(t, []string{"alias"}, ids)
+	// The upstream catalog is authoritative; the mapping only adds aliases whose target upstream allows.
+	// "gone" maps to a model absent from the catalog, so it is not advertised.
+	require.Equal(t, []string{"alias", "gpt-5.6-sol", "gpt-6-astra"}, ids)
 	require.Equal(t, http.MethodGet, upstream.method)
 	require.Equal(t, "/basispoints/api/responses/access?include_models=true", upstream.uri)
 }

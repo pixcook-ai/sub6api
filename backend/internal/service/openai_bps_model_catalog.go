@@ -36,18 +36,14 @@ func (s *OpenAIGatewayService) OpenAIBPSAvailableModels(ctx context.Context, gro
 			continue
 		}
 		queried = true
-		mapping := acc.GetModelMapping()
-		if len(mapping) == 0 {
-			for _, id := range ids {
-				set[id] = struct{}{}
-			}
-			continue
-		}
+		// The upstream catalog is authoritative. Mapping entries only add aliases
+		// whose target the upstream allows; they never narrow the catalog.
 		allowed := make(map[string]struct{}, len(ids))
 		for _, id := range ids {
+			set[id] = struct{}{}
 			allowed[id] = struct{}{}
 		}
-		for client, upstream := range mapping {
+		for client, upstream := range acc.GetModelMapping() {
 			if _, ok := allowed[upstream]; ok {
 				set[client] = struct{}{}
 			}

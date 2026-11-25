@@ -139,7 +139,7 @@ func TestOpenAIBPSProtocolAndHeaders(t *testing.T) {
 	require.Equal(t, "workspace-1", req.Header.Get("chatgpt-account-id"))
 	require.Equal(t, "workspace-1", req.Header.Get("x-openai-account-id"))
 	require.Equal(t, "chatgpt", req.Header.Get("x-basispoints-auth-mode"))
-	for _, bad := range []string{`{"model":"gpt-6-astra","input":"hi","reasoning":{"effort":"max"}}`, `{"model":"gpt-6-astra","input":"hi","previous_response_id":"resp_1"}`, `{"model":"missing","input":"hi"}`, `{"model":"gpt-6-astra","input":[],"tools":[{"type":"web_search"}]}`} {
+	for _, bad := range []string{`{"model":"gpt-6-astra","input":"hi","reasoning":{"effort":"max"}}`, `{"model":"gpt-6-astra","input":"hi","previous_response_id":"resp_1"}`, `{"input":"hi"}`, `{"model":"gpt-6-astra","input":[],"tools":[{"type":"web_search"}]}`} {
 		_, err = s.prepareOpenAIBPS(c.Request.Context(), c, a, []byte(bad))
 		require.Error(t, err, bad)
 	}
