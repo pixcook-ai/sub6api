@@ -468,6 +468,7 @@ func (s *OpenAIGatewayService) forwardOpenAIBPS(ctx context.Context, c *gin.Cont
 		}
 		if response, ok := payload["response"].(map[string]any); ok {
 			response["model"] = r.Source["model"]
+			delete(response, "instructions")
 			response["output"] = []any{}
 			if r.Structured != nil {
 				delete(response, "output_text")

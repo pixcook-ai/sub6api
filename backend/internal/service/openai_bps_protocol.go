@@ -513,6 +513,8 @@ func bpsConvertTool(native map[string]any, r *bpsRequest) (map[string]any, error
 }
 
 func (s *OpenAIGatewayService) bpsTransformResponse(ctx context.Context, account *Account, r *bpsRequest, response map[string]any) (map[string]any, error) {
+	// BPS echoes its internal Excel-agent system prompt; it must never reach downstream clients.
+	delete(response, "instructions")
 	output, ok := response["output"].([]any)
 	if !ok {
 		return nil, &bpsError{502, "bps_invalid_response", "BPS response has no output array"}
