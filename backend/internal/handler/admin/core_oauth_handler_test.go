@@ -46,7 +46,7 @@ func (s *coreOAuthRuntimeShellAdminStub) ListCoreOAuthRuntimeShells(_ context.Co
 	if groupID != 2 {
 		return nil, service.ErrCoreOAuthInvalidInput
 	}
-	return []service.Account{{ID: 17, Name: service.CoreOAuthProviderExcel, Platform: service.PlatformOpenAI, Schedulable: false, Status: service.StatusActive, Credentials: map[string]any{"api_key": "must-not-escape"}, Extra: map[string]any{"must_not_escape": "private"}}}, nil
+	return []service.Account{{ID: 17, Name: "Sub6 Excel Runtime", Platform: service.PlatformOpenAI, Type: service.AccountTypeAPIKey, GroupIDs: []int64{2}, Schedulable: false, Status: service.StatusActive, Credentials: map[string]any{"api_key": "must-not-escape"}, Extra: map[string]any{service.CoreOAuthRuntimeShellExtraKey: map[string]any{"provider": service.CoreOAuthProviderExcel, "group_id": int64(2)}, "must_not_escape": "private"}}}, nil
 }
 
 func TestCoreRuntimeShellRecoveryReturnsOnlySafePausedSummary(t *testing.T) {
@@ -60,7 +60,7 @@ func TestCoreRuntimeShellRecoveryReturnsOnlySafePausedSummary(t *testing.T) {
 	c.Set(string(middleware.ContextKeyUserRole), "admin")
 	h.ListCoreRuntimeShells(c)
 	require.Equal(t, http.StatusOK, w.Code)
-	require.JSONEq(t, `{"code":0,"message":"success","data":{"accounts":[{"id":17,"provider":"bps_excel","name":"bps_excel","schedulable":false,"status":"active"}]}}`, w.Body.String())
+	require.JSONEq(t, `{"code":0,"message":"success","data":{"accounts":[{"id":17,"provider":"bps_excel","name":"Sub6 Excel Runtime","schedulable":false,"status":"active"}]}}`, w.Body.String())
 	require.NotContains(t, w.Body.String(), "must-not-escape")
 	require.Equal(t, "no-store", w.Header().Get("Cache-Control"))
 }
