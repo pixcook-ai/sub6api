@@ -181,6 +181,8 @@ describe('核心双 OAuth 授权管理', () => {
     expect(wrapper.get('[data-field="install-group"]').exists()).toBe(true)
     expect(wrapper.get('[data-field="install-bps-base-url"]').exists()).toBe(true)
     expect(wrapper.get('[data-field="install-bps-api-key"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('还缺少 Codex 授权')
+    expect(wrapper.get('[data-action="create-runtime-shells"]').attributes('disabled')).toBeDefined()
   })
 
   it('将完整回调 URL 与本次事务发送，成功后清除敏感输入', async () => {
