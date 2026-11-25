@@ -119,13 +119,12 @@
           <form v-if="showInstall" id="core-runtime-install" data-form="install" class="space-y-4" @submit.prevent="installRuntime">
             <div class="space-y-2 rounded-lg bg-gray-50 p-4 text-sm text-gray-600 dark:bg-dark-800 dark:text-gray-300">
               <h4 class="font-medium text-gray-900 dark:text-white">第一步：创建暂停运行账号</h4>
-              <p>两个账号创建成功后会立即显示在账号管理中；它们不会参与调度，直到 worker 安装成功。</p>
+              <p>运行账号创建后会立即显示在账号管理中，并保持暂停调度；只有 worker 安装成功后才会参与调度。</p>
               <ol class="list-decimal space-y-1 pl-5">
                 <li>Excel：提供 worker inference base_url 和 API key。</li>
                 <li>Codex：不需要填写 OAuth token。</li>
               </ol>
-              <p>开始创建前，需要 Codex 与 Excel 两份有效授权，并选择同一个 OpenAI 分组。</p>
-              <p v-if="!selectedProfile('codex')?.authorized" role="alert" class="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200">还缺少 Codex 授权。请先在上方完成 Codex 授权，再返回这里创建运行账号。</p>
+              <p>创建 Excel 账号需要 Excel 授权、worker inference 配置和 OpenAI 分组。完整安装和新会话路由还需要 Codex 授权及 Codex 账号。</p>
             </div>
             <div class="grid gap-4 sm:grid-cols-2">
               <div class="space-y-1"><label for="install-group" class="block text-sm font-medium text-gray-700 dark:text-gray-200">OpenAI 分组 ID</label><input id="install-group" v-model.number="installGroup" data-field="install-group" :class="fieldClass" type="number" min="1" step="1" :disabled="mutationBusy || !!installBPSAccount"></div>
@@ -133,9 +132,11 @@
               <div v-if="!installBPSAccount" class="space-y-1"><label for="install-bps-api-key" class="block text-sm font-medium text-gray-700 dark:text-gray-200">Excel inference API key</label><input id="install-bps-api-key" v-model="installBPSAPIKey" data-field="install-bps-api-key" :class="fieldClass" type="password" maxlength="4096" autocomplete="new-password" :disabled="mutationBusy"></div>
               <div class="flex flex-wrap items-center gap-2 sm:col-span-2">
                 <span v-if="shellRecoveryLoading" role="status" class="text-sm text-gray-500 dark:text-gray-400">正在查找本分组的暂停运行账号…</span>
-                <button v-else-if="!installCodexAccount" type="button" class="btn btn-primary" data-action="create-runtime-shells" :disabled="!canCreateRuntimeShells || !!shellRecoveryError || !selectedProfile('codex')?.authorized" @click="createRuntimeShells">{{ installBPSAccount ? '重试创建 Codex 账号' : '创建两个暂停账号' }}</button>
+                <button v-else-if="!installBPSAccount" type="button" class="btn btn-primary" data-action="create-runtime-shells" :disabled="!canCreateRuntimeShells || !!shellRecoveryError || !selectedProfile('bps_excel')?.authorized" @click="createRuntimeShells">创建 Excel 暂停账号</button>
+                <button v-else-if="!installCodexAccount && selectedProfile('codex')?.authorized" type="button" class="btn btn-primary" data-action="create-runtime-shells" :disabled="!canCreateRuntimeShells || !!shellRecoveryError" @click="createRuntimeShells">创建 Codex 暂停账号</button>
+                <span v-else-if="installBPSAccount && !installCodexAccount" role="status" class="text-sm text-gray-600 dark:text-gray-300">Excel 暂停账号 #{{ installBPSAccount }} 已就绪。授权 Codex 后可在这里继续创建另一个暂停账号。</span>
                 <span v-if="installBPSAccount && installCodexAccount" role="status" class="text-sm text-gray-600 dark:text-gray-300">两个暂停账号已创建，Excel #{{ installBPSAccount }}、Codex #{{ installCodexAccount }}。<a class="font-medium text-primary-600 hover:underline dark:text-primary-400" href="/admin/accounts">前往账号管理查看</a></span>
-                <span v-else-if="installBPSAccount" role="status" class="text-sm text-gray-600 dark:text-gray-300">Excel 暂停账号 #{{ installBPSAccount }} 已创建并显示在账号管理中。</span>
+                <span v-else-if="installBPSAccount" role="status" class="text-sm text-gray-600 dark:text-gray-300">Excel 暂停账号 #{{ installBPSAccount }} 已创建并显示在账号管理中。<a class="ml-1 font-medium text-primary-600 hover:underline dark:text-primary-400" href="/admin/accounts">前往查看</a>{{ selectedProfile('codex')?.authorized ? '；可继续创建 Codex 账号。' : '；授权 Codex 后可继续完整安装。' }}</span>
               </div>
               <div v-if="runtimeShellCreated" class="space-y-2 border-t border-gray-200 pt-4 dark:border-dark-700 sm:col-span-2">
                 <h4 class="font-medium text-gray-900 dark:text-white">第二步：安装 worker 并配置新会话路由</h4>
@@ -573,7 +574,7 @@ function validControlURL(value: string) {
     return ['https:', 'http:'].includes(url.protocol) && !url.username && !url.password && !url.search && !url.hash
   } catch { return false }
 }
-const canCreateRuntimeShells = computed(() => !mutationBusy.value && positiveID(installGroup.value) && !installCodexAccount.value &&
+const canCreateRuntimeShells = computed(() => !mutationBusy.value && positiveID(installGroup.value) &&
   (!!installBPSAccount.value || (!!installBPSBaseURL.value.trim() && !!installBPSAPIKey.value.trim())))
 async function createRuntimeShells() {
   if (!canCreateRuntimeShells.value) return
@@ -590,9 +591,13 @@ async function createRuntimeShells() {
       installBPSBaseURL.value = ''
       installBPSAccount.value = excel.id
     }
-    const codex = await stepUp.run(() => coreOAuthAPI.createRuntimeShell({ provider: 'codex', group_id: groupID }))
-    installCodexAccount.value = codex.id
-    switchNotice.value = '两个运行账号已创建并保持暂停调度。'
+    if (!installCodexAccount.value && selectedProfile('codex')?.authorized) {
+      const codex = await stepUp.run(() => coreOAuthAPI.createRuntimeShell({ provider: 'codex', group_id: groupID }))
+      installCodexAccount.value = codex.id
+    }
+    switchNotice.value = runtimeShellCreated.value
+      ? '两个运行账号已创建并保持暂停调度。'
+      : 'Excel 暂停账号已创建并显示在账号管理中。'
   } catch (error) {
     if (!isStepUpCancelled(error)) switchError.value = safeError(error)
   } finally {
@@ -618,6 +623,7 @@ async function recoverRuntimeShells(groupID: number, requestID: number) {
     installBPSAccount.value = byProvider.bps_excel[0]?.id || ''
     installCodexAccount.value = byProvider.codex[0]?.id || ''
     if (runtimeShellCreated.value) switchNotice.value = '已找回本分组中未安装的暂停运行账号，可以继续 worker 安装。'
+    else if (installBPSAccount.value) switchNotice.value = '已找回本分组中的 Excel 暂停账号；可前往账号管理查看，或在 Codex 授权后继续安装。'
   } catch (error) {
     if (requestID === shellRecoveryRequest) shellRecoveryError.value = safeError(error)
   } finally {

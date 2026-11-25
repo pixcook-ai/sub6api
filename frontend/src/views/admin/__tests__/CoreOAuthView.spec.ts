@@ -181,8 +181,9 @@ describe('核心双 OAuth 授权管理', () => {
     expect(wrapper.get('[data-field="install-group"]').exists()).toBe(true)
     expect(wrapper.get('[data-field="install-bps-base-url"]').exists()).toBe(true)
     expect(wrapper.get('[data-field="install-bps-api-key"]').exists()).toBe(true)
-    expect(wrapper.text()).toContain('还缺少 Codex 授权')
+    expect(wrapper.text()).toContain('创建 Excel 账号需要 Excel 授权')
     expect(wrapper.get('[data-action="create-runtime-shells"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.find('[data-action="install-runtime"]').exists()).toBe(false)
   })
 
   it('将完整回调 URL 与本次事务发送，成功后清除敏感输入', async () => {
@@ -581,11 +582,36 @@ describe('核心双 OAuth 授权管理', () => {
     expect(wrapper.text()).toContain('核心运行时已安装')
   })
 
-  it('首次安装缺少双授权时拒绝操作，不创建账号或隐式接管', async () => {
+  it('首次安装缺少双授权时不显示安装动作', async () => {
     const wrapper = mountView()
     await flushPromises()
     await wrapper.get('[data-action="show-install"]').trigger('click')
-    expect(wrapper.text()).toContain('Codex 与 Excel 两份有效授权')
+    expect(wrapper.find('[data-action="install-runtime"]').exists()).toBe(false)
+    expect(api.installCoreRuntime).not.toHaveBeenCalled()
+  })
+
+  it('仅完成 Excel 授权也可创建暂停账号并从账号列表入口查看', async () => {
+    api.listProfiles.mockResolvedValue([profile({
+      provider: 'bps_excel', profile_ref: 'excel-profile', name: 'Excel 授权',
+      status: 'authorized', authorized: true,
+    })])
+    const wrapper = mountView()
+    await flushPromises()
+    await wrapper.get('[data-action="continue-runtime-setup"]').trigger('click')
+    await wrapper.get('[data-field="install-group"]').setValue('1')
+    await wrapper.get('[data-field="install-bps-base-url"]').setValue('https://worker.example.invalid/v1')
+    await wrapper.get('[data-field="install-bps-api-key"]').setValue('inference-key-test-only')
+    await flushPromises()
+    await wrapper.get('[data-action="create-runtime-shells"]').trigger('click')
+    await flushPromises()
+
+    expect(api.createRuntimeShell).toHaveBeenCalledTimes(1)
+    expect(api.createRuntimeShell).toHaveBeenCalledWith({
+      provider: 'bps_excel', group_id: 1,
+      base_url: 'https://worker.example.invalid/v1', api_key: 'inference-key-test-only',
+    })
+    expect(wrapper.text()).toContain('Excel 暂停账号 #11 已创建并显示在账号管理中')
+    expect(wrapper.find('a[href="/admin/accounts"]').exists()).toBe(true)
     expect(wrapper.find('[data-action="install-runtime"]').exists()).toBe(false)
     expect(api.installCoreRuntime).not.toHaveBeenCalled()
   })
@@ -682,6 +708,26 @@ describe('核心双 OAuth 授权管理', () => {
     expect(wrapper.text()).toContain('两个暂停账号已创建，Excel #11、Codex #12')
     expect(wrapper.find('[data-action="create-runtime-shells"]').exists()).toBe(false)
     expect(wrapper.get('[data-field="install-backend"]').exists()).toBe(true)
+    expect(api.createRuntimeShell).not.toHaveBeenCalled()
+  })
+
+  it('页面刷新后恢复仅创建的 Excel 暂停账号并保留账号列表入口', async () => {
+    api.listProfiles.mockResolvedValue([profile({
+      provider: 'bps_excel', profile_ref: 'excel-profile', name: 'Excel 授权',
+      status: 'authorized', authorized: true,
+    })])
+    api.listRuntimeShells.mockResolvedValue([
+      { id: 11, provider: 'bps_excel', name: 'Sub6 Excel Runtime', schedulable: false, status: 'active' },
+    ])
+    const wrapper = mountView()
+    await flushPromises()
+    await wrapper.get('[data-action="continue-runtime-setup"]').trigger('click')
+    await wrapper.get('[data-field="install-group"]').setValue('2')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Excel 暂停账号 #11 已创建并显示在账号管理中')
+    expect(wrapper.find('a[href="/admin/accounts"]').exists()).toBe(true)
+    expect(wrapper.find('[data-action="create-runtime-shells"]').exists()).toBe(false)
     expect(api.createRuntimeShell).not.toHaveBeenCalled()
   })
 
