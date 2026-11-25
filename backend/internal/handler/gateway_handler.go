@@ -1194,6 +1194,18 @@ func (h *GatewayHandler) Models(c *gin.Context) {
 		return
 	}
 
+	// BPS: ask the upstream which models the group's accounts may actually use.
+	if platform == service.PlatformOpenAIBPS && h.openAIGatewayService != nil {
+		if ids, ok := h.openAIGatewayService.OpenAIBPSAvailableModels(c.Request.Context(), groupID); ok {
+			if apiKey != nil && apiKey.Group != nil && apiKey.Group.ModelAllowlistEnabled() {
+				writeAllowlistedModelsList(c, platform, apiKey.Group.ModelAllowlist.FilterForListing(ids))
+				return
+			}
+			writeModelsList(c, platform, ids)
+			return
+		}
+	}
+
 	// Get available models from account configurations for the selected group platform.
 	availableModels := h.gatewayService.GetAvailableModels(c.Request.Context(), groupID, platform)
 	if apiKey != nil && apiKey.Group != nil && apiKey.Group.ModelAllowlistEnabled() {
