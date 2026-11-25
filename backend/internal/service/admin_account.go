@@ -84,7 +84,7 @@ func (s *adminServiceImpl) ListCoreOAuthRuntimeShells(ctx context.Context, group
 		}
 		for i := range accounts {
 			account := &accounts[i]
-			provider, markerErr := CoreOAuthRuntimeShellProvider(account)
+			_, markerErr := CoreOAuthRuntimeShellProvider(account)
 			if markerErr != nil || account.Schedulable || account.ParentAccountID != nil {
 				continue
 			}
@@ -92,7 +92,6 @@ func (s *adminServiceImpl) ListCoreOAuthRuntimeShells(ctx context.Context, group
 			if int64(ParseExtraInt(marker["group_id"])) != groupID {
 				continue
 			}
-			account.Name = provider
 			result = append(result, *account)
 		}
 		if page == nil || int64(params.Offset()+len(accounts)) >= page.Total || len(accounts) == 0 {
