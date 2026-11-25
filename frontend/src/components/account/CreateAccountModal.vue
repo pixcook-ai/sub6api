@@ -441,6 +441,13 @@
           </button>
 
         </div>
+        <label v-if="accountCategory === 'oauth-based'" class="mt-3 flex items-start gap-2 text-sm text-gray-700 dark:text-gray-200" data-testid="openai-excel-oauth">
+          <input v-model="openaiExcelOAuth" type="checkbox" class="mt-0.5 rounded border-gray-300 text-primary-600 focus:ring-primary-500 dark:border-dark-500" />
+          <span>
+            <span class="block font-medium">{{ t('admin.accounts.oauth.openai.excelTypeLabel') }}</span>
+            <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.accounts.oauth.openai.excelTypeDesc') }}</span>
+          </span>
+        </label>
       </div>
 
       <!-- Account Type Selection (Grok) -->
@@ -3563,7 +3570,7 @@
         <GroupSelector
           v-model="form.group_ids"
           :groups="groups"
-          :platform="form.platform"
+          :platform="isOpenAIBPSOAuth ? 'openai_bps' : form.platform"
           :mixed-scheduling="mixedScheduling"
           data-tour="account-form-groups"
         />
@@ -3595,6 +3602,7 @@
         :show-email-password-option="false"
         :show-manual-option="true"
         :initial-input-method="'manual'"
+        :excel-oauth="isOpenAIBPSOAuth"
         :platform="form.platform"
         :show-project-id="geminiOAuthType === 'code_assist'"
         @generate-url="handleGenerateUrl"
@@ -3961,7 +3969,7 @@ import {
   type AddMethod,
   type AuthInputMethod
 } from '@/composables/useAccountOAuth'
-import { useOpenAIOAuth } from '@/composables/useOpenAIOAuth'
+import { OPENAI_EXCEL_OAUTH_CLIENT_ID, useOpenAIOAuth } from '@/composables/useOpenAIOAuth'
 import { useGeminiOAuth } from '@/composables/useGeminiOAuth'
 import { useAntigravityOAuth } from '@/composables/useAntigravityOAuth'
 import { useGrokOAuth } from '@/composables/useGrokOAuth'
@@ -4155,6 +4163,8 @@ const hideAccountLongContextBilling = computed(() => {
 // OAuth composables
 const oauth = useAccountOAuth() // For Anthropic OAuth
 const openaiOAuth = useOpenAIOAuth() // For OpenAI OAuth
+const openaiExcelOAuth = ref(false)
+const isOpenAIBPSOAuth = computed(() => form.platform === 'openai' && accountCategory.value === 'oauth-based' && openaiExcelOAuth.value)
 const geminiOAuth = useGeminiOAuth() // For Gemini OAuth
 const antigravityOAuth = useAntigravityOAuth() // For Antigravity OAuth
 const grokOAuth = useGrokOAuth() // For Grok OAuth
@@ -6033,7 +6043,7 @@ const goBackToBasicInfo = () => {
 
 const handleGenerateUrl = async () => {
   if (form.platform === 'openai') {
-    await openaiOAuth.generateAuthUrl(form.proxy_id)
+    await openaiOAuth.generateAuthUrl(form.proxy_id, undefined, isOpenAIBPSOAuth.value ? 'excel' : 'codex')
   } else if (form.platform === 'gemini') {
     await geminiOAuth.generateAuthUrl(
       form.proxy_id,
@@ -6449,6 +6459,9 @@ const handleOpenAIExchange = async (authCode: string) => {
     )
     if (!tokenInfo) return
 
+    if (isOpenAIBPSOAuth.value && tokenInfo.client_id !== OPENAI_EXCEL_OAUTH_CLIENT_ID) {
+      throw new Error(t('admin.accounts.oauth.openai.excelSessionMismatch'))
+    }
     const credentials = oauthClient.buildCredentials(tokenInfo)
     const oauthExtra = oauthClient.buildExtraInfo(tokenInfo) as Record<string, unknown> | undefined
     const extra = buildOpenAIExtra(oauthExtra)
@@ -6477,7 +6490,7 @@ const handleOpenAIExchange = async (authCode: string) => {
       await adminAPI.accounts.create({
         name: form.name,
         notes: form.notes,
-        platform: 'openai',
+        platform: isOpenAIBPSOAuth.value ? 'openai_bps' : 'openai',
         type: 'oauth',
         credentials,
         extra: withUpstreamRequestIdHeader(extra),

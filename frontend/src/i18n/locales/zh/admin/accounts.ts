@@ -1432,6 +1432,13 @@ export default {
           authCodePlaceholder:
             '方式1：复制完整的链接\n(http://localhost:xxx/auth/callback?code=...)\n方式2：仅复制 code 参数的值',
           authCodeHint: '您可以直接复制整个链接或仅复制 code 参数值，系统会自动识别',
+          excelTitle: 'Excel / BPS 账户授权',
+          excelTypeLabel: 'Excel / BPS 授权',
+          excelTypeDesc: '使用 Excel 官方加载项的独立授权，与 Codex 授权互不通用。',
+          excelSessionMismatch: '授权返回的 client 不是 Excel 官方 client，请重新生成授权链接。',
+          excelLoginHint: '使用 Excel 官方加载项授权协议登录。授权完成后，浏览器会跳转到 bps.openai.com 的官方回调页面。',
+          excelCodeHint: '请将浏览器地址栏中最终的完整回调 URL（https://bps.openai.com/.../auth/callback?code=...&state=...）粘贴到下方，系统会自动解析 code 和 state。',
+          excelCodePlaceholder: '粘贴完整的官方回调 URL\n(https://bps.openai.com/basispoints/extension/.../auth/callback?code=...&state=...)',
           failedToGenerateUrl: '生成 OpenAI 授权链接失败',
           failedToExchangeCode: 'OpenAI 授权码兑换失败',
           failedToValidateRT: '验证 Refresh Token 失败',

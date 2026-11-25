@@ -44,7 +44,7 @@ type OpenAIAuthURLResult struct {
 }
 
 // GenerateAuthURL generates an OpenAI OAuth authorization URL
-func (s *OpenAIOAuthService) GenerateAuthURL(ctx context.Context, proxyID *int64, redirectURI, platform string) (*OpenAIAuthURLResult, error) {
+func (s *OpenAIOAuthService) GenerateAuthURL(ctx context.Context, proxyID *int64, redirectURI, platform, oauthClient string) (*OpenAIAuthURLResult, error) {
 	// Generate PKCE values
 	state, err := openai.GenerateState()
 	if err != nil {
@@ -82,6 +82,14 @@ func (s *OpenAIOAuthService) GenerateAuthURL(ctx context.Context, proxyID *int64
 	}
 	normalizedPlatform := normalizeOpenAIOAuthPlatform(platform)
 	clientID, _ := openai.OAuthClientConfigByPlatform(normalizedPlatform)
+	excel := strings.EqualFold(strings.TrimSpace(oauthClient), "excel")
+	if excel {
+		// Excel uses its own client and the registered official callback; the
+		// caller cannot override either.
+		clientID = openai.ExcelClientID
+		redirectURI = openai.ExcelRedirectURI
+		state = "bps." + state + ".PC"
+	}
 
 	// Store session
 	session := &openai.OAuthSession{
@@ -96,6 +104,9 @@ func (s *OpenAIOAuthService) GenerateAuthURL(ctx context.Context, proxyID *int64
 
 	// Build authorization URL
 	authURL := openai.BuildAuthorizationURLForPlatform(state, codeChallenge, redirectURI, normalizedPlatform)
+	if excel {
+		authURL = openai.BuildExcelAuthorizationURL(state, codeChallenge)
+	}
 
 	return &OpenAIAuthURLResult{
 		AuthURL:   authURL,
@@ -160,6 +171,9 @@ func (s *OpenAIOAuthService) ExchangeCode(ctx context.Context, input *OpenAIExch
 	// Use redirect URI from session or input
 	redirectURI := session.RedirectURI
 	if input.RedirectURI != "" {
+		if session.ClientID == openai.ExcelClientID && input.RedirectURI != session.RedirectURI {
+			return nil, infraerrors.New(http.StatusBadRequest, "OPENAI_OAUTH_INVALID_REDIRECT", "callback URI does not match the OAuth session")
+		}
 		redirectURI = input.RedirectURI
 	}
 	clientID := strings.TrimSpace(session.ClientID)

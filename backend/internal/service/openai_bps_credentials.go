@@ -8,6 +8,7 @@ import (
 	"time"
 
 	infraerrors "github.com/MACOS-DO/sub4api/internal/pkg/errors"
+	"github.com/MACOS-DO/sub4api/internal/pkg/openai"
 )
 
 const OpenAIBPSResponsesURL = "https://bps.openai.com/basispoints/api/responses"
@@ -60,7 +61,11 @@ func NormalizeOpenAIBPSCredentials(accountType string, incoming, existing map[st
 		return nil, infraerrors.BadRequest("BPS_ACCOUNT_ID_REQUIRED", "chatgpt_account_id is required when it cannot be extracted from the token")
 	}
 	creds["chatgpt_account_id"] = id
-	delete(creds, "refresh_token")
+	// Only the official Excel client grant is renewable; a pasted access token has no refresh authority.
+	if strings.TrimSpace(stringValue(creds["client_id"])) != openai.ExcelClientID || strings.TrimSpace(stringValue(creds["refresh_token"])) == "" {
+		delete(creds, "refresh_token")
+		delete(creds, "client_id")
+	}
 	delete(creds, "base_url")
 	delete(creds, "header_overrides")
 	if _, ok := creds["model_mapping"]; !ok {

@@ -1336,6 +1336,13 @@ export default {
             'Option 1: Copy the complete URL\n(http://localhost:xxx/auth/callback?code=...)\nOption 2: Copy only the code parameter value',
           authCodeHint:
             'You can copy the entire URL or just the code parameter value, the system will auto-detect',
+          excelTitle: 'Excel / BPS Account Authorization',
+          excelTypeLabel: 'Excel / BPS authorization',
+          excelTypeDesc: 'Uses the official Excel add-in authorization, which is independent from Codex authorization.',
+          excelSessionMismatch: 'The authorization returned a client that is not the official Excel client. Please regenerate the authorization URL.',
+          excelLoginHint: 'Sign in with the official Excel add-in authorization protocol. After authorization the browser is redirected to the official callback page on bps.openai.com.',
+          excelCodeHint: 'Paste the final full callback URL from the browser address bar (https://bps.openai.com/.../auth/callback?code=...&state=...) below. The code and state are extracted automatically.',
+          excelCodePlaceholder: 'Paste the full official callback URL\n(https://bps.openai.com/basispoints/extension/.../auth/callback?code=...&state=...)',
           failedToGenerateUrl: 'Failed to generate OpenAI auth URL',
           failedToExchangeCode: 'Failed to exchange OpenAI auth code',
           failedToValidateRT: 'Failed to validate refresh token',

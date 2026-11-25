@@ -135,6 +135,7 @@ func NewTokenRefreshService(
 	s.registrations = []tokenRefreshRegistration{
 		{platform: PlatformAnthropic, refresher: claudeRefresher, executor: claudeRefresher},
 		{platform: PlatformOpenAI, refresher: openAIRefresher, executor: openAIRefresher},
+		{platform: PlatformOpenAIBPS, refresher: NewOpenAIBPSTokenRefresher(openaiOAuthService), executor: NewOpenAIBPSTokenRefresher(openaiOAuthService)},
 		{platform: PlatformGemini, refresher: geminiRefresher, executor: geminiRefresher},
 		{platform: PlatformAntigravity, refresher: agRefresher, executor: agRefresher},
 		{platform: PlatformGrok, refresher: grokRefresher, executor: grokRefresher},
