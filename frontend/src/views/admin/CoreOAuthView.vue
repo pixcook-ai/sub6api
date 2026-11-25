@@ -401,6 +401,8 @@ async function complete(provider: CoreOAuthProvider) {
     authorizationLinks[provider] = ''
     if (!authorizationFeedback(provider) && result.authorized && result.status === 'authorized' && (!result.attempt || result.attempt.status === 'consumed')) {
       notices[provider] = '已完成本次授权。'
+      // Keep the second phase visible so the operator can create the schedulable runtime accounts.
+      showInstall.value = true
     } else if (!authorizationFeedback(provider)) {
       errors[provider] = authorizationUncertainMessage
       needsReload[provider] = true
