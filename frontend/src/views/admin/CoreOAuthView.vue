@@ -126,6 +126,7 @@
                 <li>Codex：不需要填写 OAuth token。</li>
               </ol>
               <p>开始创建前，需要 Codex 与 Excel 两份有效授权，并选择同一个 OpenAI 分组。</p>
+              <p v-if="!selectedProfile('codex')?.authorized" role="alert" class="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200">还缺少 Codex 授权。请先在上方完成 Codex 授权，再返回这里创建运行账号。</p>
             </div>
             <div class="grid gap-4 sm:grid-cols-2">
               <div class="space-y-1"><label for="install-group" class="block text-sm font-medium text-gray-700 dark:text-gray-200">OpenAI 分组 ID</label><input id="install-group" v-model.number="installGroup" data-field="install-group" :class="fieldClass" type="number" min="1" step="1" :disabled="mutationBusy || !!installBPSAccount"></div>
@@ -133,7 +134,7 @@
               <div v-if="!installBPSAccount" class="space-y-1"><label for="install-bps-api-key" class="block text-sm font-medium text-gray-700 dark:text-gray-200">Excel inference API key</label><input id="install-bps-api-key" v-model="installBPSAPIKey" data-field="install-bps-api-key" :class="fieldClass" type="password" maxlength="4096" autocomplete="new-password" :disabled="mutationBusy"></div>
               <div class="flex flex-wrap items-center gap-2 sm:col-span-2">
                 <span v-if="shellRecoveryLoading" role="status" class="text-sm text-gray-500 dark:text-gray-400">正在查找本分组的暂停运行账号…</span>
-                <button v-else-if="!installCodexAccount" type="button" class="btn btn-primary" data-action="create-runtime-shells" :disabled="!canCreateRuntimeShells || !!shellRecoveryError" @click="createRuntimeShells">{{ installBPSAccount ? '重试创建 Codex 账号' : '创建两个暂停账号' }}</button>
+                <button v-else-if="!installCodexAccount" type="button" class="btn btn-primary" data-action="create-runtime-shells" :disabled="!canCreateRuntimeShells || !!shellRecoveryError || !selectedProfile('codex')?.authorized" @click="createRuntimeShells">{{ installBPSAccount ? '重试创建 Codex 账号' : '创建两个暂停账号' }}</button>
                 <span v-if="installBPSAccount && installCodexAccount" role="status" class="text-sm text-gray-600 dark:text-gray-300">两个暂停账号已创建，Excel #{{ installBPSAccount }}、Codex #{{ installCodexAccount }}。<a class="font-medium text-primary-600 hover:underline dark:text-primary-400" href="/admin/accounts">前往账号管理查看</a></span>
                 <span v-else-if="installBPSAccount" role="status" class="text-sm text-gray-600 dark:text-gray-300">Excel 暂停账号 #{{ installBPSAccount }} 已创建并显示在账号管理中。</span>
               </div>
