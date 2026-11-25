@@ -33,3 +33,48 @@ Go lint 以基座提交 `a3eaf63afc672ffedf7844e6cfc5cb6750d52a3e` 为既有问�
 `scripts/release/ssh-receiver.py` 安装至 `/usr/local/sbin/sub6api-ci-receiver`，对应 authorized_keys 行带 `restrict,command="/usr/local/sbin/sub6api-ci-receiver"`。此部署密钥可以发布应用代码，按生产部署凭据保护。
 
 运行时基线由 `bash scripts/release/runtime-baseline.sh <verified-commit>` 生成，保存为 `/opt/sub6api/RUNTIME_SHA256`。覆盖运行时 Dockerfile 阶段、基础镜像版本和 entrypoint；编译器修补更新不要求更换运行时。
+
+## 发布清单：批量邮箱----密码----2FA 授权与自动重授权
+
+目标：`https://sub6api.pixcook.ai`，服务器目录 `/opt/sub6api`。本次发布含迁移 251 和运行时变更，不能走普通自动部署。
+
+### 为什么不能直接部署
+
+1. `deploy-sub6api.sh` 比对 `MIGRATIONS_SHA256`，新增迁移 251 会使其不一致，脚本拒绝执行。
+2. 脚本同时比对 `RUNTIME_SHA256`，两份 Dockerfile 已改动（内置 Node、jsdom、Python curl_cffi），同样会被拒绝。
+3. 脚本以服务器现有镜像为基底，只覆盖 `sub2api` 与 `resources`。新镜像里不会有 Node、curl_cffi、jsdom 和 `/app/tools/tosub2-login`，批量登录会返回 `BATCH_LOGIN_RUNTIME_UNAVAILABLE`，自动重授权会失败。
+4. 部署只允许 main，推送 main 会直接触发生产部署。
+
+### 本地计算的基线（仅供对照）
+
+| 项目 | 变更前（HEAD~1） | 变更后（f92150779） |
+|---|---|---|
+| RUNTIME_SHA256 | 36ee679dbf84f41062671400d95048b88c3083ca46f9da03e91bb253607dc412 | ff3eaa736f7e999b67945e81ec727598c5e3373fa1fd17f593e783ee28f47fc7 |
+| MIGRATIONS_SHA256 | 823246b620db3e3be2bb0b5429dcf6e1566d77317edad67409289868ecb40760 | 1c9c7ca17251f6c49453c13e5b11e60eb4202f3e0e91cbf4e3f3cc27b5a9d5e4 |
+
+变更前一列只是本仓库上一个提交的值。服务器当前基线必须读取 `/opt/sub6api/MIGRATIONS_SHA256`、`/opt/sub6api/RUNTIME_SHA256` 与 `SOURCE_COMMIT`，并对该提交按 `docs/SUB6API_CICD.md` 的方法复算，确认一致后再继续。若服务器的值与本表不同，说明线上与本仓库历史存在差异，先停止并核实。
+
+### 发布步骤（由有服务器权限的人执行）
+
+1. 核实服务器实际部署提交与上述基线，保存 `compose.json` 与当前镜像 ID。
+2. 手动触发 `sub6api-backup.service`，确认备份成功。迁移 251 只新增 `openai_login_credentials` 表，不改既有表，但仍应先备份。
+3. 在构建机用主 Dockerfile 构建新的运行时基底镜像（含 `tosub2-runtime` 阶段产物），验证：`node --version`、`/opt/tosub2-venv/bin/python -c 'import curl_cffi'`、`node /app/tools/tosub2-login/run-login.mjs` 缺凭据时返回 `missing_credentials`。注意本机验证的是 aarch64，生产为 amd64，需在 amd64 上重新验证 curl_cffi 的 musllinux wheel。
+4. 将新基底镜像加载到服务器，更新 `/opt/sub6api/RUNTIME_SHA256` 为 `ff3eaa73…`，更新 `/opt/sub6api/MIGRATIONS_SHA256` 为 `1c9c7ca1…`，并调整 `deploy-sub6api.sh` 使其以新基底镜像（而非旧镜像）构建应用层。
+5. 确认 `totp.encryption_key`（32 字节，64 位十六进制）已配置。缺失时，保存凭据与自动重授权会失败。
+6. 评审后将分支合并到 main，触发 `Deploy Sub6API`。迁移 251 在应用启动时自动执行。
+
+### 部署后验收
+
+- `/health` 返回 ok，管理员登录正常，既有账号授权菜单无回归。
+- 添加账号 → OpenAI → 授权方式末尾出现「邮箱----密码----2FA 批量授权」。
+- 用测试账号做一次真实批量授权，分别验证 BPS 与 Codex 目标，以及勾选保存凭据后账号编辑页的提示。
+- 在测试账号上使 refresh 失效，观察自动重授权成功，且失败时按 15 分钟起翻倍冷却、连续 3 次后停止。
+
+### 回滚
+
+- 应用层：恢复 `compose.before.json` 与原镜像。
+- 迁移 251 新增独立表，回滚应用后表保留不影响旧版本；如需清理，仅允许在确认无依赖后手动删除该表。
+
+### 未验证
+
+真实 OpenAI 登录与自动重授权、amd64 镜像构建、`deploy/Dockerfile` 的完整构建、登录包装脚本 9 分钟超时分支。
