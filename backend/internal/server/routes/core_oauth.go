@@ -22,4 +22,8 @@ func registerCoreOAuthRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 	group.POST("/profiles/:ref/complete", h.Admin.CoreOAuth.Complete)
 	group.POST("/profiles/:ref/cancel", h.Admin.CoreOAuth.Cancel)
 	group.POST("/profiles/:ref/refresh", h.Admin.CoreOAuth.Refresh)
+	group.POST("/profiles/:ref/handoff-invitations", h.Admin.CoreOAuth.CreateHandoffInvitation)
+	group.POST("/profiles/:ref/handoffs/accept", h.Admin.CoreOAuth.AcceptProtectedHandoff)
+	group.GET("/profiles/:ref/handoffs/:operation_id", h.Admin.CoreOAuth.GetHandoff)
+	group.POST("/profiles/:ref/handoffs/:operation_id/abandon", h.Admin.CoreOAuth.AbandonHandoff)
 }

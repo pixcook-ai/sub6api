@@ -25,7 +25,16 @@ type coreOAuthAdminService interface {
 }
 
 // CoreOAuthHandler exposes safe profile state. Tokens never cross this boundary.
-type CoreOAuthHandler struct{ core coreOAuthAdminService }
+type CoreOAuthHandler struct {
+	core            coreOAuthAdminService
+	handoffVerifier service.CoreOAuthHandoffVerifier
+}
+
+func (h *CoreOAuthHandler) SetHandoffVerifier(verifier service.CoreOAuthHandoffVerifier) {
+	if h != nil {
+		h.handoffVerifier = verifier
+	}
+}
 
 func NewCoreOAuthHandler(core *service.CoreOAuthService) *CoreOAuthHandler {
 	h := &CoreOAuthHandler{}

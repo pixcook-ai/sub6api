@@ -134,6 +134,9 @@ func (b *BPSFilesBackend) execute(req *http.Request, out any, upload bool) error
 // distinctions that encoding/json alone intentionally accepts.
 func bpsFilesExactShape(value any, t reflect.Type) bool {
 	if t.Kind() == reflect.Pointer {
+		if value == nil && t == reflect.TypeOf((*BPSPublicationFenceReceipt)(nil)) {
+			return true
+		}
 		return bpsFilesExactShape(value, t.Elem())
 	}
 	switch t.Kind() {

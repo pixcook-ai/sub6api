@@ -22,6 +22,7 @@ WITH eligible_account AS MATERIALIZED (
  WHERE a.id=$1 AND a.deleted_at IS NULL AND a.platform='openai' AND a.type='oauth'
    AND COALESCE(a.credentials->>'refresh_token','')=''
    AND a.extra->'managed_oauth'=$2::jsonb
+   AND COALESCE(a.extra->'managed_oauth'->>'publication_fence_operation_id','')=''
  FOR NO KEY UPDATE
 )
 INSERT INTO managed_oauth_controller_keys AS k
@@ -80,7 +81,7 @@ func (r *accountRepository) scanManagedOAuthControllerKey(ctx context.Context, q
 }
 
 func (r *accountRepository) PutManagedOAuthControllerKey(ctx context.Context, accountID int64, expected service.ManagedOAuthState, operationID, keyHash string) (*service.ManagedOAuthControllerKeyState, error) {
-	if accountID <= 0 || expected.ManagedOAuthIdentity.Validate() != nil || !validOAuthControllerRepositoryOperation(operationID) || !validOAuthControllerRepositoryHash(keyHash) {
+	if accountID <= 0 || expected.ManagedOAuthIdentity.Validate() != nil || expected.PublicationFenceOperationID != "" || !validOAuthControllerRepositoryOperation(operationID) || !validOAuthControllerRepositoryHash(keyHash) {
 		return nil, service.ErrManagedOAuthInvalid
 	}
 	before, err := json.Marshal(expected)

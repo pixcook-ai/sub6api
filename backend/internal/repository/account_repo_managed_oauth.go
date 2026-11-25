@@ -21,6 +21,7 @@ WITH updated AS (
      updated_at = NOW()
  WHERE a.id=$7 AND a.deleted_at IS NULL AND a.platform='openai' AND a.type='oauth'
    AND a.extra->$5 = $8::jsonb
+   AND COALESCE(a.extra->$5->>'publication_fence_operation_id','')=''
    AND COALESCE(a.credentials->>'refresh_token','')=''
  RETURNING a.id
 )
@@ -29,7 +30,7 @@ SELECT $9,updated.id,NULL,NULL FROM updated
 `
 
 func (r *accountRepository) InstallManagedOAuthCredentialsIfMatch(ctx context.Context, id int64, expected, next service.ManagedOAuthState, token, expiresAt string) (bool, error) {
-	if expected.ManagedOAuthIdentity != next.ManagedOAuthIdentity || next.ManagedOAuthIdentity.Validate() != nil || next.TokenRevision <= expected.TokenRevision || next.AuthBlocked || token == "" {
+	if expected.ManagedOAuthIdentity != next.ManagedOAuthIdentity || expected.PublicationFenceOperationID != "" || next.PublicationFenceOperationID != "" || next.ManagedOAuthIdentity.Validate() != nil || next.TokenRevision <= expected.TokenRevision || next.AuthBlocked || token == "" {
 		return false, service.ErrManagedOAuthInvalid
 	}
 	expiry, err := time.Parse(time.RFC3339Nano, expiresAt)

@@ -1,24 +1,39 @@
-# OAuth 交接恢复本地验证（2026-11-24）
+# OAuth 交接本地验证记录（2026-11-24）
 
-本记录覆盖本轮实现增量，基线为 Sub6 `29f5ebe70`、toSub2 `cde7e44`。对应 Sub6 Issue #7 / `docs/plans/core-oauth-20261122/tickets/05-explicit-handoff.md`；完整交接任务仍未完成。
+对应 Issue #7 / [显式交接规格](tickets/05-explicit-handoff.md)。本文件记录当前集成增量的证据边界，不把此前工作树的测试数或 synthetic 结果当作最终版本的真实迁移证明。协议与恢复步骤见 [PROTECTED-HANDOFF.md](PROTECTED-HANDOFF.md)。
 
-## 行为
+## 当前实现
 
-- Sub6 加密 profile 保存 pending 接收预约及原管理员/操作号/来源身份/载荷摘要。状态闭锁授权、刷新、401 恢复和凭据快照；过期不自动解锁。匹配请求可读回原回执，不能延长有效期。
-- 内部 `AbandonHandoff` 用同一管理员和操作号持久放弃预约，删除暂存载荷，保留 abandoned 回执。CAS 失败不能解锁，旧操作不能重新激活；原生登录可重新建立新身份代际。尚无接收/放弃 HTTP 入口，不认证或激活传入载荷。
-- toSub2 内部协调器先持久写操作号与身份摘要，再本地停写、核对 BPS worker 发布撤销及回执。丢失响应后读回；远端每次重新核对，身份变化闭锁。Codex 撤销适配仍不完整且闭锁。
-- 控制台通过协调器串行执行本地准备和取消。取消只接受原 operation_id，协调器已有远端交接记录时拒绝；先持久取消，再持久释放同操作号发布围栏。写入失败或目录同步失败闭锁，原请求重试/重启可恢复。
-- 协调日志不保存 AT/RT；不同 profile 更新串行合并，写入结果未知后禁止继续覆盖。取消与撤销互斥；已取消操作保留终态回执，当前不提供第二次交接预约入口。
+- Codex 永久账号 publisher fence、全部 controller key 撤销、暂停调度及 scheduler outbox 在独立事务内一起提交，提供管理员 POST / GET 围栏入口。
+- BPS 独立 Files service key 可读取只读 publication-fence proof，接收端用同一 Sub6 已保存的账号/config 实时核对。
+- Sub6 管理入口提供 invitation、受保护 accept、receipt 读回及 pending abandon；grant 与 accepted 回执以一次 CAS 接收，accepted 不可 abandon。
+- toSub2 通过 profile 进程锁、registry freeze 和在途排空建立来源停写，持久保存接收前的 sealed envelope，丢响应后先读回；accepted 后保存回执并清除 envelope，清理旧 vault grant，永久保留来源 fence。
+- 当前仅支持有绑定账号的单目标，完整 transfer 在永久撤销前拒绝不满足范围的请求。接收后不自动安装 runtime、调整分组或选择调度。
+- 2026-11-25 取消恢复增量：已有 transfer 的 abort 要求 target，在协调器锁内持久 abort_pending、确认并保存 receiver abandoned 回执后才恢复源；无 transfer 保留旧 operation_id-only body。远端撤销开始后禁止源恢复。新增 Node 实测结果见下表。
+- 2026-11-25 coordinator 审查修复：无 bound 账号来源在本地 fencing/远端调用前拒绝；对应协调器回归通过。
 
-## 验证
+## 已确认的本地证据
 
-- Sub6：`go test -tags=unit ./internal/handler/admin ./internal/service ./internal/repository ./internal/server/routes -run 'CoreOAuth|CoreRuntimeShell|ManagedDeployment|BPSFiles' -count=1`：330 项通过。使用共享 Go 排他锁，无大型构建并发。
-- toSub2：`npm run check:oauth-handoff` 通过，包含 profile 服务、发布围栏、协调器及受鉴权 HTTP 控制台。覆盖错误 ID、重启读回、取消写入/目录同步失败、并发操作、两个 profile 日志保存、远端回执身份变化及 token 不落日志。
-- toSub2：`node test/oauth-registry.mjs`、`node test/sub6-publication.mjs`、`node test/managed-sub6-publication.mjs`、console server 语法及两仓 diff 检查通过。
-- 回归：`npm run check:oauth-runtime`、`npm run check:admin-entry`、`node test/console-production-smoke.mjs` 均通过；不重新构建前端，生产 smoke 使用已有静态产物，仅验证服务入口。
+| 范围 | 已确认结果 | 证明边界 |
+| --- | --- | --- |
+| Codex PostgreSQL 18 围栏 SQL | `python3 internal/repository/account_repo_oauth_publication_fence_postgres.py` 四组验证通过：围栏后撤销全部 key 且阻断注册/install、revision 变化时拒绝暂停、outbox 错误回滚、controller 注册和围栏双序锁竞争。隔离 Postgres 18 容器已删除。 | 数据库事务与竞争顺序，不证明真实 OAuth 或真实账号接收。 |
+| Sub6 final Go regression | `go test -tags=unit ./internal/handler/admin ./internal/service ./internal/repository ./internal/server/routes -run 'ManagedOAuth|OAuthController|OAuthPublicationFence|CoreOAuth|CoreRuntimeShell|ManagedDeployment|BPSFiles' -count=1 -timeout=150s`；522 tests passed, 0 failed, 0 skipped。See `.verification/oauth-handoff-20261124/final-go-summary.json`. | Targeted four-package regression against current Sub6 source; not the entire Go repository. |
+| BPS final Go regression | `go test ./internal/proxy ./internal/auth ./internal/managedfiles -count=1 -timeout=150s`；862 tests passed, 0 failed, 0 skipped. Also reran the two managed-activation regressions and `TestHTTPClientMetadataSnapshots -count=10`. See `.verification/oauth-handoff-20261124/bps-final-fixed-summary.json`, `managed-regression.jsonl`, and `metadata-concurrency-10.jsonl`. | Local gateway package tests; not a real BPS service or billing acceptance. |
+| Node handoff regression | `cd toSub2 && npm run check:oauth-handoff` passed after cancellation recovery was added; includes 10 source/coordinator restart, lost response and concurrency recovery scenarios plus HTTP console smoke and production crypto tests. Final rerun log: `.verification/oauth-handoff-20261124/node-handoff-final.log`. | Synthetic grants and receiver; no real token or publisher migration. |
+| Node to Go protected handoff HTTP integration | `TestCoreOAuthTransferProductionClientHTTPIntegration/{codex,bps_excel}` passed for both providers with no skips. Production Node transfer client/sealing reached the actual Sub6 handler/service over loopback, with receiver proof checks, lost accept response, durable readback/restart, and independent receiver refresh. See `.verification/oauth-handoff-20261124/http-transfer-directed.log`. | Synthetic credentials, in-memory sealed repository, loopback proof backend. This does not prove physical DB durability or real OAuth/BPS migration. |
+| Current source official SDK integration | `sdk-e2e-current.json`: 61/61 steps passed with Python OpenAI SDK 3.55.1 and JavaScript SDK 7.60.0 through Sub6/admin/router and real managed BPS worker. Covers Excel/Codex switching, JSON/SSE/tools, Files and `input_file`, isolation, 401 refresh, restart, same-identity reauthorization, and old sessions. Current binary hashes/source manifests are in `build-sub6-result.json`, `build-bps-worker-result.json`, and `final-source-sha256.json`. | Isolated local DB/services and simulated OAuth, BPS, and Codex. Does not include ownership handoff or stopping toSub2, and does not prove real upstream, document understanding, billing or deployment. |
+| Source SHA and build | Sub6 fixture server built with `go test -tags=coreoauthfixture -c -o <evidence>/bin/server-final.test ./cmd/server` from current source; aggregate source SHA-256 `93dcb345ea56d4dab55cc35c80166f67d9a3756fa5e8cd9a9c4cf68b5c9dfe2a`, binary SHA-256 `496845d9c64152c91428a1459ce51e0182d5f02f980c3a08bebcff33bf33f7f9`. BPS fixture worker built from current source; aggregate SHA-256 `47d5251ae689cf19b4d49b4322083fecd4ef89bc12ae77dd247a1f6dc7d3c075`, binary SHA-256 `0c066218c8bae71ca5ea9b3351ea37fd4f82bf8dc88a8f03e29225804b0827aa`. | Aggregate hashes cover Go source files, go.mod/go.sum (and Sub6 model-pricing JSON) in each respective repository. Source hash was unchanged during each build. |
 
-## 验收边界
+Sub6 与 BPS SDK runner 使用当前工作树构建的源码二进制，构建前后源码 SHA-256 一致；不沿用历史 SDK 报告作为当前证据。此前 Node transfer client 结果不覆盖新增取消恢复补丁，本表所列 Node handoff regression 是该补丁后的最终结果。SDK runner 于 2026-11-25T01:04:17Z 启动、01:04:37Z 结束；run_id 为 `1b2d72acf8529b30a517fe8e`。隔离 PostgreSQL/Redis、Sub6 与 worker 进程均由 runner 验证停止/删除，只清理 runner 自有临时根目录。
 
-本轮没有真实 OAuth、真实 RT 传输/轮换、接收激活、完整 Codex 撤销枚举/读回或真实 BPS 文档/计费验证。全部 `transfer_supported` 为 false，未开放远端撤销 HTTP 操作，未关闭 Issue #7。没有 push、部署、迁移或重启用户实例。
+## 最终集成待补证据
 
-知识图谱传输断连，精确源码回退检查。独立代理多次收到不可读任务或返回无关历史结果，未形成有效独立审查；主代理完成跨仓格式核对和手工差异检查，不宣称独立审查通过。未改其他仓库及原有缓存/验收目录。
+- 尚无物理 PostgreSQL-backed protected-transfer end-to-end；跨语言 HTTP 交接测试使用 encrypted in-memory repository。Codex publisher fence 的真实 PostgreSQL SQL concurrency tests 独立通过。
+- 尚无覆盖 source-toSub2 transfer、永久撤销、停掉来源进程、Sub6 独立 refresh/publish 与后续 SDK 调用的单一端到端用例。当前 SDK E2E覆盖核心运行时行为，HTTP integration 覆盖 transfer 接收和重启刷新，但二者尚未串成一次工作流。
+- 已有独立双轴只读审查未发现确定 P0/P1/P2；Spec 复核另发现并修复“无绑定可直接 reconcile”的 P2，新增回归通过。审查不覆盖 profile-service/protection 模块的完整源码质量，也不代替持续维护。
+
+## 未验证范围
+
+没有运行真实 OAuth、真实凭据迁移、真实 RT 传输/轮换、真实 BPS 文档/计费、真实管理员恢复或真实调度切换。未知外部 vault / publisher 的全局清单完整性不在现有 proof 的证明范围内。不得用本地通过关闭 Issue #7 的真实验收门。
+
+本轮文档更新未执行 push、部署、迁移、用户实例重启或真实凭据读取。知识图谱传输不可用，合同核对使用精确源码回退，不宣称图谱覆盖或真实验收通过。

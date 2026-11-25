@@ -47,19 +47,22 @@ type coreOAuthOperation struct {
 	ExpiresAt time.Time
 }
 type coreOAuthHandoffRecord struct {
-	OperationID      string
-	Provider         string
-	ProfileRef       string
-	SourceProfileRef string
-	Subject          string
-	WorkspaceID      string
-	IdentityEpoch    string
-	TokenRevision    int64
-	PayloadDigest    string
-	ProtectedPayload string
-	ActorID          int64
-	Status           string
-	ExpiresAt        time.Time
+	OperationID        string
+	Provider           string
+	ProfileRef         string
+	SourceProfileRef   string
+	Subject            string
+	WorkspaceID        string
+	IdentityEpoch      string
+	TokenRevision      int64
+	PayloadDigest      string
+	ProtectedPayload   string
+	ActorID            int64
+	Status             string
+	ExpiresAt          time.Time
+	TransferContract   string
+	TransferPublicKey  string
+	TransferPrivateKey string
 }
 type coreOAuthRecord struct {
 	Contract           string
@@ -88,7 +91,7 @@ func coreOAuthHandoffReceipt(record *coreOAuthRecord) *CoreOAuthHandoffReceipt {
 	return &CoreOAuthHandoffReceipt{OperationID: h.OperationID, Provider: h.Provider, ProfileRef: h.ProfileRef,
 		SourceProfileRef: h.SourceProfileRef,
 		Subject:          h.Subject, WorkspaceID: h.WorkspaceID, IdentityEpoch: h.IdentityEpoch,
-		TokenRevision: h.TokenRevision, Status: h.Status, ExpiresAt: h.ExpiresAt, TransferSupported: false}
+		TokenRevision: h.TokenRevision, Status: h.Status, ExpiresAt: h.ExpiresAt, TransferSupported: h.Status == "accepted"}
 }
 
 func validCoreOAuthHandoffPayload(input CoreOAuthHandoffInput) bool {
@@ -202,6 +205,9 @@ func coreOAuthHandoffRecordValid(record *coreOAuthRecord) bool {
 		return true
 	}
 	h := record.Handoff
+	if h.TransferContract != "" {
+		return coreOAuthTransferRecordValid(record)
+	}
 	if h.ProfileRef != record.ProfileRef || h.Provider != record.Provider || !coreOAuthRef(h.OperationID) ||
 		!coreOAuthHandoffSourceRef(h.SourceProfileRef) || !coreOAuthIdentityText(h.Subject) || !coreOAuthIdentityText(h.WorkspaceID) ||
 		!coreOAuthRef(h.IdentityEpoch) || h.TokenRevision < 1 || h.ActorID <= 0 || h.ExpiresAt.IsZero() || len(h.PayloadDigest) != 64 {
@@ -591,6 +597,7 @@ func (s *CoreOAuthService) AbandonHandoff(ctx context.Context, ref, operationID 
 	}
 	h.Status = "abandoned"
 	h.ProtectedPayload = ""
+	h.TransferPrivateKey = ""
 	if err := s.save(ctx, record); err != nil {
 		return nil, err
 	}

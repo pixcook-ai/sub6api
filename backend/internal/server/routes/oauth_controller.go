@@ -18,6 +18,8 @@ func registerOAuthControllerRoutes(v1 *gin.RouterGroup, h *handler.Handlers) {
 }
 
 func registerOAuthControllerAdminRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+	admin.POST("/accounts/:id/oauth-publication-fence", h.Admin.Account.FenceOAuthPublication)
+	admin.GET("/accounts/:id/oauth-publication-fence", h.Admin.Account.GetOAuthPublicationFence)
 	admin.POST("/accounts/:id/oauth-controller-credentials", h.Admin.Account.RegisterOAuthControllerCredentials)
 	admin.DELETE("/accounts/:id/oauth-controller-credentials/:operation_id", h.Admin.Account.RevokeOAuthControllerCredentials)
 }

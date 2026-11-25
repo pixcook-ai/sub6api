@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"time"
 
@@ -9,11 +10,12 @@ import (
 )
 
 const (
-	CoreOAuthProviderCodex        = "codex"
-	CoreOAuthProviderExcel        = "bps_excel"
-	CoreOAuthAccountExtraKey      = "core_oauth"
-	CoreOAuthRuntimeShellExtraKey = "core_oauth_runtime_shell"
-	CoreOAuthContract             = "sub6-core-oauth/v1"
+	CoreOAuthProviderCodex           = "codex"
+	CoreOAuthProviderExcel           = "bps_excel"
+	CoreOAuthAccountExtraKey         = "core_oauth"
+	CoreOAuthRuntimeShellExtraKey    = "core_oauth_runtime_shell"
+	CoreOAuthContract                = "sub6-core-oauth/v1"
+	CoreOAuthHandoffTransferContract = "sub6-core-oauth-handoff/v1"
 )
 
 var (
@@ -100,6 +102,53 @@ type CoreOAuthHandoffReceipt struct {
 	ExpiresAt         time.Time `json:"expires_at"`
 	TransferSupported bool      `json:"transfer_supported"`
 }
+
+// Invitation inputs bind a receiving profile to one external source epoch.
+// ActorID must come from authenticated middleware, never request JSON.
+type CoreOAuthHandoffInvitationInput struct {
+	OperationID      string    `json:"operation_id"`
+	ProfileRef       string    `json:"profile_ref"`
+	SourceProfileRef string    `json:"source_profile_ref"`
+	Provider         string    `json:"provider"`
+	Subject          string    `json:"subject"`
+	WorkspaceID      string    `json:"workspace_id"`
+	IdentityEpoch    string    `json:"identity_epoch"`
+	TokenRevision    int64     `json:"token_revision"`
+	ExpiresAt        time.Time `json:"expires_at"`
+	ActorID          int64     `json:"-"`
+}
+
+type CoreOAuthHandoffInvitation struct {
+	Contract         string    `json:"contract"`
+	OperationID      string    `json:"operation_id"`
+	ProfileRef       string    `json:"profile_ref"`
+	SourceProfileRef string    `json:"source_profile_ref"`
+	Provider         string    `json:"provider"`
+	Subject          string    `json:"subject"`
+	WorkspaceID      string    `json:"workspace_id"`
+	IdentityEpoch    string    `json:"identity_epoch"`
+	TokenRevision    int64     `json:"token_revision"`
+	ExpiresAt        time.Time `json:"expires_at"`
+	PublicKey        string    `json:"public_key"`
+}
+
+// Raw URL base64 throughout. Ciphertext includes the trailing GCM tag.
+type CoreOAuthHandoffEnvelope struct {
+	OperationID string `json:"operation_id"`
+	WrappedKey  string `json:"wrapped_key"`
+	Nonce       string `json:"nonce"`
+	Ciphertext  string `json:"ciphertext"`
+}
+
+// Verification intentionally excludes the decrypted grant. The injected
+// verifier must verify every submitted source inventory entry against trusted
+// saved endpoints; statements and URLs from the sender are not authority.
+type CoreOAuthHandoffVerification struct {
+	Invitation        CoreOAuthHandoffInvitation
+	SourceQuiesced    bool
+	PublicationFences []json.RawMessage
+}
+type CoreOAuthHandoffVerifier func(context.Context, CoreOAuthHandoffVerification) error
 
 type CoreOAuthAttemptView struct {
 	AttemptID string    `json:"attempt_id"`

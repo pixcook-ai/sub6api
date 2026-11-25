@@ -197,7 +197,7 @@ func NewOAuthControllerAuth(h *AccountHandler) gin.HandlerFunc {
 		}
 		// Metadata is immutable after registration; neither an AT nor administrator status grants scope.
 		state, err := admin.GetManagedOAuthState(c.Request.Context(), id)
-		if err != nil || state == nil || state.AccountID != id || state.ManagedOAuthIdentity.Validate() != nil || (binding != nil && state.ManagedOAuthIdentity != binding.ManagedOAuthIdentity) || (binding == nil && (!scope.profiles[state.ProfileRef] || !scope.backends[state.BackendID])) {
+		if err != nil || state == nil || state.PublicationFenceOperationID != "" || state.AccountID != id || state.ManagedOAuthIdentity.Validate() != nil || (binding != nil && state.ManagedOAuthIdentity != binding.ManagedOAuthIdentity) || (binding == nil && (!scope.profiles[state.ProfileRef] || !scope.backends[state.BackendID])) {
 			response.Forbidden(c, "OAuth controller account access denied")
 			c.Abort()
 			return

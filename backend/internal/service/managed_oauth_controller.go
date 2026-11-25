@@ -69,6 +69,9 @@ func (s *adminServiceImpl) RegisterManagedOAuthControllerKey(ctx context.Context
 	if err != nil {
 		return nil, err
 	}
+	if state.PublicationFenceOperationID != "" {
+		return nil, ErrManagedOAuthConflict
+	}
 	return repo.PutManagedOAuthControllerKey(ctx, accountID, *state, operationID, hash)
 }
 
@@ -100,7 +103,7 @@ func (s *adminServiceImpl) AuthenticateManagedOAuthControllerKey(ctx context.Con
 		return nil, ErrManagedOAuthInvalid
 	}
 	current, err := s.GetManagedOAuthState(ctx, record.AccountID)
-	if err != nil || current == nil || current.AccountID != record.AccountID || current.ManagedOAuthIdentity != record.ManagedOAuthIdentity {
+	if err != nil || current == nil || current.PublicationFenceOperationID != "" || current.AccountID != record.AccountID || current.ManagedOAuthIdentity != record.ManagedOAuthIdentity {
 		return nil, ErrManagedOAuthInvalid
 	}
 	return record, nil

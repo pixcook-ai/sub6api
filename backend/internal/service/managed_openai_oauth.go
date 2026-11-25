@@ -60,25 +60,27 @@ type ManagedOAuthAuthEvent struct {
 
 type ManagedOAuthState struct {
 	ManagedOAuthIdentity
-	TokenRevision     int64                   `json:"token_revision"`
-	ExpiresAt         string                  `json:"expires_at,omitempty"`
-	LastOperationID   string                  `json:"last_operation_id,omitempty"`
-	LastOperationHash string                  `json:"last_operation_hash,omitempty"`
-	AuthBlocked       bool                    `json:"auth_blocked"`
-	EventCursor       int64                   `json:"event_cursor"`
-	Events            []ManagedOAuthAuthEvent `json:"events"`
+	TokenRevision               int64                   `json:"token_revision"`
+	ExpiresAt                   string                  `json:"expires_at,omitempty"`
+	LastOperationID             string                  `json:"last_operation_id,omitempty"`
+	LastOperationHash           string                  `json:"last_operation_hash,omitempty"`
+	AuthBlocked                 bool                    `json:"auth_blocked"`
+	EventCursor                 int64                   `json:"event_cursor"`
+	Events                      []ManagedOAuthAuthEvent `json:"events"`
+	PublicationFenceOperationID string                  `json:"publication_fence_operation_id,omitempty"`
 }
 
 type ManagedOAuthPublicState struct {
 	ManagedOAuthIdentity
-	AccountID       int64  `json:"account_id"`
-	TokenRevision   int64  `json:"token_revision"`
-	ExpiresAt       string `json:"expires_at,omitempty"`
-	LastOperationID string `json:"last_operation_id,omitempty"`
-	AuthBlocked     bool   `json:"auth_blocked"`
-	EventCursor     int64  `json:"event_cursor"`
-	Ready           bool   `json:"ready"`
-	Initialized     bool   `json:"initialized"`
+	AccountID                   int64  `json:"account_id"`
+	TokenRevision               int64  `json:"token_revision"`
+	ExpiresAt                   string `json:"expires_at,omitempty"`
+	LastOperationID             string `json:"last_operation_id,omitempty"`
+	AuthBlocked                 bool   `json:"auth_blocked"`
+	EventCursor                 int64  `json:"event_cursor"`
+	Ready                       bool   `json:"ready"`
+	Initialized                 bool   `json:"initialized"`
+	PublicationFenceOperationID string `json:"publication_fence_operation_id,omitempty"`
 }
 
 type ManagedOAuthEventPage struct {
@@ -142,6 +144,9 @@ func managedOAuthStateFromAccount(account *Account) (*ManagedOAuthState, error) 
 	if decoder.Decode(&state) != nil || state.Validate() != nil || state.TokenRevision < 0 || state.TokenRevision > managedOAuthMaxRevision || state.EventCursor < 0 || state.EventCursor > managedOAuthMaxRevision || len(state.Events) > managedOAuthMaxEvents {
 		return nil, ErrManagedOAuthInvalid
 	}
+	if state.PublicationFenceOperationID != "" && !validManagedOAuthControllerOperation(state.PublicationFenceOperationID) {
+		return nil, ErrManagedOAuthInvalid
+	}
 	if state.TokenRevision > 0 {
 		expiry, err := time.Parse(time.RFC3339Nano, state.ExpiresAt)
 		op, opErr := uuid.Parse(state.LastOperationID)
@@ -170,7 +175,7 @@ func managedOAuthStateFromAccount(account *Account) (*ManagedOAuthState, error) 
 }
 
 func managedOAuthReady(state *ManagedOAuthState, now time.Time) bool {
-	if state == nil || state.TokenRevision == 0 || state.AuthBlocked {
+	if state == nil || state.TokenRevision == 0 || state.AuthBlocked || state.PublicationFenceOperationID != "" {
 		return false
 	}
 	expiry, err := time.Parse(time.RFC3339Nano, state.ExpiresAt)
@@ -183,7 +188,7 @@ func ManagedOAuthSchedulingReady(account *Account) bool {
 }
 
 func managedOAuthPublic(account *Account, state *ManagedOAuthState) *ManagedOAuthPublicState {
-	return &ManagedOAuthPublicState{ManagedOAuthIdentity: state.ManagedOAuthIdentity, AccountID: account.ID, TokenRevision: state.TokenRevision, ExpiresAt: state.ExpiresAt, LastOperationID: state.LastOperationID, AuthBlocked: state.AuthBlocked, EventCursor: state.EventCursor, Ready: managedOAuthReady(state, time.Now()), Initialized: state.TokenRevision > 0}
+	return &ManagedOAuthPublicState{ManagedOAuthIdentity: state.ManagedOAuthIdentity, AccountID: account.ID, TokenRevision: state.TokenRevision, ExpiresAt: state.ExpiresAt, LastOperationID: state.LastOperationID, AuthBlocked: state.AuthBlocked, EventCursor: state.EventCursor, Ready: managedOAuthReady(state, time.Now()), Initialized: state.TokenRevision > 0, PublicationFenceOperationID: state.PublicationFenceOperationID}
 }
 
 func prepareManagedOAuthCreate(input *CreateAccountInput, extra map[string]any) (map[string]any, error) {
@@ -254,7 +259,7 @@ func (s *adminServiceImpl) InstallManagedOAuthCredentials(ctx context.Context, i
 	if err != nil {
 		return nil, err
 	}
-	if state.ManagedOAuthIdentity != input.ManagedOAuthIdentity {
+	if state.PublicationFenceOperationID != "" || state.ManagedOAuthIdentity != input.ManagedOAuthIdentity {
 		return nil, ErrManagedOAuthConflict
 	}
 	if state.LastOperationID == input.OperationID {
@@ -361,7 +366,7 @@ func recordManagedOAuthUnauthorized(ctx context.Context, repo AccountRepository,
 	if err != nil {
 		return err
 	}
-	if state.TokenRevision == 0 || state.TokenRevision != attempt.TokenRevision || state.ManagedOAuthIdentity != attempt.ManagedOAuthIdentity || current.GetCredential("access_token") != rejectedToken || state.AuthBlocked {
+	if state.TokenRevision == 0 || state.PublicationFenceOperationID != "" || state.TokenRevision != attempt.TokenRevision || state.ManagedOAuthIdentity != attempt.ManagedOAuthIdentity || current.GetCredential("access_token") != rejectedToken || state.AuthBlocked {
 		return nil
 	}
 	if state.EventCursor == managedOAuthMaxRevision {

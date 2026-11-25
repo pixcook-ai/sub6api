@@ -98,9 +98,13 @@ func TestOAuthControllerCredentialManagementRoutesRequireAdministrator(t *testin
 		registered[route.Method+" "+route.Path] = true
 	}
 	require.True(t, registered["POST /api/v1/admin/accounts/:id/oauth-controller-credentials"])
+	require.True(t, registered["POST /api/v1/admin/accounts/:id/oauth-publication-fence"])
+	require.True(t, registered["GET /api/v1/admin/accounts/:id/oauth-publication-fence"])
 	require.True(t, registered["DELETE /api/v1/admin/accounts/:id/oauth-controller-credentials/:operation_id"])
 	for _, tc := range []struct{ method, path string }{
 		{http.MethodPost, "/api/v1/admin/accounts/17/oauth-controller-credentials"},
+		{http.MethodPost, "/api/v1/admin/accounts/17/oauth-publication-fence"},
+		{http.MethodGet, "/api/v1/admin/accounts/17/oauth-publication-fence"},
 		{http.MethodDelete, "/api/v1/admin/accounts/17/oauth-controller-credentials/c45ce361-c1d8-44b2-89b3-d0955e17cc88"},
 	} {
 		for _, key := range []string{"", routeOAuthControllerKey} {
@@ -115,6 +119,8 @@ func TestOAuthControllerCredentialManagementRoutesRequireAdministrator(t *testin
 	}
 	for _, tc := range []struct{ method, path string }{
 		{http.MethodPost, "/api/v1/oauth-controller/accounts/17/oauth-controller-credentials"},
+		{http.MethodPost, "/api/v1/oauth-controller/accounts/17/oauth-publication-fence"},
+		{http.MethodGet, "/api/v1/oauth-controller/accounts/17/oauth-publication-fence"},
 		{http.MethodDelete, "/api/v1/oauth-controller/accounts/17/oauth-controller-credentials/c45ce361-c1d8-44b2-89b3-d0955e17cc88"},
 	} {
 		w := httptest.NewRecorder()
