@@ -555,6 +555,12 @@ function toggleInstall() {
   installFilesServiceKey.value = ''
   installConfirmed.value = false
 }
+function openRuntimeSetup() {
+  showInstall.value = true
+  switchError.value = ''
+  switchNotice.value = ''
+  requestAnimationFrame(() => document.getElementById('core-runtime-install')?.scrollIntoView({ behavior: 'smooth', block: 'start' }))
+}
 function generateDeploymentID() {
   try {
     deploymentID.value = `deployment_${crypto.randomUUID()}`
