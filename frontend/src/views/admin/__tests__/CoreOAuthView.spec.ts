@@ -587,9 +587,15 @@ describe('核心双 OAuth 授权管理', () => {
   })
 
   it('折叠安装表单时清空暂存的 Files service key', async () => {
+    api.listProfiles.mockResolvedValue(authorizedProfiles())
     const wrapper = mountView()
     await flushPromises()
     await wrapper.get('[data-action="show-install"]').trigger('click')
+    await wrapper.get('[data-field="install-group"]').setValue('1')
+    await wrapper.get('[data-field="install-bps-base-url"]').setValue('https://worker.example.invalid/v1')
+    await wrapper.get('[data-field="install-bps-api-key"]').setValue('inference-key-test-only')
+    await wrapper.get('[data-action="create-runtime-shells"]').trigger('click')
+    await flushPromises()
     await wrapper.get('[data-field="install-files-key"]').setValue('fixture-independent-files-key-1234567890')
     await wrapper.get('[data-action="show-install"]').trigger('click')
     await wrapper.get('[data-action="show-install"]').trigger('click')
