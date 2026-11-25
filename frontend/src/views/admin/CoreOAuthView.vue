@@ -65,6 +65,16 @@
           <p v-if="notices[provider.id]" role="status" class="text-sm text-green-700 dark:text-green-300">{{ notices[provider.id] }}</p>
         </article>
       </div>
+      <div v-if="hasAuthorizedProfile && !runtimeShellCreated" class="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100" role="status">
+        <div>
+          <p class="font-medium">授权已完成，运行账号尚未创建或绑定完整</p>
+          <p class="mt-1">继续设置会先找回本分组中已有的暂停账号；创建成功后账号立即显示在账号管理，worker 安装前保持暂停调度。</p>
+        </div>
+        <div class="flex shrink-0 flex-wrap gap-2">
+          <button type="button" class="btn btn-secondary" data-action="continue-runtime-setup" @click="openRuntimeSetup">继续创建运行账号</button>
+          <a class="btn btn-secondary" href="/admin/accounts">查看账号列表</a>
+        </div>
+      </div>
       <section class="card space-y-5 border border-gray-200 p-5 dark:border-dark-700" :aria-busy="switchBusy">
         <div>
           <h3 class="font-semibold text-gray-900 dark:text-white">新会话提供方</h3>
@@ -109,13 +119,13 @@
           <button type="button" class="btn btn-secondary" data-action="show-install" :aria-expanded="showInstall" aria-controls="core-runtime-install" :disabled="mutationBusy" @click="toggleInstall">{{ showInstall ? '收起安装步骤' : '首次安装或修复核心运行时' }}</button>
           <form v-if="showInstall" id="core-runtime-install" data-form="install" class="space-y-4" @submit.prevent="installRuntime">
             <div class="space-y-2 rounded-lg bg-gray-50 p-4 text-sm text-gray-600 dark:bg-dark-800 dark:text-gray-300">
-              <p>先完成上方两份有效授权，再为同一个 OpenAI 分组创建两个暂停调度的运行账号：</p>
+              <h4 class="font-medium text-gray-900 dark:text-white">第一步：创建暂停运行账号</h4>
+              <p>两个账号创建成功后会立即显示在账号管理中；它们不会参与调度，直到 worker 安装成功。</p>
               <ol class="list-decimal space-y-1 pl-5">
                 <li>Excel：提供 worker inference base_url 和 API key。</li>
                 <li>Codex：不需要填写 OAuth token。</li>
-                <li>安装收到 worker 回执后再启用这两个新账号；已有外部受管账号不会被自动接管。</li>
               </ol>
-              <p>worker 须配置为仅接收访问凭据的受管模式。安装采用上方当前选中的 Codex 与 Excel 授权档案。</p>
+              <p>开始创建前，需要 Codex 与 Excel 两份有效授权，并选择同一个 OpenAI 分组。</p>
             </div>
             <div class="grid gap-4 sm:grid-cols-2">
               <div class="space-y-1"><label for="install-group" class="block text-sm font-medium text-gray-700 dark:text-gray-200">OpenAI 分组 ID</label><input id="install-group" v-model.number="installGroup" data-field="install-group" :class="fieldClass" type="number" min="1" step="1" :disabled="mutationBusy || !!installBPSAccount"></div>
@@ -125,20 +135,32 @@
               <div class="space-y-1"><label for="install-control-url" class="block text-sm font-medium text-gray-700 dark:text-gray-200">Worker 控制根 URL</label><input id="install-control-url" v-model="installControlURL" data-field="install-control-url" :class="fieldClass" type="url" maxlength="2048" autocomplete="off" :disabled="mutationBusy" aria-describedby="install-control-note"></div>
               <div class="space-y-1"><label for="install-control-key" class="block text-sm font-medium text-gray-700 dark:text-gray-200">独立 Control key</label><input id="install-control-key" v-model="installControlKey" data-field="install-control-key" :class="fieldClass" type="password" maxlength="4096" autocomplete="new-password" :disabled="mutationBusy" aria-describedby="install-control-note"></div>
               <div class="space-y-1"><label for="install-files-key" class="block text-sm font-medium text-gray-700 dark:text-gray-200">独立 Files service key</label><input id="install-files-key" v-model="installFilesServiceKey" data-field="install-files-key" :class="fieldClass" type="password" maxlength="4096" autocomplete="new-password" :disabled="mutationBusy" aria-describedby="install-files-note"><p id="install-files-note" class="text-xs text-gray-500 dark:text-gray-400">必须与 worker 的 BPS_LOCAL_SERVICE_KEY 相同，且不同于 API key 和 Control key。</p></div>
+              <div v-if="!installBPSAccount" class="space-y-1"><label for="install-bps-base-url" class="block text-sm font-medium text-gray-700 dark:text-gray-200">Excel worker inference base URL</label><input id="install-bps-base-url" v-model="installBPSBaseURL" data-field="install-bps-base-url" :class="fieldClass" type="url" maxlength="2048" autocomplete="url" :disabled="mutationBusy"></div>
+              <div v-if="!installBPSAccount" class="space-y-1"><label for="install-bps-api-key" class="block text-sm font-medium text-gray-700 dark:text-gray-200">Excel inference API key</label><input id="install-bps-api-key" v-model="installBPSAPIKey" data-field="install-bps-api-key" :class="fieldClass" type="password" maxlength="4096" autocomplete="new-password" :disabled="mutationBusy"></div>
+              <div class="flex flex-wrap items-center gap-2 sm:col-span-2">
+                <span v-if="shellRecoveryLoading" role="status" class="text-sm text-gray-500 dark:text-gray-400">正在查找本分组的暂停运行账号…</span>
+                <button v-else-if="!installCodexAccount" type="button" class="btn btn-primary" data-action="create-runtime-shells" :disabled="!canCreateRuntimeShells || !!shellRecoveryError" @click="createRuntimeShells">{{ installBPSAccount ? '重试创建 Codex 账号' : '创建两个暂停账号' }}</button>
+                <span v-if="installBPSAccount && installCodexAccount" role="status" class="text-sm text-gray-600 dark:text-gray-300">两个暂停账号已创建，Excel #{{ installBPSAccount }}、Codex #{{ installCodexAccount }}。<a class="font-medium text-primary-600 hover:underline dark:text-primary-400" href="/admin/accounts">前往账号管理查看</a></span>
+                <span v-else-if="installBPSAccount" role="status" class="text-sm text-gray-600 dark:text-gray-300">Excel 暂停账号 #{{ installBPSAccount }} 已创建并显示在账号管理中。</span>
+              </div>
+              <div v-if="runtimeShellCreated" class="space-y-2 border-t border-gray-200 pt-4 dark:border-dark-700 sm:col-span-2">
+                <h4 class="font-medium text-gray-900 dark:text-white">第二步：安装 worker 并配置新会话路由</h4>
+                <p class="text-sm text-gray-500 dark:text-gray-400">收到 worker 安装回执后，系统才会绑定授权并启用这两个新账号。已有外部受管账号不会被自动接管。</p>
+              </div>
+              <div v-if="runtimeShellCreated" class="space-y-1"><label for="install-backend" class="block text-sm font-medium text-gray-700 dark:text-gray-200">Worker backend ID</label><input id="install-backend" v-model="installBackend" data-field="install-backend" :class="fieldClass" type="text" maxlength="256" autocomplete="off" :disabled="mutationBusy"></div>
+              <div v-if="runtimeShellCreated" class="space-y-1"><label for="install-control-url" class="block text-sm font-medium text-gray-700 dark:text-gray-200">Worker 控制根 URL</label><input id="install-control-url" v-model="installControlURL" data-field="install-control-url" :class="fieldClass" type="url" maxlength="2048" autocomplete="off" :disabled="mutationBusy" aria-describedby="install-control-note"></div>
+              <div v-if="runtimeShellCreated" class="space-y-1"><label for="install-control-key" class="block text-sm font-medium text-gray-700 dark:text-gray-200">独立 Control key</label><input id="install-control-key" v-model="installControlKey" data-field="install-control-key" :class="fieldClass" type="password" maxlength="4096" autocomplete="new-password" :disabled="mutationBusy" aria-describedby="install-control-note"></div>
+              <div v-if="runtimeShellCreated" class="space-y-1"><label for="install-files-key" class="block text-sm font-medium text-gray-700 dark:text-gray-200">独立 Files service key</label><input id="install-files-key" v-model="installFilesServiceKey" data-field="install-files-key" :class="fieldClass" type="password" maxlength="4096" autocomplete="new-password" :disabled="mutationBusy" aria-describedby="install-files-note"><p id="install-files-note" class="text-xs text-gray-500 dark:text-gray-400">必须与 worker 的 BPS_LOCAL_SERVICE_KEY 相同，且不同于 API key 和 Control key。</p></div>
             </div>
-            <p id="install-control-note" class="text-xs text-gray-500 dark:text-gray-400">控制 URL 须与 inference 同源；control key 至少 32 字节，且必须独立于 inference 和 Files service key。key 仅用于本次提交，随后清空。首次安装两项必填；已校验的同身份修复可同时留空复用服务端配置。</p>
-            <div class="space-y-1">
+            <p v-if="shellRecoveryError" role="alert" class="text-sm text-red-700 dark:text-red-300">{{ shellRecoveryError }}</p>
+            <p v-if="runtimeShellCreated" id="install-control-note" class="text-xs text-gray-500 dark:text-gray-400">控制 URL 须与 inference 同源；control key 至少 32 字节，且必须独立于 inference 和 Files service key。key 仅用于本次提交，随后清空。首次安装两项必填；已校验的同身份修复可同时留空复用服务端配置。</p>
+            <div v-if="runtimeShellCreated" class="space-y-1">
               <label for="install-provider" class="block text-sm font-medium text-gray-700 dark:text-gray-200">安装后新会话使用</label>
               <select id="install-provider" v-model="installProvider" data-field="install-provider" :class="fieldClass" :disabled="mutationBusy"><option value="" disabled>请选择提供方</option><option value="codex">Codex</option><option value="bps_excel">Excel / BPS</option></select>
             </div>
-            <div class="flex flex-wrap items-center gap-2">
-              <button v-if="!installCodexAccount" type="button" class="btn btn-secondary" data-action="create-runtime-shells" :disabled="!canCreateRuntimeShells" @click="createRuntimeShells">{{ installBPSAccount ? '重试创建 Codex 账号' : '创建并绑定两个暂停账号' }}</button>
-              <span v-if="installBPSAccount && installCodexAccount" role="status" class="text-sm text-gray-600 dark:text-gray-300">已创建 Excel #{{ installBPSAccount }} 与 Codex #{{ installCodexAccount }}</span>
-              <span v-else-if="installBPSAccount" role="status" class="text-sm text-gray-600 dark:text-gray-300">已创建 Excel #{{ installBPSAccount }}</span>
-            </div>
-            <p class="text-xs text-gray-500 dark:text-gray-400">首次安装使用路由版本 0；已有部署会校验当前版本。部署路由 CAS 失败时，暂停账号只会保留运行时标记，不能参与新会话调度。</p>
-            <label class="flex items-start gap-2 text-sm text-gray-700 dark:text-gray-200"><input v-model="installConfirmed" data-field="install-confirm" type="checkbox" :disabled="mutationBusy" class="mt-0.5 rounded border-gray-300 text-primary-600 focus:ring-primary-500 dark:border-dark-500">我已核对两份授权、分组和全新空账号，明确为新会话启用所选提供方。</label>
-            <button type="submit" class="btn btn-primary" data-action="install-runtime" :disabled="!canInstallRuntime">{{ switchBusy ? '正在安装…' : '安装核心运行时' }}</button>
+            <p v-if="runtimeShellCreated" class="text-xs text-gray-500 dark:text-gray-400">首次安装使用路由版本 0；已有部署会校验当前版本。若安装失败，账号仍会留在账号管理且保持暂停，可在此重试。</p>
+            <label v-if="runtimeShellCreated" class="flex items-start gap-2 text-sm text-gray-700 dark:text-gray-200"><input v-model="installConfirmed" data-field="install-confirm" type="checkbox" :disabled="mutationBusy" class="mt-0.5 rounded border-gray-300 text-primary-600 focus:ring-primary-500 dark:border-dark-500">我已核对两份授权、分组和全新空账号，明确为新会话启用所选提供方。</label>
+            <button v-if="runtimeShellCreated" type="submit" class="btn btn-primary" data-action="install-runtime" :disabled="!canInstallRuntime">{{ switchBusy ? '正在安装…' : '安装核心运行时' }}</button>
           </form>
         </div>
         <p v-if="switchError" role="alert" class="text-sm text-red-700 dark:text-red-300">{{ switchError }}</p>
@@ -188,6 +210,10 @@ const needsReload = reactive({ codex: false, bps_excel: false })
 const now = ref(Date.now())
 const anyBusy = computed(() => busy.codex || busy.bps_excel)
 const mutationBusy = computed(() => anyBusy.value || switchBusy.value)
+const hasAuthorizedProfile = computed(() => profiles.value.some(profile => profile.authorized))
+const runtimeShellCreated = computed(() => positiveID(installBPSAccount.value) && positiveID(installCodexAccount.value))
+const shellRecoveryError = ref('')
+const shellRecoveryLoading = ref(false)
 let alive = true
 let expiryTimer: ReturnType<typeof setInterval> | undefined
 
@@ -572,6 +598,38 @@ async function createRuntimeShells() {
     installBPSAPIKey.value = ''
   }
 }
+let shellRecoveryRequest = 0
+async function recoverRuntimeShells(groupID: number, requestID: number) {
+  shellRecoveryError.value = ''
+  shellRecoveryLoading.value = true
+  try {
+    const shells = await coreOAuthAPI.listRuntimeShells(groupID)
+    if (!alive || requestID !== shellRecoveryRequest) return
+    const byProvider = {
+      bps_excel: shells.filter(shell => shell.provider === 'bps_excel' && !shell.schedulable),
+      codex: shells.filter(shell => shell.provider === 'codex' && !shell.schedulable),
+    }
+    if (byProvider.bps_excel.length > 1 || byProvider.codex.length > 1) {
+      shellRecoveryError.value = '本分组存在多个同类暂停运行账号，已停止自动选择。请先在账号管理确认并清理重复账号。'
+      return
+    }
+    installBPSAccount.value = byProvider.bps_excel[0]?.id || ''
+    installCodexAccount.value = byProvider.codex[0]?.id || ''
+    if (runtimeShellCreated.value) switchNotice.value = '已找回本分组中未安装的暂停运行账号，可以继续 worker 安装。'
+  } catch (error) {
+    if (requestID === shellRecoveryRequest) shellRecoveryError.value = safeError(error)
+  } finally {
+    if (alive && requestID === shellRecoveryRequest) shellRecoveryLoading.value = false
+  }
+}
+watch(installGroup, (groupID) => {
+  const requestID = ++shellRecoveryRequest
+  installBPSAccount.value = ''
+  installCodexAccount.value = ''
+  shellRecoveryError.value = ''
+  shellRecoveryLoading.value = positiveID(groupID)
+  if (typeof groupID === 'number' && positiveID(groupID)) void recoverRuntimeShells(groupID, requestID)
+})
 const installRevision = computed(() => previewKey.value === contextKey.value ? switchState.value?.route_revision ?? 0 : 0)
 const canInstallRuntime = computed(() => {
   const controlURL = installControlURL.value.trim()

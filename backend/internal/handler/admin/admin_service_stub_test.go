@@ -461,6 +461,22 @@ func (s *stubAdminService) ListAccountsForSchedulerScoreFilter(_ context.Context
 	return s.accounts, nil
 }
 
+func (s *stubAdminService) ListCoreOAuthRuntimeShells(_ context.Context, groupID int64) ([]service.Account, error) {
+	var out []service.Account
+	for _, account := range s.accounts {
+		provider, err := service.CoreOAuthRuntimeShellProvider(&account)
+		if err != nil || account.Schedulable || account.ParentAccountID != nil {
+			continue
+		}
+		marker, _ := account.Extra[service.CoreOAuthRuntimeShellExtraKey].(map[string]any)
+		if int64(service.ParseExtraInt(marker["group_id"])) == groupID {
+			account.Name = provider
+			out = append(out, account)
+		}
+	}
+	return out, nil
+}
+
 func (s *stubAdminService) ListOpenAISchedulableAccountsForSchedulerScore(_ context.Context, groupID *int64) ([]service.Account, error) {
 	s.openAISchedulerScorePoolCalls++
 	accounts := s.openAISchedulerScorePoolAccounts

@@ -82,4 +82,11 @@ describe('核心 OAuth API 安全协议', () => {
     await coreOAuthAPI.installCoreRuntime('deployment-1', input)
     expect(post).toHaveBeenCalledWith('/admin/managed-deployments/deployment-1/core-runtime', input)
   })
+
+  it('只读取指定分组内运行账号的安全摘要', async () => {
+    const accounts = [{ id: 17, provider: 'bps_excel', name: 'Sub6 Excel Runtime', schedulable: false, status: 'active' }]
+    get.mockResolvedValueOnce({ data: { accounts } })
+    expect(await coreOAuthAPI.listRuntimeShells(2)).toEqual(accounts)
+    expect(get).toHaveBeenCalledWith('/admin/core-oauth/runtime-shells', { params: { group_id: 2 } })
+  })
 })

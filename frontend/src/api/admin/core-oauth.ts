@@ -116,6 +116,10 @@ export interface CoreRuntimeShell {
   status: string
 }
 
+export interface CoreRuntimeShellSummary extends CoreRuntimeShell {
+  provider: CoreOAuthProvider
+}
+
 const base = '/admin/core-oauth'
 const profilePath = (ref: string) => `${base}/profiles/${encodeURIComponent(ref)}`
 const deploymentPath = (id: string) => `/admin/managed-deployments/${encodeURIComponent(id)}`
@@ -143,6 +147,11 @@ export async function createProfile(input: { name: string; provider: CoreOAuthPr
 export async function createRuntimeShell(input: CoreRuntimeShellInput): Promise<CoreRuntimeShell> {
   const { data } = await apiClient.post<CoreRuntimeShell>(`${base}/runtime-shells`, input)
   return data
+}
+
+export async function listRuntimeShells(groupID: number): Promise<CoreRuntimeShellSummary[]> {
+  const { data } = await apiClient.get<{ accounts: CoreRuntimeShellSummary[] }>(`${base}/runtime-shells`, { params: { group_id: groupID } })
+  return data.accounts
 }
 
 export async function startAuthorization(ref: string): Promise<CoreOAuthAuthorization> {
@@ -186,6 +195,6 @@ export async function installCoreRuntime(id: string, input: CoreRuntimeInstallIn
 }
 
 export default {
-  getCapabilities, listProfiles, getProfile, createProfile, createRuntimeShell, startAuthorization, completeAuthorization,
+  getCapabilities, listProfiles, getProfile, createProfile, createRuntimeShell, listRuntimeShells, startAuthorization, completeAuthorization,
   cancelAuthorization, refreshProfile, getSwitchOptions, switchProvider, installCoreRuntime,
 }

@@ -15,6 +15,7 @@ func registerCoreOAuthRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 	})
 	group.GET("/capabilities", h.Admin.CoreOAuth.Capabilities)
 	group.GET("/profiles", h.Admin.CoreOAuth.ListProfiles)
+	group.GET("/runtime-shells", h.Admin.Account.ListCoreRuntimeShells)
 	group.POST("/profiles", h.Admin.CoreOAuth.CreateProfile)
 	group.POST("/runtime-shells", h.Admin.Account.CreateCoreRuntimeShell)
 	group.GET("/profiles/:ref", h.Admin.CoreOAuth.GetProfile)

@@ -5,7 +5,7 @@ import type { CoreOAuthProfile, ManagedSwitchState } from '@/api/admin/core-oaut
 
 const { api, stepUpRun, routeQuery } = vi.hoisted(() => ({
   api: {
-    getCapabilities: vi.fn(), getProfile: vi.fn(), createProfile: vi.fn(), createRuntimeShell: vi.fn(), listProfiles: vi.fn(), startAuthorization: vi.fn(), completeAuthorization: vi.fn(),
+    getCapabilities: vi.fn(), getProfile: vi.fn(), createProfile: vi.fn(), createRuntimeShell: vi.fn(), listRuntimeShells: vi.fn(), listProfiles: vi.fn(), startAuthorization: vi.fn(), completeAuthorization: vi.fn(),
     cancelAuthorization: vi.fn(), refreshProfile: vi.fn(), getSwitchOptions: vi.fn(), switchProvider: vi.fn(), installCoreRuntime: vi.fn(),
   },
   stepUpRun: vi.fn((action: () => Promise<unknown>) => action()),
@@ -71,10 +71,12 @@ async function prepareInstall(wrapper: ReturnType<typeof mountView>) {
   await wrapper.get('[data-field="install-bps-api-key"]').setValue('inference-key-test-only')
   await wrapper.get('[data-action="create-runtime-shells"]').trigger('click')
   await flushPromises()
-  await wrapper.get('[data-field="install-backend"]').setValue('worker-1')
-  await wrapper.get('[data-field="install-control-url"]').setValue('https://worker.example.invalid')
-  await wrapper.get('[data-field="install-provider"]').setValue('bps_excel')
-  await wrapper.get('[data-field="install-confirm"]').setValue(true)
+  if (wrapper.find('[data-field="install-backend"]').exists()) {
+    await wrapper.get('[data-field="install-backend"]').setValue('worker-1')
+    await wrapper.get('[data-field="install-control-url"]').setValue('https://worker.example.invalid')
+    await wrapper.get('[data-field="install-provider"]').setValue('bps_excel')
+    await wrapper.get('[data-field="install-confirm"]').setValue(true)
+  }
 }
 
 describe('核心双 OAuth 授权管理', () => {
@@ -93,6 +95,7 @@ describe('核心双 OAuth 授权管理', () => {
       name: `${provider} runtime shell`, platform: 'openai', type: provider === 'bps_excel' ? 'apikey' : 'oauth',
       status: 'active', schedulable: false,
     }))
+    api.listRuntimeShells.mockResolvedValue([])
     api.getProfile.mockResolvedValue(profile())
     api.startAuthorization.mockResolvedValue({
       profile: profile({ status: 'authorizing', attempt }), attempt_id: attempt.attempt_id,
@@ -156,6 +159,28 @@ describe('核心双 OAuth 授权管理', () => {
     expect(link.attributes('href')).toBe('https://auth.openai.com/oauth/authorize?state=fixture')
     expect(link.attributes('rel')).toContain('noopener')
     expect(wrapper.get('[data-provider="bps_excel"]').find('textarea').exists()).toBe(false)
+  })
+
+  it('授权档案已完成但运行账号尚未创建时，提供直达账号配置的入口', async () => {
+    api.listProfiles.mockResolvedValue([profile({
+      provider: 'bps_excel', profile_ref: 'excel-profile', name: 'Excel 授权',
+      status: 'authorized', authorized: true,
+    })])
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('授权已完成，运行账号尚未创建或绑定完整')
+    expect(wrapper.get('[data-action="continue-runtime-setup"]').text()).toContain('继续创建运行账号')
+    expect(wrapper.get('a[href="/admin/accounts"]').text()).toContain('查看账号列表')
+    expect(wrapper.find('[data-form="install"]').exists()).toBe(false)
+
+    await wrapper.get('[data-action="continue-runtime-setup"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-form="install"]').exists()).toBe(true)
+    expect(wrapper.get('[data-field="install-group"]').exists()).toBe(true)
+    expect(wrapper.get('[data-field="install-bps-base-url"]').exists()).toBe(true)
+    expect(wrapper.get('[data-field="install-bps-api-key"]').exists()).toBe(true)
   })
 
   it('将完整回调 URL 与本次事务发送，成功后清除敏感输入', async () => {
@@ -556,8 +581,8 @@ describe('核心双 OAuth 授权管理', () => {
     const wrapper = mountView()
     await flushPromises()
     await wrapper.get('[data-action="show-install"]').trigger('click')
-    expect(wrapper.text()).toContain('两份有效授权')
-    expect(wrapper.get('[data-action="install-runtime"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.text()).toContain('Codex 与 Excel 两份有效授权')
+    expect(wrapper.find('[data-action="install-runtime"]').exists()).toBe(false)
     expect(api.installCoreRuntime).not.toHaveBeenCalled()
   })
 
@@ -590,29 +615,64 @@ describe('核心双 OAuth 授权管理', () => {
 
   it('Codex 创建失败后复用已创建的 Excel 账号，只重试 Codex', async () => {
     api.listProfiles.mockResolvedValue(authorizedProfiles())
+    api.listRuntimeShells.mockResolvedValue([])
     api.createRuntimeShell.mockResolvedValueOnce({ id: 11 }).mockRejectedValueOnce({ code: 'CORE_OAUTH_INVALID_INPUT' })
     const wrapper = mountView()
     await flushPromises()
-    await prepareInstall(wrapper)
+    await wrapper.get('[data-field="deployment-id"]').setValue('deployment-1')
+    await wrapper.get('[data-field="requested-model"]').setValue('operator-model')
+    await wrapper.get('input[value="responses"]').setValue(true)
+    await wrapper.get('[data-action="show-install"]').trigger('click')
+    await wrapper.get('[data-field="install-group"]').setValue('1')
+    await wrapper.get('[data-field="install-bps-base-url"]').setValue('https://worker.example.invalid/v1')
+    await wrapper.get('[data-field="install-bps-api-key"]').setValue('inference-key-test-only')
+    await flushPromises()
+    await wrapper.get('[data-action="create-runtime-shells"]').trigger('click')
+    await flushPromises()
 
     expect(api.createRuntimeShell).toHaveBeenCalledTimes(2)
     expect(wrapper.find('[data-field="install-bps-api-key"]').exists()).toBe(false)
     const retry = wrapper.get('[data-action="create-runtime-shells"]')
     expect(retry.attributes('disabled')).toBeUndefined()
     expect(wrapper.get('[data-field="install-group"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.text()).toContain('授权已完成，运行账号尚未创建或绑定完整')
     await retry.trigger('click')
     await flushPromises()
 
     expect(api.createRuntimeShell).toHaveBeenCalledTimes(3)
     expect(api.createRuntimeShell).toHaveBeenLastCalledWith({ provider: 'codex', group_id: 1 })
-    expect(wrapper.text()).toContain('已创建 Excel #11 与 Codex #12')
+    expect(wrapper.text()).toContain('两个暂停账号已创建，Excel #11、Codex #12')
+    expect(wrapper.get('[data-field="install-backend"]').exists()).toBe(true)
+    expect(wrapper.get('[data-field="install-control-url"]').exists()).toBe(true)
+    await wrapper.get('[data-field="install-backend"]').setValue('worker-1')
+    await wrapper.get('[data-field="install-control-url"]').setValue('https://worker.example.invalid')
+    await wrapper.get('[data-field="install-provider"]').setValue('bps_excel')
     await wrapper.get('[data-field="install-control-key"]').setValue('fixture-independent-control-key-1234567890')
     await wrapper.get('[data-field="install-files-key"]').setValue('fixture-independent-files-key-1234567890')
+    await wrapper.get('[data-field="install-confirm"]').setValue(true)
     await wrapper.get('[data-form="install"]').trigger('submit')
     await flushPromises()
     expect(api.installCoreRuntime).toHaveBeenCalledWith('deployment-1', expect.objectContaining({
       bps_account_id: 11, codex_account_id: 12, group_id: 1,
     }))
+  })
+
+  it('页面刷新后恢复已创建的暂停账号，不重复创建', async () => {
+    api.listProfiles.mockResolvedValue(authorizedProfiles())
+    api.listRuntimeShells.mockResolvedValue([
+      { id: 11, provider: 'bps_excel', name: 'Sub6 Excel Runtime', schedulable: false, status: 'active' },
+      { id: 12, provider: 'codex', name: 'Sub6 Codex Runtime', schedulable: false, status: 'active' },
+    ])
+    const wrapper = mountView()
+    await flushPromises()
+    await wrapper.get('[data-action="show-install"]').trigger('click')
+    await wrapper.get('[data-field="install-group"]').setValue('2')
+    await flushPromises()
+    expect(api.listRuntimeShells).toHaveBeenCalledWith(2)
+    expect(wrapper.text()).toContain('两个暂停账号已创建，Excel #11、Codex #12')
+    expect(wrapper.find('[data-action="create-runtime-shells"]').exists()).toBe(false)
+    expect(wrapper.get('[data-field="install-backend"]').exists()).toBe(true)
+    expect(api.createRuntimeShell).not.toHaveBeenCalled()
   })
 
   it('安装失败同样清空 control key，不回显错误中的凭据或自动重试', async () => {

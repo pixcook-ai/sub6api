@@ -1171,6 +1171,44 @@ type coreRuntimeShellRequest struct {
 	APIKey   string `json:"api_key"`
 }
 
+type coreRuntimeShellSummary struct {
+	ID          int64  `json:"id"`
+	Provider    string `json:"provider"`
+	Name        string `json:"name"`
+	Schedulable bool   `json:"schedulable"`
+	Status      string `json:"status"`
+}
+
+// ListCoreRuntimeShells recovers only paused, native runtime shells for setup.
+func (h *AccountHandler) ListCoreRuntimeShells(c *gin.Context) {
+	if _, ok := coreOAuthAdminActor(c); !ok {
+		return
+	}
+	groupID, err := strconv.ParseInt(c.Query("group_id"), 10, 64)
+	if err != nil || groupID <= 0 || h == nil || h.adminService == nil {
+		response.ErrorFrom(c, service.ErrCoreOAuthInvalidInput)
+		return
+	}
+	accounts, err := h.adminService.ListCoreOAuthRuntimeShells(c.Request.Context(), groupID)
+	if response.ErrorFrom(c, err) {
+		return
+	}
+	result := make([]coreRuntimeShellSummary, 0, len(accounts))
+	for _, account := range accounts {
+		provider, markerErr := service.CoreOAuthRuntimeShellProvider(&account)
+		if markerErr != nil {
+			response.ErrorFrom(c, service.ErrCoreOAuthUnavailable)
+			return
+		}
+		result = append(result, coreRuntimeShellSummary{
+			ID: account.ID, Provider: provider, Name: account.Name,
+			Schedulable: account.Schedulable, Status: account.Status,
+		})
+	}
+	c.Header("Cache-Control", "no-store")
+	response.Success(c, gin.H{"accounts": result})
+}
+
 // CreateCoreRuntimeShell creates an OpenAI runtime account for the native core
 // OAuth installer. Shells start paused and carry no core ownership marker.
 func (h *AccountHandler) CreateCoreRuntimeShell(c *gin.Context) {

@@ -69,6 +69,40 @@ func (s *adminServiceImpl) GetAccountsByIDs(ctx context.Context, ids []int64) ([
 	return accounts, nil
 }
 
+// ListCoreOAuthRuntimeShells returns only paused runtime shells bound to the
+// requested OpenAI group. The marker and credentials remain server-side.
+func (s *adminServiceImpl) ListCoreOAuthRuntimeShells(ctx context.Context, groupID int64) ([]Account, error) {
+	if s == nil || s.accountRepo == nil || groupID <= 0 {
+		return nil, ErrCoreOAuthInvalidInput
+	}
+	params := pagination.PaginationParams{Page: 1, PageSize: 100, SortBy: "id", SortOrder: "asc"}
+	var result []Account
+	for {
+		accounts, page, err := s.accountRepo.ListWithFilters(ctx, params, PlatformOpenAI, "", "", "", groupID, "")
+		if err != nil {
+			return nil, err
+		}
+		for i := range accounts {
+			account := &accounts[i]
+			provider, markerErr := CoreOAuthRuntimeShellProvider(account)
+			if markerErr != nil || account.Schedulable || account.ParentAccountID != nil {
+				continue
+			}
+			marker, _ := account.Extra[CoreOAuthRuntimeShellExtraKey].(map[string]any)
+			if int64(ParseExtraInt(marker["group_id"])) != groupID {
+				continue
+			}
+			account.Name = provider
+			result = append(result, *account)
+		}
+		if page == nil || int64(params.Offset()+len(accounts)) >= page.Total || len(accounts) == 0 {
+			break
+		}
+		params.Page++
+	}
+	return result, nil
+}
+
 const maxAccountNameRunes = 100
 const duplicateAccountOperationIDExtraKey = "duplicate_operation_id"
 

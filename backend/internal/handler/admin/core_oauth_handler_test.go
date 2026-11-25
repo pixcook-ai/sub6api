@@ -40,6 +40,52 @@ type coreOAuthHandlerSpy struct {
 	refreshRevision int64
 }
 
+type coreOAuthRuntimeShellAdminStub struct{ *stubAdminService }
+
+func (s *coreOAuthRuntimeShellAdminStub) ListCoreOAuthRuntimeShells(_ context.Context, groupID int64) ([]service.Account, error) {
+	if groupID != 2 {
+		return nil, service.ErrCoreOAuthInvalidInput
+	}
+	return []service.Account{{ID: 17, Name: service.CoreOAuthProviderExcel, Platform: service.PlatformOpenAI, Schedulable: false, Status: service.StatusActive, Credentials: map[string]any{"api_key": "must-not-escape"}, Extra: map[string]any{"must_not_escape": "private"}}}, nil
+}
+
+func TestCoreRuntimeShellRecoveryReturnsOnlySafePausedSummary(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	adminService := &coreOAuthRuntimeShellAdminStub{stubAdminService: newStubAdminService()}
+	h := NewAccountHandler(adminService, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/v1/admin/core-oauth/runtime-shells?group_id=2", nil)
+	c.Set(string(middleware.ContextKeyUser), middleware.AuthSubject{UserID: 7})
+	c.Set(string(middleware.ContextKeyUserRole), "admin")
+	h.ListCoreRuntimeShells(c)
+	require.Equal(t, http.StatusOK, w.Code)
+	require.JSONEq(t, `{"code":0,"message":"success","data":{"accounts":[{"id":17,"provider":"bps_excel","name":"bps_excel","schedulable":false,"status":"active"}]}}`, w.Body.String())
+	require.NotContains(t, w.Body.String(), "must-not-escape")
+	require.Equal(t, "no-store", w.Header().Get("Cache-Control"))
+}
+
+func TestCoreRuntimeShellRecoveryRequiresAdminAndGroup(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	h := NewAccountHandler(newStubAdminService(), nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	for _, tc := range []struct {
+		actor int64
+		role  string
+		query string
+		want  int
+	}{{0, "admin", "?group_id=2", http.StatusUnauthorized}, {7, "user", "?group_id=2", http.StatusForbidden}, {7, "admin", "", http.StatusBadRequest}} {
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest(http.MethodGet, "/api/v1/admin/core-oauth/runtime-shells"+tc.query, nil)
+		if tc.actor > 0 {
+			c.Set(string(middleware.ContextKeyUser), middleware.AuthSubject{UserID: tc.actor})
+		}
+		c.Set(string(middleware.ContextKeyUserRole), tc.role)
+		h.ListCoreRuntimeShells(c)
+		require.Equal(t, tc.want, w.Code)
+	}
+}
+
 func (s *coreOAuthHandlerSpy) CompleteAuthorization(_ context.Context, _ string, in service.CoreOAuthCompleteInput) (*service.CoreOAuthProfile, error) {
 	s.completeInput = in
 	s.completeCalls++
