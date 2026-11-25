@@ -400,9 +400,9 @@ async function complete(provider: CoreOAuthProvider) {
     upsert(result)
     authorizationLinks[provider] = ''
     if (!authorizationFeedback(provider) && result.authorized && result.status === 'authorized' && (!result.attempt || result.attempt.status === 'consumed')) {
-      notices[provider] = '已完成本次授权。'
-      // Keep the second phase visible so the operator can create the schedulable runtime accounts.
-      showInstall.value = true
+      notices[provider] = '已完成本次授权。还需要创建运行账号，账号才会出现在账号管理列表。'
+      // Move the operator directly to the second phase instead of leaving the page at the OAuth cards.
+      openRuntimeSetup()
     } else if (!authorizationFeedback(provider)) {
       errors[provider] = authorizationUncertainMessage
       needsReload[provider] = true
@@ -556,7 +556,7 @@ function openRuntimeSetup() {
   showInstall.value = true
   switchError.value = ''
   switchNotice.value = ''
-  requestAnimationFrame(() => document.getElementById('core-runtime-install')?.scrollIntoView({ behavior: 'smooth', block: 'start' }))
+  requestAnimationFrame(() => document.getElementById('core-runtime-install')?.scrollIntoView?.({ behavior: 'smooth', block: 'start' }))
 }
 function generateDeploymentID() {
   try {

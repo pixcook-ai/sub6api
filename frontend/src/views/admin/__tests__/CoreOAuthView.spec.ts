@@ -195,6 +195,7 @@ describe('核心双 OAuth 授权管理', () => {
     expect(api.completeAuthorization).toHaveBeenCalledWith('codex-profile', { attempt_id: 'attempt-current', callback_url: callbackURL })
     expect(wrapper.find('textarea').exists()).toBe(false)
     expect(wrapper.text()).toContain('已授权')
+    expect(wrapper.text()).toContain('还需要创建运行账号，账号才会出现在账号管理列表')
     expect(wrapper.find('[data-form="install"]').exists()).toBe(true)
     expect(wrapper.html()).not.toContain('private-test-code')
   })
