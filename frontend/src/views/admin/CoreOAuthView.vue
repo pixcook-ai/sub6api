@@ -72,7 +72,6 @@
         </div>
         <div class="flex shrink-0 flex-wrap gap-2">
           <button type="button" class="btn btn-secondary" data-action="continue-runtime-setup" @click="openRuntimeSetup">继续创建运行账号</button>
-          <a class="btn btn-secondary" href="/admin/accounts">查看账号列表</a>
         </div>
       </div>
       <section class="card space-y-5 border border-gray-200 p-5 dark:border-dark-700" :aria-busy="switchBusy">

@@ -171,7 +171,7 @@ describe('核心双 OAuth 授权管理', () => {
 
     expect(wrapper.text()).toContain('授权已完成，运行账号尚未创建或绑定完整')
     expect(wrapper.get('[data-action="continue-runtime-setup"]').text()).toContain('继续创建运行账号')
-    expect(wrapper.get('a[href="/admin/accounts"]').text()).toContain('查看账号列表')
+    expect(wrapper.find('a[href="/admin/accounts"]').exists()).toBe(false)
     expect(wrapper.find('[data-form="install"]').exists()).toBe(false)
 
     await wrapper.get('[data-action="continue-runtime-setup"]').trigger('click')
