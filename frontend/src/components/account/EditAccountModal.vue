@@ -28,6 +28,8 @@
 
       <OpenAIBPSAccountFields v-if="account.platform === 'openai_bps'" v-model="bpsDraft" editing :account-id="account.id" :expires-at="String(account.credentials?.expires_at ?? '')" :credential-state="account.bps_credential_state" :account-status="account.status" :schedulable="account.schedulable" />
 
+      <OpenAILoginCredentialNotice v-if="account.type === 'oauth' && (account.platform === 'openai' || account.platform === 'openai_bps')" :account-id="account.id" />
+
       <!-- API Key fields (only for apikey type) -->
       <div v-if="account.type === 'apikey'" class="space-y-4">
         <div v-if="!isCNApiKeyAccount || editApiProtocol !== 'adaptive'">
@@ -3168,6 +3170,7 @@
 
 <script setup lang="ts">
 import OpenAIBPSAccountFields from './OpenAIBPSAccountFields.vue'
+import OpenAILoginCredentialNotice from './OpenAILoginCredentialNotice.vue'
 import { newBPSAccountDraft, bpsCredentials } from '@/utils/openaiBps'
 import { ref, reactive, computed, watch, nextTick, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'

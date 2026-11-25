@@ -107,6 +107,24 @@ func ProvideOpenAIOAuthService(
 	return svc
 }
 
+// ProvideOpenAIReauthService builds the re-authorization service and registers it as the
+// permanent-refresh-failure hook of TokenRefreshService.
+func ProvideOpenAIReauthService(
+	repo OpenAILoginCredentialRepository,
+	enc SecretEncryptor,
+	admin AdminService,
+	accountRepo AccountRepository,
+	batch *OpenAIBatchLoginService,
+	refresh *TokenRefreshService,
+) *OpenAIReauthService {
+	svc := NewOpenAIReauthService(repo, enc, admin, accountRepo, batch)
+	batch.SetReauth(svc)
+	if refresh != nil {
+		refresh.SetOpenAIReauthHook(svc)
+	}
+	return svc
+}
+
 // ProvideTokenRefreshService creates and starts TokenRefreshService
 func ProvideTokenRefreshService(
 	accountRepo AccountRepository,
@@ -871,6 +889,8 @@ var ProviderSet = wire.NewSet(
 	NewOAuthService,
 	ProvideClaudeResetCreditService,
 	ProvideOpenAIOAuthService,
+	NewOpenAIBatchLoginService,
+	ProvideOpenAIReauthService,
 	ProvideGrokOAuthService,
 	wire.Bind(new(GrokOAuthTokenService), new(*GrokOAuthService)),
 	NewGeminiOAuthService,

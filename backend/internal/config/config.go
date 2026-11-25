@@ -106,6 +106,7 @@ type Config struct {
 	BatchImage              BatchImageConfig              `mapstructure:"batch_image"`
 	ImageStorage            ImageStorageConfig            `mapstructure:"image_storage"`
 	Plugins                 PluginConfig                  `mapstructure:"plugins"`
+	BatchLogin              BatchLoginConfig              `mapstructure:"batch_login"`
 
 	// Enforce only API-key spending windows in simple mode.
 	SimpleModeKeyRateLimitEnabled bool `mapstructure:"simple_mode_key_rate_limit_enabled" yaml:"simple_mode_key_rate_limit_enabled"`
@@ -125,6 +126,21 @@ type PluginConfig struct {
 	MaxUploadBytes       int64             `mapstructure:"max_upload_bytes"`
 	MaxUncompressedBytes int64             `mapstructure:"max_uncompressed_bytes"`
 	StartTimeoutSeconds  int               `mapstructure:"start_timeout_seconds"`
+}
+
+// BatchLoginConfig controls the vendored toSub2 protocol-login runtime used by
+// the admin batch "email----password----2FA" OAuth import.
+type BatchLoginConfig struct {
+	// ToolsDir is the directory containing run-login.mjs and its node_modules.
+	ToolsDir string `mapstructure:"tools_dir"`
+	// NodePath is the node executable; empty resolves "node" from PATH.
+	NodePath string `mapstructure:"node_path"`
+	// MaxRows is the maximum number of lines accepted per batch.
+	MaxRows int `mapstructure:"max_rows"`
+	// Concurrency is the number of logins running at the same time.
+	Concurrency int `mapstructure:"concurrency"`
+	// TaskTimeoutSeconds bounds a single login subprocess.
+	TaskTimeoutSeconds int `mapstructure:"task_timeout_seconds"`
 }
 
 type LogConfig struct {
@@ -2370,6 +2386,13 @@ func setDefaults() {
 
 	// 本地进程插件。插件必须由管理员手动上传，项目默认不携带任何插件能力。
 	viper.SetDefault("plugins.data_dir", "")
+
+	// 批量邮箱/密码/2FA 授权（内置 toSub2 登录运行时）。
+	viper.SetDefault("batch_login.tools_dir", "/app/tools/tosub2-login")
+	viper.SetDefault("batch_login.node_path", "")
+	viper.SetDefault("batch_login.max_rows", 100)
+	viper.SetDefault("batch_login.concurrency", 3)
+	viper.SetDefault("batch_login.task_timeout_seconds", 600)
 	viper.SetDefault("plugins.allow_unsigned", false)
 	viper.SetDefault("plugins.trusted_publishers", map[string]string{})
 	viper.SetDefault("plugins.max_upload_bytes", int64(128*1024*1024))

@@ -1,6 +1,6 @@
 <template>
   <BaseDialog
-    :show="show" :close-on-escape="!pendingBPSCreate"
+    :show="show" :close-on-escape="!pendingBPSCreate && !batchLoginBusy"
     :title="t('admin.accounts.createAccount')"
     width="wide"
     @close="handleClose"
@@ -3598,6 +3598,10 @@
         :show-codex-session-import-option="form.platform === 'openai'"
         :show-agent-identity-option="form.platform === 'openai'"
         :show-codex-pat-option="form.platform === 'openai'"
+        :show-batch-login-option="form.platform === 'openai'"
+        :batch-login-proxy-id="form.proxy_id"
+        :batch-login-concurrency="form.concurrency"
+        :batch-login-priority="form.priority"
         :show-sso-option="form.platform === 'grok'"
         :show-email-password-option="false"
         :show-manual-option="true"
@@ -3614,6 +3618,8 @@
         @import-codex-pat="handleOpenAIImportCodexPAT"
         @import-sso="handleGrokImportSSO"
         @authorize-password="handleGrokAuthorizePassword"
+        @batch-login-created="emit('created')"
+        @batch-login-busy="batchLoginBusy = $event"
       />
 
     </div>
@@ -4804,6 +4810,8 @@ const tempUnschedPresets = computed(() => [
 const bpsDraft = ref(newBPSAccountDraft())
 const bpsTestAfterSave = ref(false)
 const pendingBPSCreate = ref<{ payload: CreateAccountRequest; testAfterSave: boolean } | null>(null)
+// True while a server-side batch login job is running; blocks closing so progress is not lost.
+const batchLoginBusy = ref(false)
 
 const form = reactive({
   name: '',
@@ -5523,6 +5531,7 @@ const resetForm = () => {
 }
 
 const handleClose = () => {
+  if (batchLoginBusy.value) return
   pendingBPSCreate.value = null
   bpsTestAfterSave.value = false
   antigravityMixedChannelConfirmed.value = false

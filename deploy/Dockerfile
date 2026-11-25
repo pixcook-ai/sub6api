@@ -79,7 +79,29 @@ RUN VERSION_VALUE="${VERSION}" && \
     ./cmd/server
 
 # -----------------------------------------------------------------------------
-# Stage 3: Final Runtime Image
+# Stage 3: toSub2 login runtime (Node + jsdom, Python venv + curl_cffi)
+# Must use the same Alpine version as the final image so the venv's python
+# symlink and native libraries stay compatible.
+# -----------------------------------------------------------------------------
+FROM ${ALPINE_IMAGE} AS tosub2-runtime
+
+RUN apk add --no-cache nodejs npm python3 py3-pip libstdc++
+
+WORKDIR /opt/tosub2-login
+
+COPY tools/tosub2-login/package.json tools/tosub2-login/package-lock.json ./
+RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund
+
+COPY tools/tosub2-login/requirements.txt ./
+RUN python3 -m venv /opt/tosub2-venv && \
+    /opt/tosub2-venv/bin/pip install --no-cache-dir -r requirements.txt && \
+    /opt/tosub2-venv/bin/python -c 'import curl_cffi'
+
+COPY tools/tosub2-login/ ./
+RUN node -e "require('jsdom')" && node --check run-login.mjs
+
+# -----------------------------------------------------------------------------
+# Stage 4: Final Runtime Image
 # -----------------------------------------------------------------------------
 FROM ${ALPINE_IMAGE}
 
@@ -89,12 +111,21 @@ LABEL description="Sub2API - AI API Gateway Platform"
 LABEL org.opencontainers.image.source="https://github.com/MACOS-DO/sub4api"
 
 # Install runtime dependencies
+# nodejs / python3 / libstdc++ are required by the vendored toSub2 login runtime.
 RUN apk add --no-cache \
     ca-certificates \
     tzdata \
     curl \
     su-exec \
+    nodejs \
+    python3 \
+    libstdc++ \
     && rm -rf /var/cache/apk/*
+
+# toSub2 batch-login runtime (read-only for the app user)
+COPY --from=tosub2-runtime /opt/tosub2-venv /opt/tosub2-venv
+COPY --from=tosub2-runtime /opt/tosub2-login /app/tools/tosub2-login
+ENV TOSUB2_PYTHON=/opt/tosub2-venv/bin/python
 
 # Create non-root user
 RUN addgroup -g 1000 sub2api && \

@@ -66,6 +66,7 @@ type TokenRefreshService struct {
 	tempUnschedCache TempUnschedCache // 用于清除 Redis 中的临时不可调度缓存
 	refreshAPI       *OAuthRefreshAPI // 统一刷新 API
 	runtimeBlocker   AccountRuntimeBlocker
+	reauthHook       OpenAIReauthHook
 
 	// OpenAI privacy: 刷新成功后检查并设置 training opt-out
 	privacyClientFactory PrivacyClientFactory
@@ -184,6 +185,16 @@ func (s *TokenRefreshService) SetRefreshPolicy(policy BackgroundRefreshPolicy) {
 
 func (s *TokenRefreshService) SetAccountRuntimeBlocker(blocker AccountRuntimeBlocker) {
 	s.runtimeBlocker = blocker
+}
+
+// OpenAIReauthHook is notified when an OpenAI account's refresh token failed permanently.
+type OpenAIReauthHook interface {
+	OnRefreshPermanentFailure(account *Account)
+}
+
+// SetOpenAIReauthHook injects the automatic re-authorization hook (optional).
+func (s *TokenRefreshService) SetOpenAIReauthHook(hook OpenAIReauthHook) {
+	s.reauthHook = hook
 }
 
 func (s *TokenRefreshService) notifyAccountSchedulingBlocked(account *Account, until time.Time, reason string) {
@@ -1041,6 +1052,9 @@ func (s *TokenRefreshService) refreshWithRetryWithRateGate(
 						"error", logredact.RedactText(invalidateErr.Error()),
 					)
 				}
+			}
+			if s.reauthHook != nil && persistentlyBlocked {
+				s.reauthHook.OnRefreshPermanentFailure(account)
 			}
 			return &accountPermanentRefreshError{
 				err:                     err,
