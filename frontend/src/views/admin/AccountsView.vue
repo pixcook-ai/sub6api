@@ -192,6 +192,12 @@
           @toggle-schedulable="handleBulkToggleSchedulable"
         />
         <div ref="accountTableRef" class="flex min-h-0 flex-1 flex-col overflow-hidden">
+        <div v-if="listLoadError" role="alert" class="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300" data-testid="account-list-error">
+          <span>{{ accountListErrorMessage }}</span>
+          <button type="button" class="btn btn-secondary" data-action="retry-account-list" :disabled="loading" @click="load().catch(() => undefined)">
+            {{ loading ? t('common.loading') : t('common.tryAgain') }}
+          </button>
+        </div>
         <DataTable
           ref="dataTableRef"
           :columns="cols"
@@ -1106,6 +1112,7 @@ const syncAccountListDerivedParams = () => {
 const {
   items: accounts,
   loading,
+  error: listLoadError,
   params,
   pagination,
   load: baseLoad,
@@ -1127,6 +1134,14 @@ const {
     sort_by: sortState.sort_by,
     sort_order: sortState.sort_order
   }
+})
+
+const accountListErrorMessage = computed(() => {
+  if (listLoadError.value && typeof listLoadError.value === 'object') {
+    const error = listLoadError.value as { status?: number; response?: { status?: number } }
+    if (error.status === 401 || error.response?.status === 401) return t('admin.accounts.listSessionExpired')
+  }
+  return t('admin.accounts.listLoadFailed')
 })
 
 const {
@@ -1360,7 +1375,7 @@ const handleSort = (key: string, order: AccountSortOrder) => {
   hasPendingListSync.value = false
   resetAutoRefreshCache()
   pendingTodayStatsRefresh.value = true
-  load()
+  load().catch(() => undefined)
 }
 
 watch(loading, (isLoading, wasLoading) => {
@@ -2602,7 +2617,7 @@ onMounted(async () => {
     }
   }
 
-  load()
+  load().catch(() => undefined)
   loadUpstreamBillingProbeGlobalState()
   void loadCodexTicketGlobalState()
   const [proxiesResult, groupsResult] = await Promise.allSettled([

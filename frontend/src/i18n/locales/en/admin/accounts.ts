@@ -1,5 +1,7 @@
 export default {
     accounts: {
+      listSessionExpired: 'The administrator session expired. Sign in again to view accounts.',
+      listLoadFailed: 'Failed to load accounts. Please retry.',
       bps: {
         authMode: {
           label: 'BPS authentication method',

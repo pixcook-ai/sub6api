@@ -190,6 +190,15 @@ describe('admin AccountsView lite account list', () => {
     wrapper.unmount()
   })
 
+  it('shows a visible retry state when the account list request is unauthorized', async () => {
+    listAccounts.mockRejectedValueOnce({ status: 401 })
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="account-list-error"]').text()).toContain('admin.accounts.listSessionExpired')
+    expect(wrapper.get('[data-action="retry-account-list"]').exists()).toBe(true)
+  })
+
   it('maps group_ids through the group catalog for the table cell', async () => {
     const wrapper = mountView()
     await flushPromises()

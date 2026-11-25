@@ -1,5 +1,7 @@
 export default {
     accounts: {
+      listSessionExpired: '管理员会话已失效，请重新登录后再查看账号。',
+      listLoadFailed: '账号列表加载失败，请重试。',
       bps: {
         authMode: {
           label: 'BPS 授权方式',
