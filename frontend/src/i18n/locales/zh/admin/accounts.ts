@@ -11,7 +11,7 @@ export default {
         errorCode: "错误码",
         manualResume: "调度开关仍为暂停；如需使用，请手动开启。",
         newTokenPending: "当前显示的是已保存凭证的状态，新 Token 保存后更新。",
-        requestingUpstream: "正在请求 BPS 上游，尚未确认认证成功…",
+        requestingUpstream: "正在请求 BPS 上游，等待模型响应…",
         upstreamResponse: "已收到 BPS 上游响应",
         upstreamModelLabel: "上游请求模型",
         requestIdLabel: "请求 ID",

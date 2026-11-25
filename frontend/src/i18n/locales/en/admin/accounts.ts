@@ -11,7 +11,7 @@ export default {
         errorCode: "Error code",
         manualResume: "Scheduling remains paused. Enable it manually if you want to use this account.",
         newTokenPending: "This is the saved credential status. It will update after the new token is saved.",
-        requestingUpstream: "Requesting the BPS upstream; authentication has not been confirmed…",
+        requestingUpstream: "Requesting the BPS upstream and waiting for the model response…",
         upstreamResponse: "BPS upstream response received",
         upstreamModelLabel: "Upstream request model",
         requestIdLabel: "Request ID",
