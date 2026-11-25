@@ -1,5 +1,6 @@
 import { mount } from '@vue/test-utils'
 import { describe, expect, it } from 'vitest'
+import { createPinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
 import OpenAIBPSAccountFields from '../OpenAIBPSAccountFields.vue'
 import { bpsCredentials, newBPSAccountDraft } from '@/utils/openaiBps'
@@ -8,7 +9,7 @@ function render(editing = false) {
   const draft = newBPSAccountDraft({ access_token: 'must-never-render', chatgpt_account_id: 'workspace-1' })
   return { draft, wrapper: mount(OpenAIBPSAccountFields, {
     props: { modelValue: draft, editing },
-    global: { plugins: [createI18n({ legacy: false, locale: 'en', missingWarn: false, fallbackWarn: false, messages: { en: {} } })] }
+    global: { plugins: [createPinia(), createI18n({ legacy: false, locale: 'en', missingWarn: false, fallbackWarn: false, messages: { en: {} } })] }
   }) }
 }
 describe('OpenAI BPS account fields', () => {

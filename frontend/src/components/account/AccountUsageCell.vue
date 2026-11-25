@@ -2,6 +2,26 @@
   <div ref="rootRef" v-if="showUsageWindows">
     <template v-if="account.platform === 'openai_bps'">
       <BPSCredentialStatus :state="bpsCredentialState" />
+      <div v-if="usageInfo?.five_hour || usageInfo?.seven_day" class="mt-1 space-y-1">
+        <UsageProgressBar
+          v-if="usageInfo?.five_hour"
+          label="5h"
+          :utilization="usageInfo.five_hour.utilization"
+          :resets-at="usageInfo.five_hour.resets_at"
+          :window-stats="usageInfo.five_hour.window_stats"
+          :show-now-when-idle="true"
+          color="indigo"
+        />
+        <UsageProgressBar
+          v-if="usageInfo?.seven_day"
+          label="7d"
+          :utilization="usageInfo.seven_day.utilization"
+          :resets-at="usageInfo.seven_day.resets_at"
+          :window-stats="usageInfo.seven_day.window_stats"
+          :show-now-when-idle="true"
+          color="emerald"
+        />
+      </div>
     </template>
     <!-- Anthropic OAuth and Setup Token accounts: fetch real usage data -->
     <template
@@ -786,6 +806,9 @@ const shouldFetchUsage = computed(() => {
     return props.account.type === 'oauth'
   }
   if (props.account.platform === 'openai') {
+    return props.account.type === 'oauth'
+  }
+  if (props.account.platform === 'openai_bps') {
     return props.account.type === 'oauth'
   }
   return false

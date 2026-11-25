@@ -358,6 +358,11 @@ func (s *AccountUsageService) getUsageForAccount(ctx context.Context, account *A
 		return s.getPassiveUsageForAccount(ctx, account)
 	}
 
+	if account.Platform == PlatformOpenAIBPS && account.Type == AccountTypeOAuth {
+		// BPS has no /wham/usage quota; only local request/token/cost windows are meaningful.
+		return s.getOpenAIBPSUsage(ctx, account)
+	}
+
 	if account.Platform == PlatformOpenAI && account.Type == AccountTypeOAuth {
 		// Usage can come from a stored snapshot even when a probe fails. Neither
 		// that nor a working access token proves a rejected refresh token recovered.
@@ -766,6 +771,25 @@ func (s *AccountUsageService) getOpenAIUsage(ctx context.Context, account *Accou
 		usage.SevenDay.WindowStats = windowStatsFromAccountStats(stats)
 	}
 
+	return usage, nil
+}
+
+// getOpenAIBPSUsage reports locally measured 5h/7d windows for an openai_bps account.
+// It never contacts upstream, so it cannot fail with a stale-quota warning.
+func (s *AccountUsageService) getOpenAIBPSUsage(ctx context.Context, account *Account) (*UsageInfo, error) {
+	now := time.Now()
+	usage := &UsageInfo{UpdatedAt: &now}
+	if account == nil || s.usageLogRepo == nil {
+		return usage, nil
+	}
+	usage.FiveHour = &UsageProgress{Utilization: 0}
+	usage.SevenDay = &UsageProgress{Utilization: 0}
+	if stats, err := s.usageLogRepo.GetAccountWindowStats(ctx, account.ID, now.Add(-5*time.Hour)); err == nil {
+		usage.FiveHour.WindowStats = windowStatsFromAccountStats(stats)
+	}
+	if stats, err := s.usageLogRepo.GetAccountWindowStats(ctx, account.ID, now.Add(-7*24*time.Hour)); err == nil {
+		usage.SevenDay.WindowStats = windowStatsFromAccountStats(stats)
+	}
 	return usage, nil
 }
 
