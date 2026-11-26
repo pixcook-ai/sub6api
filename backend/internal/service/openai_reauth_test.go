@@ -127,7 +127,7 @@ func TestReauthStoresOnlyCiphertext(t *testing.T) {
 
 func TestReauthSuccessUpdatesAccountAndKeepsWorkspace(t *testing.T) {
 	var gotPassword string
-	run := func(ctx context.Context, provider string, e BatchLoginEntry, proxy string) (*batchLoginRecord, string) {
+	run := func(ctx context.Context, provider string, e BatchLoginEntry, proxy string, onProgress func(string)) (*batchLoginRecord, string) {
 		gotPassword = e.Password
 		return bpsRecord("a@x.co"), ""
 	}
@@ -148,7 +148,7 @@ func TestReauthSuccessUpdatesAccountAndKeepsWorkspace(t *testing.T) {
 
 func TestReauthFailureCooldownAndLimit(t *testing.T) {
 	calls := 0
-	run := func(ctx context.Context, provider string, e BatchLoginEntry, proxy string) (*batchLoginRecord, string) {
+	run := func(ctx context.Context, provider string, e BatchLoginEntry, proxy string, onProgress func(string)) (*batchLoginRecord, string) {
 		calls++
 		return nil, "login_failed"
 	}

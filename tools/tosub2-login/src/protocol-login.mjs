@@ -10,6 +10,7 @@ import { loginBpsExcelPassword } from "./bps-excel-password-flow.mjs";
 import { loginCodexPassword } from "./codex-password-flow.mjs";
 import { CODEX_CLIENT_ID, CODEX_CALLBACK, codexAuthBase, createCodexOAuthTransaction } from "./codex-oauth.mjs";
 import { classifyLoginFailure, stageLoginFailure } from "./login-failure.mjs";
+import { reportLoginProgress } from "./login-progress.mjs";
 import {
   browserIdentityForTlsProfile,
   shouldUseTlsTransport,
@@ -347,6 +348,7 @@ async function run() {
     } else {
       try {
         const preflightBase = args.oauthProvider ? authBase : chatgptBase;
+        if (args.oauthProvider) reportLoginProgress(args.oauthProfileRef, "proxy_check");
         await transport.prepareProxy(proxyTemplate, `${preflightBase}/`);
       } catch (error) {
         if (args.oauthProvider) {
@@ -718,6 +720,7 @@ export async function runManagedOAuthLogin({ args, transport, authBase, chatgptB
     // A fresh client and cookie jar belong only to this profile's attempt.
     const client = new ProtocolClient({ transport });
     client.sensitive = true;
+    client.onProgress = (stage) => reportLoginProgress(args.oauthProfileRef, stage);
     console.log("[" + providerPrefix + "] Sign in to the selected profile");
     let transaction;
     if (codexProvider) {
@@ -773,6 +776,7 @@ export async function runManagedOAuthLogin({ args, transport, authBase, chatgptB
       callback = result.callbackUrl;
       workspaceId = result.workspaceId;
     }
+    client.onProgress("token_exchange");
     const record = await withLoginStage(codexProvider ? "codex_token_exchange" : "bps_token_exchange", () => transaction.exchangeCallback(callback, {
       expectedIdentity: { workspaceId },
       fetchImpl: async (url, options) => {
@@ -1248,6 +1252,7 @@ async function selectChatgptLoginWorkspaceIfNeeded(client, { authBase, payload, 
     return payload;
   }
   const workspaceUrl = getContinueUrl(payload) || `${authBase}/workspace`;
+  client.onProgress?.("workspace");
   console.log("[web] Select ChatGPT login workspace");
   const { data } = await authJsonStep(client, authBase, "POST", "/api/accounts/workspace/select", {
     workspace_id: workspaceId,
@@ -1256,6 +1261,7 @@ async function selectChatgptLoginWorkspaceIfNeeded(client, { authBase, payload, 
 }
 
 async function verifyPassword(client, { authBase, rl, deviceId, password, referer }) {
+  client.onProgress?.("password");
   let nextPassword = password;
   for (;;) {
     const value = nextPassword || (await ask(rl, "Password (q=quit): "));
@@ -1281,6 +1287,7 @@ async function verifyPassword(client, { authBase, rl, deviceId, password, refere
 
 async function completeTotpMfaIfNeeded(client, { authBase, rl, deviceId, payload, totpSecret, referer }) {
   if (!isMfaChallengePayload(payload)) return payload;
+  client.onProgress?.("totp");
   const factor = pickTotpFactor(payload);
   if (!factor?.id) throw new Error("2FA is required, but the response does not contain a TOTP factor ID");
 

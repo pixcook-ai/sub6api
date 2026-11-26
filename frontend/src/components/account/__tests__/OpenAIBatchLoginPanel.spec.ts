@@ -50,6 +50,55 @@ afterEach(() => {
 })
 
 describe('OpenAIBatchLoginPanel', () => {
+  it('updates each running step from polling and displays the final status after completion', async () => {
+    const item = { email: 'a@example.com', target: 'codex' }
+    api.startBatchLogin.mockResolvedValue({
+      id: 'steps', status: 'running', items: [{ ...item, status: 'running', stage: 'proxy_check' }]
+    })
+    api.getBatchLogin
+      .mockResolvedValueOnce({
+        id: 'steps', status: 'running', items: [{ ...item, status: 'running', stage: 'password' }]
+      })
+      .mockResolvedValueOnce({
+        id: 'steps', status: 'running', items: [{ ...item, status: 'running', stage: 'totp' }]
+      })
+      .mockResolvedValueOnce({
+        id: 'steps', status: 'done', items: [{ ...item, status: 'created', stage: 'token_exchange' }]
+      })
+    const wrapper = render('zh')
+    await wrapper.get('textarea').setValue(LINE)
+    await wrapper.get('button.btn-primary').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('li').text()).toContain('检测代理…')
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(wrapper.get('li').text()).toContain('验证密码…')
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(wrapper.get('li').text()).toContain('验证 2FA…')
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(wrapper.get('li').text()).toContain('已创建')
+    expect(wrapper.get('li').text()).not.toContain('交换令牌')
+    wrapper.unmount()
+  })
+
+  it('falls back to the running status for missing and unknown progress stages', async () => {
+    const item = { email: 'a@example.com', target: 'bps', status: 'running' }
+    api.startBatchLogin.mockResolvedValue({ id: 'legacy', status: 'running', items: [item] })
+    api.getBatchLogin.mockResolvedValue({
+      id: 'legacy', status: 'running', items: [{ ...item, stage: 'unrecognized-stage' }]
+    })
+    const wrapper = render('zh')
+    await wrapper.get('textarea').setValue(LINE)
+    await wrapper.get('button.btn-primary').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('li').text()).toContain('授权中')
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(wrapper.get('li').text()).toContain('授权中')
+    expect(wrapper.get('li').text()).not.toContain('unrecognized-stage')
+    wrapper.unmount()
+  })
+
   it('does not call the API for a malformed batch and never echoes the input', async () => {
     const wrapper = render()
     await wrapper.get('textarea').setValue('a@example.com----only-two-fields')
@@ -122,7 +171,7 @@ describe('OpenAIBatchLoginPanel', () => {
     api.getBatchLogin.mockResolvedValue({
       id: 'job3',
       status: 'done',
-      items: [{ ...item, status: 'failed', code: 'email_otp_required' }]
+      items: [{ ...item, status: 'failed', stage: 'password', code: 'email_otp_required' }]
     })
     const wrapper = render('zh')
     await wrapper.get('textarea').setValue(LINE)
@@ -131,6 +180,7 @@ describe('OpenAIBatchLoginPanel', () => {
 
     await vi.advanceTimersByTimeAsync(2000)
     expect(wrapper.get('li').text()).toContain('自动登录停在邮箱验证码步骤，授权尚未完成')
+    expect(wrapper.get('li').text()).not.toContain('验证密码…')
   })
 
   it('shows the Codex stage and risk-control category for a failed preflight', async () => {

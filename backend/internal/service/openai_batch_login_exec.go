@@ -33,14 +33,14 @@ type batchLoginRecord struct {
 
 // batchLoginRunFunc performs one login. On failure it returns a nil record and a
 // fixed error code; credentials and provider output are never returned.
-type batchLoginRunFunc func(ctx context.Context, provider string, entry BatchLoginEntry, proxyURL string) (*batchLoginRecord, string)
+type batchLoginRunFunc func(ctx context.Context, provider string, entry BatchLoginEntry, proxyURL string, onProgress func(string)) (*batchLoginRecord, string)
 
 func batchLoginScript(cfg config.BatchLoginConfig) string {
 	return filepath.Join(cfg.ToolsDir, "run-login.mjs")
 }
 
 func newBatchLoginExecRunner(cfg config.BatchLoginConfig) batchLoginRunFunc {
-	return func(ctx context.Context, provider string, entry BatchLoginEntry, proxyURL string) (*batchLoginRecord, string) {
+	return func(ctx context.Context, provider string, entry BatchLoginEntry, proxyURL string, onProgress func(string)) (*batchLoginRecord, string) {
 		node := strings.TrimSpace(cfg.NodePath)
 		if node == "" {
 			found, err := exec.LookPath("node")
@@ -62,6 +62,7 @@ func newBatchLoginExecRunner(cfg config.BatchLoginConfig) batchLoginRunFunc {
 		cmd.Env = batchLoginEnv(entry, proxyURL)
 		cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
 		cmd.WaitDelay = 5 * time.Second
+		cmd.Stderr = &batchLoginProgressWriter{onProgress: onProgress}
 
 		out, runErr := cmd.Output()
 		if ctx.Err() != nil {
@@ -71,6 +72,59 @@ func newBatchLoginExecRunner(cfg config.BatchLoginConfig) batchLoginRunFunc {
 			return nil, "login_timeout"
 		}
 		return parseBatchLoginOutput(out, runErr)
+	}
+}
+
+// Only fixed progress labels cross the subprocess boundary. Provider stderr is
+// otherwise discarded and never included in job snapshots or process errors.
+type batchLoginProgressWriter struct {
+	line       []byte
+	discarding bool
+	onProgress func(string)
+}
+
+func (w *batchLoginProgressWriter) Write(data []byte) (int, error) {
+	for _, value := range data {
+		if value == '\n' {
+			if !w.discarding {
+				w.report()
+			}
+			w.line = w.line[:0]
+			w.discarding = false
+			continue
+		}
+		if w.discarding {
+			continue
+		}
+		if len(w.line) >= 256 {
+			w.line = w.line[:0]
+			w.discarding = true
+			continue
+		}
+		w.line = append(w.line, value)
+	}
+	return len(data), nil
+}
+
+func (w *batchLoginProgressWriter) report() {
+	var event struct {
+		Type  string `json:"type"`
+		Stage string `json:"stage"`
+	}
+	if json.Unmarshal(w.line, &event) != nil || event.Type != "progress" || !isBatchLoginStage(event.Stage) {
+		return
+	}
+	if w.onProgress != nil {
+		w.onProgress(event.Stage)
+	}
+}
+
+func isBatchLoginStage(stage string) bool {
+	switch stage {
+	case "proxy_check", "authorize", "email", "password", "totp", "workspace", "token_exchange", "create_account":
+		return true
+	default:
+		return false
 	}
 }
 

@@ -83,8 +83,8 @@
         <ul class="max-h-72 space-y-1 overflow-y-auto text-sm" aria-live="polite">
           <li v-for="item in job.items" :key="item.email + item.target" class="flex justify-between gap-4">
             <span class="truncate">{{ item.email }} · {{ targetLabel(item.target) }}</span>
-            <span :class="statusClass(item.status)">
-              {{ t(`admin.accounts.oauth.openai.batchLoginItemStatus.${item.status}`) }}<template v-if="item.code"> · {{ codeLabel(item.code) }}</template>
+            <span class="max-w-[65%] shrink-0 text-right" :class="statusClass(item.status)">
+              {{ statusLabel(item) }}<template v-if="item.code"> · {{ codeLabel(item.code) }}</template>
             </span>
           </li>
         </ul>
@@ -117,7 +117,7 @@ import {
   parseBatchLoginText,
   startBatchLogin
 } from '@/api/admin/openaiBatchLogin'
-import type { BatchLoginItemStatus, BatchLoginJob, BatchLoginTarget } from '@/api/admin/openaiBatchLogin'
+import type { BatchLoginItem, BatchLoginItemStatus, BatchLoginJob, BatchLoginTarget } from '@/api/admin/openaiBatchLogin'
 import type { AdminGroup } from '@/types'
 
 const props = withDefaults(
@@ -131,7 +131,10 @@ const props = withDefaults(
 const emit = defineEmits<{ created: []; busy: [value: boolean] }>()
 
 const { t } = useI18n()
-const POLL_INTERVAL_MS = 2000
+const POLL_INTERVAL_MS = 1000
+const PROGRESS_STAGES = new Set([
+  'proxy_check', 'authorize', 'email', 'password', 'totp', 'workspace', 'token_exchange', 'create_account'
+])
 
 const text = ref('')
 const targets = ref<BatchLoginTarget[]>(['bps'])
@@ -163,6 +166,13 @@ function targetLabel(target: BatchLoginTarget): string {
       ? 'admin.accounts.oauth.openai.batchLoginTargetBps'
       : 'admin.accounts.oauth.openai.batchLoginTargetCodex'
   )
+}
+
+function statusLabel(item: BatchLoginItem): string {
+  if (item.status === 'running' && item.stage && PROGRESS_STAGES.has(item.stage)) {
+    return t(`admin.accounts.oauth.openai.batchLoginProgress.${item.stage}`)
+  }
+  return t(`admin.accounts.oauth.openai.batchLoginItemStatus.${item.status}`)
 }
 
 function codeLabel(code: string): string {

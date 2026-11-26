@@ -15,6 +15,7 @@ import { fork } from "node:child_process";
 import crypto from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { isLoginProgressStage } from "./src/login-progress.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const PROVIDERS = new Set(["bps_excel", "codex"]);
@@ -92,6 +93,13 @@ for (const signal of ["SIGTERM", "SIGINT"]) {
 }
 
 child.on("message", (message) => {
+  if (settled) return;
+  if (message?.type === "oauth_progress") {
+    if (message.profileRef === profileRef && isLoginProgressStage(message.stage)) {
+      process.stderr.write(JSON.stringify({ type: "progress", stage: message.stage }) + "\n");
+    }
+    return;
+  }
   if (message?.type !== "oauth_tokens" || message.profileRef !== profileRef || !message.record) {
     finish({ ok: false, code: "invalid_worker_message" }, 1);
     return;

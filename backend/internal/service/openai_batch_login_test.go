@@ -105,7 +105,7 @@ func TestValidateBatchLoginInput(t *testing.T) {
 
 func TestBatchLoginCreatesSkipsAndFails(t *testing.T) {
 	admin := &fakeBatchAdmin{existing: []Account{{Name: "dup@example.com"}}}
-	run := func(ctx context.Context, provider string, e BatchLoginEntry, proxy string) (*batchLoginRecord, string) {
+	run := func(ctx context.Context, provider string, e BatchLoginEntry, proxy string, onProgress func(string)) (*batchLoginRecord, string) {
 		switch e.Email {
 		case "bad@example.com":
 			return nil, "login_failed"
@@ -153,7 +153,7 @@ func TestBatchLoginCreatesSkipsAndFails(t *testing.T) {
 
 func TestBatchLoginConcurrencyLimit(t *testing.T) {
 	var cur, max int32
-	run := func(ctx context.Context, provider string, e BatchLoginEntry, proxy string) (*batchLoginRecord, string) {
+	run := func(ctx context.Context, provider string, e BatchLoginEntry, proxy string, onProgress func(string)) (*batchLoginRecord, string) {
 		n := atomic.AddInt32(&cur, 1)
 		for {
 			m := atomic.LoadInt32(&max)
@@ -177,7 +177,7 @@ func TestBatchLoginConcurrencyLimit(t *testing.T) {
 }
 
 func TestBatchLoginCancel(t *testing.T) {
-	run := func(ctx context.Context, provider string, e BatchLoginEntry, proxy string) (*batchLoginRecord, string) {
+	run := func(ctx context.Context, provider string, e BatchLoginEntry, proxy string, onProgress func(string)) (*batchLoginRecord, string) {
 		<-ctx.Done()
 		return nil, "canceled"
 	}

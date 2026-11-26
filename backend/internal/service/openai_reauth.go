@@ -150,7 +150,7 @@ func (s *OpenAIReauthService) reauthorize(ctx context.Context, accountID int64, 
 		}
 	}
 	entry := BatchLoginEntry{Email: rec.LoginEmail, Password: password, TOTPSecret: totp}
-	tokens, code := s.batch.run(ctx, provider, entry, proxyURL)
+	tokens, code := s.batch.run(ctx, provider, entry, proxyURL, nil)
 	entry.Password, entry.TOTPSecret = "", ""
 	if tokens == nil {
 		fail(code)

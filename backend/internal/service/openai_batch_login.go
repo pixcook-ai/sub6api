@@ -55,6 +55,20 @@ func (j *batchLoginJobState) update(idx int, status, code string, accountID int6
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	j.items[idx].Status, j.items[idx].Code, j.items[idx].AccountID = status, code, accountID
+	if status != BatchLoginItemRunning {
+		j.items[idx].Stage = ""
+	}
+}
+
+func (j *batchLoginJobState) setProgress(idx int, stage string) {
+	if !isBatchLoginStage(stage) {
+		return
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if j.items[idx].Status == BatchLoginItemRunning {
+		j.items[idx].Stage = stage
+	}
 }
 
 // OpenAIBatchLoginService runs the vendored toSub2 login runtime for a batch of
@@ -237,7 +251,9 @@ func (s *OpenAIBatchLoginService) processItem(ctx context.Context, job *batchLog
 		job.update(idx, BatchLoginItemSkipped, "already_exists", 0)
 		return
 	}
-	rec, code := s.run(ctx, provider, w.entry, st.ProxyURL)
+	rec, code := s.run(ctx, provider, w.entry, st.ProxyURL, func(stage string) {
+		job.setProgress(idx, stage)
+	})
 	if rec == nil {
 		if code == "canceled" {
 			job.update(idx, BatchLoginItemCanceled, "", 0)
@@ -252,6 +268,7 @@ func (s *OpenAIBatchLoginService) processItem(ctx context.Context, job *batchLog
 		return
 	}
 	// A finished login must not be lost because the job was canceled meanwhile.
+	job.setProgress(idx, "create_account")
 	account, err := s.admin.CreateAccount(context.WithoutCancel(ctx), &CreateAccountInput{
 		Name: w.entry.Email, Platform: platform, Type: AccountTypeOAuth, Credentials: creds,
 		ProxyID: st.ProxyID, Concurrency: st.AccountConcurrency, Priority: st.Priority, GroupIDs: groups,

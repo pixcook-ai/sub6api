@@ -51,6 +51,7 @@ type BatchLoginItem struct {
 	Email     string `json:"email"`
 	Target    string `json:"target"`
 	Status    string `json:"status"`
+	Stage     string `json:"stage,omitempty"`
 	Code      string `json:"code,omitempty"`
 	AccountID int64  `json:"account_id,omitempty"`
 }

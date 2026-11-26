@@ -39,11 +39,13 @@ export async function loginCodexPassword(client, options, helpers) {
   });
 
   if (checkUrl(transaction.authorizationUrl)) throw new Error("CODEX_AUTH_ORIGIN_INVALID");
+  client.onProgress?.("authorize");
   let page = await client.follow(transaction.authorizationUrl);
   if (checkUrl(page.finalUrl)) return completed(page.finalUrl);
   const deviceId = client.jar.value("oai-did", authBase) || crypto.randomUUID();
   if (!helpers.isPasswordLoginPage(page.finalUrl)) {
     if (!helpers.isAuthLoginPage(page.finalUrl)) throw new Error("CODEX_ADDITIONAL_VERIFICATION_REQUIRED");
+    client.onProgress?.("email");
     const headers = await helpers.createSentinelHeaders(client, { authBase, deviceId, flow: "authorize_continue" });
     const { data } = await helpers.authJsonStep(
       client, authBase, "POST", "/api/accounts/authorize/continue",

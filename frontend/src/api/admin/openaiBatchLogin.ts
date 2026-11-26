@@ -19,6 +19,7 @@ export interface BatchLoginItem {
   email: string
   target: BatchLoginTarget
   status: BatchLoginItemStatus
+  stage?: string
   code?: string
   account_id?: number
 }

@@ -1649,6 +1649,16 @@ export default {
             failed: '失败',
             canceled: '已取消'
           },
+          batchLoginProgress: {
+            proxy_check: '检测代理…',
+            authorize: '开始授权…',
+            email: '提交邮箱…',
+            password: '验证密码…',
+            totp: '验证 2FA…',
+            workspace: '选择工作区…',
+            token_exchange: '交换令牌…',
+            create_account: '创建账号…'
+          },
           batchLoginItemCodes: {
             already_exists: '账号已存在',
             login_failed: '登录失败',

@@ -6,12 +6,14 @@ export async function loginBpsExcelPassword(client, options, helpers) {
     throw new Error("EXCEL_AUTH_ORIGIN_INVALID");
   }
 
+  client.onProgress?.("authorize");
   let page = await client.follow(transaction.authorizationUrl);
   const deviceId = client.jar.value("oai-did", authBase) || crypto.randomUUID();
   if (!helpers.isPasswordLoginPage(page.finalUrl)) {
     if (!helpers.isAuthLoginPage(page.finalUrl)) {
       throw new Error("EXCEL_UNEXPECTED_INITIAL_PAGE");
     }
+    client.onProgress?.("email");
     const headers = await helpers.createSentinelHeaders(client, {
       authBase,
       deviceId,

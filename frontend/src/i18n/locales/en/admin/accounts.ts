@@ -1553,6 +1553,16 @@ export default {
             failed: 'Failed',
             canceled: 'Canceled'
           },
+          batchLoginProgress: {
+            proxy_check: 'Checking proxy…',
+            authorize: 'Starting authorization…',
+            email: 'Submitting email…',
+            password: 'Verifying password…',
+            totp: 'Verifying 2FA…',
+            workspace: 'Selecting workspace…',
+            token_exchange: 'Exchanging tokens…',
+            create_account: 'Creating account…'
+          },
           batchLoginItemCodes: {
             already_exists: 'Account already exists',
             login_failed: 'Login failed',
