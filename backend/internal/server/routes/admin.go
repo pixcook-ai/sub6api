@@ -75,6 +75,8 @@ func RegisterAdminRoutes(
 
 		// 系统设置
 		registerSettingsRoutes(admin, h)
+		admin.GET("/tibo/settings", h.Admin.Setting.GetOpenAITiboSettings)
+		admin.PUT("/tibo/settings", h.Admin.Setting.UpdateOpenAITiboSettings)
 
 		// 数据管理
 		registerDataManagementRoutes(admin, h, stepUpAuth)
@@ -374,6 +376,7 @@ func registerGroupRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 
 func registerAccountRoutes(admin *gin.RouterGroup, h *handler.Handlers, stepUpAuth middleware.StepUpAuthMiddleware) {
 	accounts := admin.Group("/accounts")
+	accounts.POST("/:id/tibo/clear-isolation", h.Admin.Account.ClearTiboQualityIsolation)
 	{
 		accounts.GET("", h.Admin.Account.List)
 		accounts.GET("/openai-request-timezones", h.Admin.Account.GetOpenAIRequestTimezones)

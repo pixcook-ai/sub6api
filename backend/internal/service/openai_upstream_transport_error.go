@@ -115,6 +115,10 @@ func isClientCanceledTransportError(ctx context.Context, err error) bool {
 //
 // passthrough tags the Ops error event for the OpenAI passthrough forward path.
 func (s *OpenAIGatewayService) handleOpenAIUpstreamTransportError(ctx context.Context, c *gin.Context, account *Account, err error, passthrough bool) error {
+	var qualityErr *UpstreamFailoverError
+	if errors.As(err, &qualityErr) && qualityErr.Reason == GatewayFailureReason("openai_tibo_quality_isolated") {
+		return err
+	}
 	if isClientCanceledTransportError(ctx, err) {
 		return err
 	}

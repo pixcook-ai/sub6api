@@ -1,0 +1,460 @@
+package service
+
+import (
+	"context"
+	"strconv"
+	"testing"
+	"time"
+
+	"github.com/MACOS-DO/sub4api/internal/config"
+	"github.com/stretchr/testify/require"
+)
+
+func tiboTestSettings() openAITiboSettings {
+	return (&OpenAIGatewayService{cfg: &config.Config{}}).openAITiboRouteConfig()
+}
+
+func tiboSample(v openAITiboVerdict) openAITiboProbeSample {
+	return openAITiboProbeSample{verdict: v, status: 200}
+}
+
+func TestTiboVoteSingleDisagreementDoesNotFlip(t *testing.T) {
+	cfg := tiboTestSettings()
+	now := time.Now()
+	var r openAITiboRouteState
+	require.True(t, r.observe(tiboSample(openAITiboHealthy), now, cfg).flipped, "first definitive sample adopts")
+	require.Equal(t, openAITiboHealthy, r.verdict)
+
+	require.False(t, r.observe(tiboSample(openAITiboDegraded), now.Add(time.Second), cfg).flipped)
+	require.Equal(t, openAITiboHealthy, r.effective(now.Add(time.Second), cfg), "one degraded sample keeps healthy")
+	require.Len(t, r.pending, 1)
+	require.False(t, r.observe(tiboSample(openAITiboHealthy), now.Add(2*time.Second), cfg).flipped)
+	require.Len(t, r.pending, 2, "window stays open until it is decided")
+
+	transition := r.observe(tiboSample(openAITiboDegraded), now.Add(3*time.Second), cfg)
+	require.True(t, transition.flipped, "2 of 3 agree")
+	require.Equal(t, openAITiboHealthy, transition.from)
+	require.Equal(t, openAITiboDegraded, transition.to)
+	require.Equal(t, []openAITiboVerdict{openAITiboDegraded, openAITiboHealthy, openAITiboDegraded}, transition.votes)
+	require.Empty(t, r.pending)
+	require.Equal(t, now.Add(3*time.Second), r.flippedAt)
+}
+
+func TestTiboVoteWindowClosesWhenChallengerCannotWin(t *testing.T) {
+	cfg := tiboTestSettings()
+	now := time.Now()
+	r := openAITiboRouteState{verdict: openAITiboHealthy, checkedAt: now, flippedAt: now}
+	r.observe(tiboSample(openAITiboDegraded), now.Add(time.Second), cfg)
+	r.observe(tiboSample(openAITiboHealthy), now.Add(2*time.Second), cfg)
+	r.observe(tiboSample(openAITiboHealthy), now.Add(3*time.Second), cfg)
+	require.Empty(t, r.pending, "1 of 3 cannot win")
+	require.Equal(t, openAITiboHealthy, r.verdict)
+	require.Equal(t, now.Add(3*time.Second), r.checkedAt, "agreeing samples refresh the verdict")
+}
+
+func TestTiboVoteUnknownNeverVotes(t *testing.T) {
+	cfg := tiboTestSettings()
+	now := time.Now()
+	r := openAITiboRouteState{verdict: openAITiboHealthy, checkedAt: now, flippedAt: now}
+	r.observe(tiboSample(openAITiboDegraded), now.Add(time.Second), cfg)
+	for i := 0; i < 5; i++ {
+		require.False(t, r.observe(openAITiboProbeSample{verdict: openAITiboUnknown, status: 429}, now.Add(time.Duration(2+i)*time.Second), cfg).flipped)
+	}
+	require.Equal(t, openAITiboHealthy, r.verdict)
+	require.Equal(t, []openAITiboVerdict{openAITiboDegraded}, r.pending, "unknown samples do not fill the window")
+	require.Equal(t, 5, r.unknownStreak)
+	require.Equal(t, now, r.checkedAt, "unknown samples do not refresh the verdict")
+	r.observe(tiboSample(openAITiboDegraded), now.Add(10*time.Second), cfg)
+	require.Equal(t, openAITiboDegraded, r.verdict)
+	require.Zero(t, r.unknownStreak)
+}
+
+func TestTiboVoteMaxStale(t *testing.T) {
+	cfg := tiboTestSettings()
+	now := time.Now()
+	r := openAITiboRouteState{verdict: openAITiboDegraded, checkedAt: now}
+	require.Equal(t, openAITiboDegraded, r.effective(now.Add(cfg.maxStale), cfg))
+	require.Equal(t, openAITiboUnknown, r.effective(now.Add(cfg.maxStale+time.Second), cfg))
+	require.Equal(t, openAITiboDegraded, r.verdict, "the confirmed verdict is kept")
+	require.Equal(t, openAITiboUnknown, (&openAITiboRouteState{}).effective(now, cfg))
+}
+
+func TestTiboVoteMinDegradedDwell(t *testing.T) {
+	cfg := tiboTestSettings()
+	start := time.Now()
+	r := openAITiboRouteState{verdict: openAITiboDegraded, checkedAt: start, flippedAt: start}
+	r.observe(tiboSample(openAITiboHealthy), start.Add(time.Minute), cfg)
+	require.False(t, r.observe(tiboSample(openAITiboHealthy), start.Add(2*time.Minute), cfg).flipped, "confirmed but inside the dwell")
+	require.True(t, r.dwellDeferred)
+	r.scheduleNext(openAITiboRouteHTTP, start.Add(2*time.Minute), cfg)
+	require.False(t, r.nextProbeAt.Before(start.Add(cfg.minDegradedDwell)), "recheck waits for the dwell end")
+
+	transition := r.observe(tiboSample(openAITiboHealthy), start.Add(cfg.minDegradedDwell+time.Second), cfg)
+	require.True(t, transition.flipped)
+	require.Equal(t, openAITiboHealthy, r.verdict)
+	require.False(t, r.dwellDeferred)
+
+	// healthy -> degraded is never delayed.
+	r.observe(tiboSample(openAITiboDegraded), start.Add(cfg.minDegradedDwell+2*time.Second), cfg)
+	require.True(t, r.observe(tiboSample(openAITiboDegraded), start.Add(cfg.minDegradedDwell+3*time.Second), cfg).flipped)
+
+	// Negative config disables the dwell.
+	cfg.minDegradedDwell = 0
+	r.observe(tiboSample(openAITiboHealthy), start.Add(cfg.minDegradedDwell+4*time.Second), cfg)
+	require.True(t, r.observe(tiboSample(openAITiboHealthy), start.Add(cfg.minDegradedDwell+5*time.Second), cfg).flipped)
+}
+
+func TestTiboForceDegraded(t *testing.T) {
+	now := time.Now()
+	r := openAITiboRouteState{verdict: openAITiboHealthy, checkedAt: now.Add(-time.Minute), pending: []openAITiboVerdict{openAITiboDegraded}}
+	require.True(t, r.forceDegraded(now))
+	require.Equal(t, openAITiboDegraded, r.verdict)
+	require.Equal(t, now, r.flippedAt)
+	require.Empty(t, r.pending)
+	require.False(t, r.forceDegraded(now.Add(time.Second)), "already degraded")
+	require.Equal(t, now, r.flippedAt)
+}
+
+func TestTiboScheduleCadenceBackoffAndRetryAfter(t *testing.T) {
+	cfg := tiboTestSettings()
+	now := time.Now()
+	r := openAITiboRouteState{}
+	r.observe(tiboSample(openAITiboHealthy), now, cfg)
+	r.scheduleNext(openAITiboRouteHTTP, now, cfg)
+	require.Equal(t, now.Add(cfg.interval), r.nextProbeAt, "zero spread in tests")
+
+	r.observe(tiboSample(openAITiboDegraded), now, cfg)
+	r.scheduleNext(openAITiboRouteHTTP, now, cfg)
+	require.Equal(t, now.Add(cfg.confirmSpacing), r.nextProbeAt, "confirmation probes are spaced")
+	r.observe(tiboSample(openAITiboDegraded), now, cfg)
+	r.scheduleNext(openAITiboRouteHTTP, now, cfg)
+	require.Equal(t, now.Add(cfg.interval), r.nextProbeAt, "degraded uses the same cadence")
+
+	r.observe(openAITiboProbeSample{verdict: openAITiboUnknown}, now, cfg)
+	r.scheduleNext(openAITiboRouteHTTP, now, cfg)
+	require.Equal(t, now.Add(cfg.interval), r.nextProbeAt, "unknown uses the same cadence")
+	retryAt := now.Add(time.Hour)
+	r.observe(openAITiboProbeSample{verdict: openAITiboUnknown, status: 429, retryAt: &retryAt}, now, cfg)
+	r.scheduleNext(openAITiboRouteHTTP, now, cfg)
+	require.Equal(t, retryAt, r.nextProbeAt, "Retry-After wins when later")
+}
+
+func TestTiboCadenceSpreadBounds(t *testing.T) {
+	cfg := tiboTestSettings()
+	cfg.interval = 10 * time.Minute
+	cfg.spread = 5 * time.Minute
+	for i := 0; i < 400; i++ {
+		got := openAITiboCadenceDelay(cfg)
+		require.GreaterOrEqual(t, got, 5*time.Minute)
+		require.LessOrEqual(t, got, 15*time.Minute)
+	}
+	cfg.spread = 0
+	require.Equal(t, 10*time.Minute, openAITiboCadenceDelay(cfg))
+}
+
+func TestTiboConfirmSpacingIgnoresSpread(t *testing.T) {
+	cfg := tiboTestSettings()
+	cfg.spread = 5 * time.Minute
+	now := time.Now()
+	r := openAITiboRouteState{verdict: openAITiboHealthy, checkedAt: now, flippedAt: now}
+	r.observe(tiboSample(openAITiboDegraded), now, cfg)
+	r.scheduleNext(openAITiboRouteHTTP, now, cfg)
+	require.Equal(t, now.Add(cfg.confirmSpacing), r.nextProbeAt)
+}
+
+func TestTiboProbeBudget(t *testing.T) {
+	cfg := tiboTestSettings()
+	now := time.Now()
+	var r openAITiboRouteState
+	for i := 0; i < cfg.maxProbesPerHour; i++ {
+		require.True(t, r.takeBudget(now.Add(time.Duration(i)*time.Second), cfg))
+	}
+	require.False(t, r.takeBudget(now.Add(time.Minute), cfg))
+	require.Equal(t, now.Add(time.Hour), r.nextProbeAt, "deferred to the window end")
+	require.True(t, r.takeBudget(now.Add(time.Hour), cfg), "the oldest probe left the window")
+}
+
+// Reading hour counts must not corrupt the stored windows (regression: an
+// unassigned in-place prune duplicated entries and inflated the budget).
+func TestTiboWindowCountDoesNotMutate(t *testing.T) {
+	now := time.Now()
+	times := []time.Time{now.Add(-2 * time.Hour), now.Add(-90 * time.Minute), now.Add(-time.Minute), now}
+	require.Equal(t, 2, countOpenAITiboWindow(times, now))
+	require.Equal(t, 2, countOpenAITiboWindow(times, now))
+	require.Len(t, times, 4)
+	require.Equal(t, now.Add(-2*time.Hour), times[0], "unchanged")
+
+	tc := newTiboRouteCase(t, false, false)
+	state := tc.svc.openAITiboAccountState(tc.account.ID)
+	state.mu.Lock()
+	state.http.probes = append([]time.Time(nil), times...)
+	state.http.flips = append([]time.Time(nil), times...)
+	state.mu.Unlock()
+	status := tc.svc.openAITiboRouteStatuses(tc.account, now)
+	require.Equal(t, 2, status[0].ProbesHour)
+	require.Equal(t, 2, status[0].FlipsHour)
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	require.Equal(t, times, state.http.probes, "the admin view does not rewrite the window")
+	require.Equal(t, times, state.http.flips)
+}
+
+func TestTiboRecentSamplesRoundTrip(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	samples := []openAITiboRecentSample{
+		{Verdict: openAITiboHealthy, At: now},
+		{Verdict: openAITiboUnknown, At: now.Add(time.Second)},
+		{Verdict: openAITiboDegraded, At: now.Add(2 * time.Second)},
+	}
+	got := parseOpenAITiboRecentSamples(encodeOpenAITiboRecentSamples(samples))
+	require.Equal(t, samples, got)
+}
+
+func TestTiboRecentSamplesKeepLastTwentyFour(t *testing.T) {
+	for _, count := range []int{0, 10, 24, 30} {
+		t.Run(strconv.Itoa(count), func(t *testing.T) {
+			cfg := tiboTestSettings()
+			now := time.Now().UTC().Truncate(time.Millisecond)
+			var r openAITiboRouteState
+			var all []openAITiboRecentSample
+			for i := 0; i < count; i++ {
+				verdict := openAITiboHealthy
+				if i%2 == 0 {
+					verdict = openAITiboDegraded
+				}
+				at := now.Add(-time.Minute + time.Duration(i)*time.Second)
+				r.observe(tiboSample(verdict), at, cfg)
+				all = append(all, openAITiboRecentSample{Verdict: verdict, At: at})
+				r.observe(tiboSample(openAITiboUnknown), at.Add(time.Millisecond), cfg)
+			}
+			want := all[max(0, len(all)-24):]
+			require.Len(t, r.recent, min(count, 24))
+			require.Equal(t, want, r.recent, "unknown probes do not displace valid history")
+			decoded := parseOpenAITiboRecentSamples(encodeOpenAITiboRecentSamples(all))
+			require.Len(t, decoded, len(want), "overlong persisted histories are capped too")
+			for i := range want {
+				require.Equal(t, want[i], decoded[i])
+			}
+
+			tc := newTiboRouteCase(t, false, false)
+			require.NoError(t, tc.svc.persistOpenAITiboVerdict(tc.account.ID, openAITiboRouteHTTP, openAITiboVerdictRecordFor(&r), r.recent))
+			repo := checkedFixtureValue[*tiboAccountRepo](tc.svc.accountRepo)
+			stored, err := repo.GetByID(context.Background(), tc.account.ID)
+			require.NoError(t, err)
+			warm := newTiboRouteCase(t, false, false)
+			assertStatus := func() {
+				status := warm.svc.openAITiboRouteStatuses(stored, now)
+				require.Len(t, status[0].RecentSamples, len(want))
+				for i, sample := range want {
+					require.Equal(t, string(sample.Verdict), status[0].RecentSamples[i].Verdict)
+					require.Equal(t, sample.At, *status[0].RecentSamples[i].At)
+				}
+			}
+			assertStatus() // Read-only admin view before warm-start enrollment.
+			state := warm.svc.openAITiboAccountState(stored.ID)
+			state.mu.Lock()
+			warm.svc.seedOpenAITiboStateLocked(state, stored.Extra, now, cfg)
+			state.mu.Unlock()
+			assertStatus() // Restart retains the same ordered history, including old 10-item rows.
+		})
+	}
+}
+
+func TestTiboRateLimitUnknownNotRemembered(t *testing.T) {
+	cfg := tiboTestSettings()
+	now := time.Now()
+	var r openAITiboRouteState
+	r.observe(tiboSample(openAITiboHealthy), now, cfg)
+	retryAt := now.Add(time.Hour)
+	r.observe(openAITiboProbeSample{verdict: openAITiboUnknown, status: 429, retryAt: &retryAt}, now.Add(time.Second), cfg)
+	r.observe(openAITiboProbeSample{verdict: openAITiboUnknown, status: 0}, now.Add(2*time.Second), cfg)
+	require.Equal(t, []openAITiboVerdict{openAITiboHealthy}, recentVerdicts(r.recent))
+}
+
+func recentVerdicts(samples []openAITiboRecentSample) []openAITiboVerdict {
+	out := make([]openAITiboVerdict, 0, len(samples))
+	for _, sample := range samples {
+		out = append(out, sample.Verdict)
+	}
+	return out
+}
+
+func TestTiboCalibrationCounters(t *testing.T) {
+	cfg := tiboTestSettings()
+	now := time.Now()
+	r := openAITiboRouteState{verdict: openAITiboHealthy, checkedAt: now, flippedAt: now.Add(-time.Hour)}
+	// Noise: one False outvoted by two True.
+	r.observe(tiboSample(openAITiboDegraded), now.Add(time.Second), cfg)
+	r.observe(tiboSample(openAITiboHealthy), now.Add(2*time.Second), cfg)
+	r.observe(tiboSample(openAITiboHealthy), now.Add(3*time.Second), cfg)
+	// Real change: two False of three.
+	r.observe(tiboSample(openAITiboDegraded), now.Add(4*time.Second), cfg)
+	r.observe(tiboSample(openAITiboDegraded), now.Add(5*time.Second), cfg)
+	require.Equal(t, 2, r.voteWindows)
+	require.Equal(t, 1, r.voteConfirmed)
+	require.Equal(t, 1, r.voteRejected)
+}
+
+func TestTiboRouteOrderByTier(t *testing.T) {
+	H, U, D := openAITiboHealthy, openAITiboUnknown, openAITiboDegraded
+	type tiers = map[openAITiboRoute]openAITiboVerdict
+	for _, tc := range []struct {
+		name   string
+		tiers  tiers
+		pinned openAITiboRoute
+		want   []openAITiboRoute
+	}{
+		{"healthy http", tiers{"http": H}, "", []openAITiboRoute{"http"}},
+		{"degraded http", tiers{"http": D}, "", []openAITiboRoute{"http"}},
+		{"unknown http", tiers{"http": U}, "", []openAITiboRoute{"http"}},
+		{"pin ignored", tiers{"http": H}, "http", []openAITiboRoute{"http"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, openAITiboOrderRoutes(tc.tiers, tc.pinned))
+		})
+	}
+}
+
+// A cold account waits for its first probe once; the verdict is persisted
+// and a restarted process uses it without waiting.
+func TestTiboVerdictPersistsAndWarmStarts(t *testing.T) {
+	tc := newTiboRouteCase(t, false, false, cookieWSHTTPResponse("True"), cookieWSHTTPResponse("http ok"))
+	tc.forward(t)
+	repo := checkedFixtureValue[*tiboAccountRepo](tc.svc.accountRepo)
+	update, _ := repo.updateFor(tc.account.ID)
+	persisted := update[openAITiboVerdictExtraKey(openAITiboRouteHTTP)]
+	record, ok := parseOpenAITiboVerdictRecord(persisted)
+	require.True(t, ok, "flip persisted to Extra")
+	require.Equal(t, openAITiboHealthy, record.Verdict)
+	require.Equal(t, openAITiboProbeModel, record.Model)
+
+	warm := newTiboRouteCase(t, false, false, cookieWSHTTPResponse("http ok"))
+	warm.account.Extra[openAITiboVerdictExtraKey(openAITiboRouteHTTP)] = persisted
+	result, _, _ := warm.forward(t)
+	require.False(t, result.OpenAIWSMode)
+	require.Len(t, warm.upstream.requests, 1, "no probe: the persisted verdict is fresh")
+	require.NotContains(t, string(warm.upstream.bodies[0]), openAITiboProbePrompt)
+
+	stale := newTiboRouteCase(t, false, false, cookieWSHTTPResponse("True"), cookieWSHTTPResponse("http ok"))
+	stale.account.Extra[openAITiboVerdictExtraKey(openAITiboRouteHTTP)] = map[string]any{
+		"verdict": "healthy", "model": openAITiboProbeModel,
+		"checked_at": time.Now().Add(-time.Hour).Format(time.RFC3339Nano), "flipped_at": time.Now().Add(-2 * time.Hour).Format(time.RFC3339Nano),
+	}
+	stale.forward(t)
+	require.Len(t, stale.upstream.requests, 2, "beyond max_stale the account is cold again")
+	requireTiboProbe(t, stale.upstream.bodies[0])
+}
+
+func TestTiboStartupLoadSeedsFromFullRows(t *testing.T) {
+	tc := newTiboRouteCase(t, false, false)
+	repo := checkedFixtureValue[*tiboAccountRepo](tc.svc.accountRepo)
+	require.NoError(t, repo.UpdateExtra(context.Background(), tc.account.ID, map[string]any{
+		openAITiboVerdictExtraKey(openAITiboRouteHTTP): map[string]any{"verdict": "degraded", "model": openAITiboProbeModel,
+			"probe_identity": OpenAITiboProbeIdentity(tc.account),
+			"checked_at":     time.Now().Add(-time.Minute).Format(time.RFC3339Nano), "flipped_at": time.Now().Add(-time.Minute).Format(time.RFC3339Nano)},
+	}))
+	tc.svc.probeOpenAITiboRoutes(context.Background())
+	tc.svc.openaiTiboProbeWG.Wait()
+	require.Equal(t, openAITiboDegraded, tc.svc.openAITiboEffective(tc.account.ID, openAITiboRouteHTTP, time.Now()))
+	require.Empty(t, tc.upstream.requests, "seeded next probe stays in the future")
+}
+
+func TestTiboTickSkipsRateLimitedAccount(t *testing.T) {
+	tc := newTiboRouteCase(t, false, false, cookieWSHTTPResponse("True"))
+	reset := time.Now().Add(time.Hour)
+	checkedFixtureValue[*tiboAccountRepo](tc.svc.accountRepo).setAccount(func(a *Account) { a.RateLimitResetAt = &reset })
+	tc.svc.openaiTiboLoaded.Store(true)
+	now := time.Now()
+	state := tc.svc.openAITiboAccountState(tc.account.ID)
+	state.mu.Lock()
+	state.http = openAITiboRouteState{
+		verdict: openAITiboHealthy, checkedAt: now.Add(-time.Minute), flippedAt: now.Add(-time.Hour),
+		nextProbeAt: now.Add(-time.Second), lastSampleAt: now.Add(-time.Minute),
+		recent: []openAITiboRecentSample{{Verdict: openAITiboHealthy, At: now.Add(-time.Minute)}},
+	}
+	state.mu.Unlock()
+
+	tc.svc.probeOpenAITiboRoutes(context.Background())
+	tc.svc.openaiTiboProbeWG.Wait()
+	require.Empty(t, tc.upstream.requests, "rate-limited accounts are not probed")
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	require.Equal(t, []openAITiboVerdict{openAITiboHealthy}, recentVerdicts(state.http.recent))
+	require.WithinDuration(t, reset, state.http.holdUntil, time.Second, "held until the reset")
+	require.WithinDuration(t, reset, state.http.nextDue(), time.Second)
+	require.True(t, state.http.nextProbeAt.Before(now), "the probe's own schedule is not pushed out")
+}
+
+func TestTiboTickProbesIdleDueAccounts(t *testing.T) {
+	tc := newTiboRouteCase(t, false, false, cookieWSHTTPResponse("False"))
+	tc.svc.openaiTiboLoaded.Store(true)
+	now := time.Now()
+	state := tc.svc.openAITiboAccountState(tc.account.ID)
+	state.mu.Lock()
+	state.lastUsedAt = time.Time{}
+	state.http = openAITiboRouteState{verdict: openAITiboHealthy, checkedAt: now.Add(-11 * time.Minute), flippedAt: now.Add(-time.Hour), nextProbeAt: now.Add(-time.Second), lastSampleAt: now.Add(-11 * time.Minute)}
+	state.mu.Unlock()
+
+	tc.svc.probeOpenAITiboRoutes(context.Background())
+	tc.svc.openaiTiboProbeWG.Wait()
+	require.Len(t, tc.upstream.requests, 1, "idle due accounts are probed")
+	requireTiboProbe(t, tc.upstream.bodies[0])
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	require.Equal(t, openAITiboHealthy, state.http.verdict, "one False opens a vote, no flip")
+	require.Equal(t, []openAITiboVerdict{openAITiboDegraded}, state.http.pending)
+	require.WithinDuration(t, time.Now().Add(20*time.Second), state.http.nextProbeAt, 5*time.Second, "confirmation spacing")
+	require.Len(t, state.http.probes, 1)
+}
+
+func TestTiboStartupDelayStaggersFirstProbe(t *testing.T) {
+	cfg := tiboTestSettings()
+	cfg.interval = 10 * time.Minute
+	for i := 0; i < 400; i++ {
+		got := openAITiboStartupDelay(cfg)
+		require.GreaterOrEqual(t, got, time.Duration(0))
+		require.LessOrEqual(t, got, 10*time.Minute)
+	}
+}
+
+func TestTiboTickRespectsBudgetAndIneligibleAccounts(t *testing.T) {
+	tc := newTiboRouteCase(t, false, false)
+	tc.svc.openaiTiboLoaded.Store(true)
+	cfg := tc.svc.openAITiboRouteConfig()
+	now := time.Now()
+	state := tc.svc.openAITiboAccountState(tc.account.ID)
+	state.mu.Lock()
+	state.lastUsedAt = now
+	state.http.lastSampleAt = now.Add(-time.Minute)
+	for i := 0; i < cfg.maxProbesPerHour; i++ {
+		state.http.probes = append(state.http.probes, now.Add(-time.Duration(i+1)*time.Minute))
+	}
+	state.mu.Unlock()
+	tc.svc.probeOpenAITiboRoutes(context.Background())
+	tc.svc.openaiTiboProbeWG.Wait()
+	require.Empty(t, tc.upstream.requests, "hourly budget exhausted")
+
+	// A disabled account is not sampled and its budget is refunded.
+	repo := checkedFixtureValue[*tiboAccountRepo](tc.svc.accountRepo)
+	repo.setAccount(func(a *Account) { a.Status = StatusDisabled })
+	state.mu.Lock()
+	state.http.probes = nil
+	state.http.nextProbeAt = time.Time{}
+	state.mu.Unlock()
+	tc.svc.probeOpenAITiboRoutes(context.Background())
+	tc.svc.openaiTiboProbeWG.Wait()
+	require.Empty(t, tc.upstream.requests)
+	state.mu.Lock()
+	require.Empty(t, state.http.probes)
+	require.True(t, state.http.parked, "disabled accounts are parked")
+	require.False(t, state.http.due(time.Now().Add(time.Hour)))
+	require.False(t, state.http.inflight)
+	state.mu.Unlock()
+
+	// Parked: later ticks neither probe nor reload the account every minute.
+	gets := repo.gets.Load()
+	tc.svc.probeOpenAITiboRoutes(context.Background())
+	tc.svc.openaiTiboProbeWG.Wait()
+	require.Equal(t, gets, repo.gets.Load(), "no per-tick database reload for a parked account")
+	require.Empty(t, tc.upstream.requests)
+}

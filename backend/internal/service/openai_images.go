@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime"
@@ -604,6 +605,11 @@ func (s *OpenAIGatewayService) ForwardImages(
 	parsed *OpenAIImagesRequest,
 	channelMappedModel string,
 ) (*OpenAIForwardResult, error) {
+	ctx = withOpenAITiboQualityAdmission(ctx, body)
+	if err := s.checkOpenAITiboQualitySnapshotAdmission(ctx, account, body); err != nil {
+		return nil, err
+	}
+
 	if parsed == nil {
 		return nil, fmt.Errorf("parsed images request is required")
 	}
@@ -675,6 +681,10 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesAPIKey(
 	resp, err := s.doOpenAIUpstream(upstreamReq, proxyURL, account)
 	SetOpsLatencyMs(c, OpsUpstreamLatencyMsKey, time.Since(upstreamStart).Milliseconds())
 	if err != nil {
+		var qualityErr *UpstreamFailoverError
+		if errors.As(err, &qualityErr) && qualityErr.Reason == GatewayFailureReason("openai_tibo_quality_isolated") {
+			return nil, err
+		}
 		safeErr := sanitizeUpstreamErrorMessage(err.Error())
 		setOpsUpstreamError(c, 0, safeErr, "")
 		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{

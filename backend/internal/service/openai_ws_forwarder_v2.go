@@ -48,6 +48,10 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	if s == nil || account == nil {
 		return nil, wrapOpenAIWSFallback("invalid_state", errors.New("service or account is nil"))
 	}
+	qualityPreviousResponseID, _ := reqBody["previous_response_id"].(string)
+	if err := openAITiboQualityAdmissionError(ctx, account.IsOpenAITiboQualityIsolated(), qualityPreviousResponseID); err != nil {
+		return nil, err
+	}
 	responseModelObserver := &upstreamResponseModelObserver{}
 
 	wsURL, err := s.buildOpenAIResponsesWSURL(account)
@@ -358,6 +362,10 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		}
 	}
 
+	// Lease acquisition can wait; re-read isolation before upstream dispatch.
+	if err := s.checkOpenAITiboQualityAdmissionForPrevious(ctx, account, qualityPreviousResponseID); err != nil {
+		return nil, err
+	}
 	if err := s.performOpenAIWSGeneratePrewarm(
 		ctx,
 		lease,
@@ -369,6 +377,11 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		stateStore,
 		groupID,
 	); err != nil {
+		return nil, err
+	}
+
+	// Prewarming can wait while an administrator or probe isolates this account.
+	if err := s.checkOpenAITiboQualityAdmissionForPrevious(ctx, account, qualityPreviousResponseID); err != nil {
 		return nil, err
 	}
 

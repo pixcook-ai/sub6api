@@ -357,6 +357,9 @@ const accountListGroupUngroupedQueryValue = "ungrouped"
 func (h *AccountHandler) accountResponseFromService(account *service.Account) *dto.Account {
 	out := dto.AccountFromService(account)
 	h.enrichCodexTicketStatus(account, out)
+	if out != nil && h != nil && h.accountTestService != nil {
+		out.TiboAccountStatuses = h.accountTestService.OpenAITiboAccountStatuses(account, time.Now())
+	}
 	if h != nil && h.ollamaCloudUsage != nil && out != nil {
 		h.ollamaCloudUsage.EnrichState(out.OllamaCloudUsage)
 	}
@@ -366,6 +369,9 @@ func (h *AccountHandler) accountResponseFromService(account *service.Account) *d
 func (h *AccountHandler) accountListResponseFromService(account *service.Account) *dto.Account {
 	out := dto.AccountFromServiceShallow(account)
 	h.enrichCodexTicketStatus(account, out)
+	if out != nil && h != nil && h.accountTestService != nil {
+		out.TiboAccountStatuses = h.accountTestService.OpenAITiboAccountStatuses(account, time.Now())
+	}
 	if out != nil && account != nil {
 		out.Proxy = dto.ProxyFromService(account.Proxy)
 	}

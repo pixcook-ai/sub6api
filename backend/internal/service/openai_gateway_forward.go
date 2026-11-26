@@ -19,6 +19,9 @@ import (
 
 // Forward forwards request to OpenAI API
 func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, account *Account, body []byte) (*OpenAIForwardResult, error) {
+	if err := s.checkOpenAITiboQualitySnapshotAdmission(ctx, account, body); err != nil {
+		return nil, err
+	}
 	if responsesWebSearchEnabled(ctx, c, account, s.settingService, s.channelService) {
 		return forwardHostedResponsesWebSearch(ctx, c, account, body, func(next []byte) (*OpenAIForwardResult, error) {
 			return s.forwardWithoutHostedWebSearch(ctx, c, account, next)
@@ -32,7 +35,14 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	return s.forwardWithoutHostedWebSearch(ctx, c, account, next)
 }
 
-func (s *OpenAIGatewayService) forwardWithoutHostedWebSearch(ctx context.Context, c *gin.Context, account *Account, body []byte) (*OpenAIForwardResult, error) {
+func (s *OpenAIGatewayService) forwardWithoutHostedWebSearch(ctx context.Context, c *gin.Context, account *Account, body []byte) (result *OpenAIForwardResult, err error) {
+	ctx = withOpenAITiboQualityAdmission(ctx, body)
+	if err := s.checkOpenAITiboQualitySnapshotAdmission(ctx, account, body); err != nil {
+		return nil, err
+	}
+	var tiboRun *openAITiboRun
+	defer func() { s.finishOpenAITiboRun(tiboRun, result, err) }()
+	resetOpenAIRouteRecord(c)
 	if account.IsOpenAIBPS() {
 		return s.forwardOpenAIBPS(ctx, c, account, body)
 	}
@@ -139,6 +149,10 @@ func (s *OpenAIGatewayService) forwardWithoutHostedWebSearch(ctx context.Context
 	if compactPath {
 		// The compact endpoint is unary HTTP, not a WS response.create turn.
 		wsDecision = openAIWSHTTPDecision("compact_http")
+	}
+	if wsDecision.Transport == OpenAIUpstreamTransportHTTPSSE && !compactPath && s.openAITiboRouteApplies(account) {
+		tiboRun = s.newOpenAITiboRun(ctx, c, account, body, wsExecutionScope)
+		tiboRun.commit(c, openAITiboRouteHTTP)
 	}
 	legacyCompactWire := compactPath && !isOpenAINativeCompactionV2(c)
 	if shouldFlattenOpenAIResponsesNamespaces(account, wsDecision.Transport, passthroughEnabled, compactPath) {

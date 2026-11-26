@@ -59,6 +59,11 @@ func (s *OpenAIGatewayService) doOpenAIUpstream(request *http.Request, proxyURL 
 }
 
 func (s *OpenAIGatewayService) doOpenAIUpstreamOnce(request *http.Request, proxyURL string, account *Account) (*http.Response, error) {
+	if request != nil {
+		if err := s.checkOpenAITiboQualityAdmissionForPrevious(request.Context(), account, ""); err != nil {
+			return nil, err
+		}
+	}
 	snapshot := snapshotCodexTicketHTTPRequest(request, account)
 	if s.pluginManager != nil {
 		response, handled, err := s.pluginManager.RoundTripOpenAIOAuth(request.Context(), request, proxyURL, account)

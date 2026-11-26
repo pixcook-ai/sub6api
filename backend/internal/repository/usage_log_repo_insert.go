@@ -33,6 +33,7 @@ var usageLogInsertArgTypes = [...]string{
 	"text",        // upstream_model
 	"text",        // upstream_response_model
 	"boolean",     // upstream_model_mismatch
+	"boolean",     // route_degraded
 	"bigint",      // group_id
 	"bigint",      // subscription_id
 	"integer",     // input_tokens
@@ -234,6 +235,7 @@ func (r *usageLogRepository) createSingle(ctx context.Context, sqlq sqlExecutor,
 			upstream_model,
 			upstream_response_model,
 			upstream_model_mismatch,
+			route_degraded,
 			group_id,
 			subscription_id,
 			input_tokens,
@@ -288,12 +290,7 @@ func (r *usageLogRepository) createSingle(ctx context.Context, sqlq sqlExecutor,
 			native_compaction_v2,
 			created_at
 		) VALUES (
-			$1, $2, $3, $4, $5, $6, $7, $8, $9,
-			$10, $11,
-			$12, $13, $14, $15,
-			$16, $17, $18, $19,
-			$20, $21, $22, $23, $24, $25,
-			$26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55, $56, $57, $58, $59, $60, $61, $62
+$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55, $56, $57, $58, $59, $60, $61, $62, $63
 		)
 		ON CONFLICT (request_id, api_key_id) DO NOTHING
 		RETURNING id, created_at
@@ -694,6 +691,7 @@ func buildUsageLogBatchInsertQuery(keys []string, preparedByKey map[string]usage
 			upstream_model,
 			upstream_response_model,
 			upstream_model_mismatch,
+			route_degraded,
 			group_id,
 			subscription_id,
 			input_tokens,
@@ -789,6 +787,7 @@ func buildUsageLogBatchInsertQuery(keys []string, preparedByKey map[string]usage
 				upstream_model,
 				upstream_response_model,
 				upstream_model_mismatch,
+				route_degraded,
 				group_id,
 				subscription_id,
 				input_tokens,
@@ -853,6 +852,7 @@ func buildUsageLogBatchInsertQuery(keys []string, preparedByKey map[string]usage
 				upstream_model,
 				upstream_response_model,
 				upstream_model_mismatch,
+				route_degraded,
 				group_id,
 				subscription_id,
 				input_tokens,
@@ -957,6 +957,7 @@ func buildUsageLogBestEffortInsertQuery(preparedList []usageLogInsertPrepared) (
 			upstream_model,
 			upstream_response_model,
 			upstream_model_mismatch,
+			route_degraded,
 			group_id,
 			subscription_id,
 			input_tokens,
@@ -1047,6 +1048,7 @@ func buildUsageLogBestEffortInsertQuery(preparedList []usageLogInsertPrepared) (
 			upstream_model,
 			upstream_response_model,
 			upstream_model_mismatch,
+			route_degraded,
 			group_id,
 			subscription_id,
 			input_tokens,
@@ -1111,6 +1113,7 @@ func buildUsageLogBestEffortInsertQuery(preparedList []usageLogInsertPrepared) (
 			upstream_model,
 			upstream_response_model,
 			upstream_model_mismatch,
+			route_degraded,
 			group_id,
 			subscription_id,
 			input_tokens,
@@ -1183,6 +1186,7 @@ func execUsageLogInsertNoResult(ctx context.Context, sqlq sqlExecutor, prepared 
 			upstream_model,
 			upstream_response_model,
 			upstream_model_mismatch,
+			route_degraded,
 			group_id,
 			subscription_id,
 			input_tokens,
@@ -1237,12 +1241,7 @@ func execUsageLogInsertNoResult(ctx context.Context, sqlq sqlExecutor, prepared 
 			native_compaction_v2,
 			created_at
 		) VALUES (
-			$1, $2, $3, $4, $5, $6, $7, $8, $9,
-			$10, $11,
-			$12, $13, $14, $15,
-			$16, $17, $18, $19,
-			$20, $21, $22, $23, $24, $25,
-			$26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55, $56, $57, $58, $59, $60, $61, $62
+$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55, $56, $57, $58, $59, $60, $61, $62, $63
 		)
 		ON CONFLICT (request_id, api_key_id) DO NOTHING
 	`, prepared.args...)
@@ -1293,6 +1292,7 @@ func prepareUsageLogInsert(log *service.UsageLog) usageLogInsertPrepared {
 	upstreamModel := nullString(log.UpstreamModel)
 	upstreamResponseModel := nullString(log.UpstreamResponseModel)
 	upstreamModelMismatch := nullBool(log.UpstreamModelMismatch)
+	routeDegraded := nullBool(log.RouteDegraded)
 
 	var requestIDArg any
 	if requestID != "" {
@@ -1314,6 +1314,7 @@ func prepareUsageLogInsert(log *service.UsageLog) usageLogInsertPrepared {
 			upstreamModel,
 			upstreamResponseModel,
 			upstreamModelMismatch,
+			routeDegraded,
 			groupID,
 			subscriptionID,
 			log.InputTokens,

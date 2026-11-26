@@ -995,6 +995,7 @@ const (
 
 // GatewayConfig API网关相关配置
 type GatewayConfig struct {
+	OpenAITiboRoute OpenAITiboRouteConfig `mapstructure:"openai_tibo_route"`
 	// 等待上游响应头的超时时间（秒），0表示无超时
 	// 注意：这不影响流式数据传输，只控制等待响应头的时间
 	ResponseHeaderTimeout int `mapstructure:"response_header_timeout"`
@@ -2476,6 +2477,23 @@ func setDefaults() {
 	viper.SetDefault("gateway.disable_codex_originator_normalization", false)
 	viper.SetDefault("gateway.codex_image_generation_bridge_enabled", false)
 	viper.SetDefault("gateway.openai_passthrough_allow_timeout_headers", false)
+	viper.SetDefault("gateway.openai_tibo_route.enabled", false)
+	viper.SetDefault("gateway.openai_tibo_route.interval", 10*time.Minute)
+	viper.SetDefault("gateway.openai_tibo_route.spread", 5*time.Minute)
+	viper.SetDefault("gateway.openai_tibo_route.healthy_interval", 10*time.Minute)
+	viper.SetDefault("gateway.openai_tibo_route.degraded_interval", 5*time.Minute)
+	viper.SetDefault("gateway.openai_tibo_route.unknown_backoff", []time.Duration{time.Minute, 2 * time.Minute, 4 * time.Minute, 8 * time.Minute, 15 * time.Minute})
+	viper.SetDefault("gateway.openai_tibo_route.jitter", 0.2)
+	viper.SetDefault("gateway.openai_tibo_route.confirm_samples", 3)
+	viper.SetDefault("gateway.openai_tibo_route.confirm_spacing", 20*time.Second)
+	viper.SetDefault("gateway.openai_tibo_route.min_degraded_dwell", 10*time.Minute)
+	viper.SetDefault("gateway.openai_tibo_route.max_stale", 45*time.Minute)
+	viper.SetDefault("gateway.openai_tibo_route.active_window", 30*time.Minute)
+	viper.SetDefault("gateway.openai_tibo_route.max_probes_per_hour", 20)
+	viper.SetDefault("gateway.openai_tibo_route.probe_concurrency", 4)
+	viper.SetDefault("gateway.openai_tibo_route.scheduler_prefer_healthy_route", false)
+	viper.SetDefault("gateway.openai_tibo_route.degraded_alert_ratio", 0.5)
+	viper.SetDefault("gateway.openai_tibo_route.degraded_alert_min_requests", 20)
 	viper.SetDefault("gateway.openai_compact_model", "gpt-5.5")
 	// Ticket harvesting is opt-in; explicit settings or YAML/env can enable it.
 	viper.SetDefault("gateway.openai_codex_ticket.enabled", false)
@@ -2760,6 +2778,9 @@ func setEnvReachableDefaults() {
 }
 
 func (c *Config) Validate() error {
+	if err := validateOpenAITiboRoute(c.Gateway.OpenAITiboRoute); err != nil {
+		return err
+	}
 	forwardedClientIPHeaders, err := NormalizeForwardedClientIPHeaders(c.Security.ForwardedClientIPHeaders)
 	if err != nil {
 		return fmt.Errorf("security.forwarded_client_ip_headers: %w", err)

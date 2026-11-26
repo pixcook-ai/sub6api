@@ -820,8 +820,12 @@ func (c *schedulerCache) writeAccountIDs(ctx context.Context, accounts []service
 		}
 
 		id := strconv.FormatInt(account.ID, 10)
-		pipe.Set(ctx, schedulerAccountKey(id), fullPayload, 0)
-		pipe.Set(ctx, schedulerAccountMetaKey(id), metaPayload, 0)
+		if version := schedulerTiboVersion(account); account.Platform == service.PlatformOpenAI || version != "" {
+			pipe.Eval(ctx, schedulerWriteAstraAccountScript, []string{schedulerAccountKey(id), schedulerAccountMetaKey(id)}, string(fullPayload), string(metaPayload), version)
+		} else {
+			pipe.Set(ctx, schedulerAccountKey(id), fullPayload, 0)
+			pipe.Set(ctx, schedulerAccountMetaKey(id), metaPayload, 0)
+		}
 		// Keep the hot LastUsedAt side key untouched: a lagging snapshot rebuild
 		// must not overwrite a newer scheduler update.
 		accountIDs = append(accountIDs, account.ID)
@@ -840,11 +844,16 @@ func (c *schedulerCache) writeAccountIDs(ctx context.Context, accounts []service
 }
 
 func marshalSchedulerCacheAccount(account service.Account) ([]byte, []byte, error) {
-	fullPayload, err := json.Marshal(account)
+	type versionedAccount struct {
+		service.Account
+		AstraPolicyVersion string `json:"astra_policy_version,omitempty"`
+	}
+	version := schedulerTiboVersion(account)
+	fullPayload, err := json.Marshal(versionedAccount{Account: account, AstraPolicyVersion: version})
 	if err != nil {
 		return nil, nil, fmt.Errorf("marshal account: %w", err)
 	}
-	metaPayload, err := json.Marshal(buildSchedulerMetadataAccount(account))
+	metaPayload, err := json.Marshal(versionedAccount{Account: buildSchedulerMetadataAccount(account), AstraPolicyVersion: version})
 	if err != nil {
 		return nil, nil, fmt.Errorf("marshal account metadata: %w", err)
 	}
@@ -1092,6 +1101,10 @@ func filterSchedulerExtra(extra map[string]any) map[string]any {
 		service.UpstreamBillingProbeExtraKey,
 		service.GrokMediaEligibleExtraKey,
 		"grok_billing_snapshot",
+		service.OpenAIAstraPolicyExtraKey,
+		service.OpenAITiboQualityIsolatedExtraKey,
+		service.OpenAITiboQualityIsolationAtExtraKey,
+		tiboAutoGroupSampleKey,
 	}
 	filtered := make(map[string]any)
 	for _, key := range keys {

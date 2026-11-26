@@ -180,7 +180,15 @@ func (a *Account) EffectiveLoadFactor() int {
 	return 1
 }
 
+// IsOpenAITiboQualityIsolated is independent of the administrator scheduling switch.
+func (a *Account) IsOpenAITiboQualityIsolated() bool {
+	return a != nil && a.IsOpenAI() && a.getExtraBool("openai_tibo_quality_isolated")
+}
+
 func (a *Account) IsSchedulable() bool {
+	if a == nil || a.IsOpenAITiboQualityIsolated() {
+		return false
+	}
 	if a.IsOpenAIBPS() {
 		state := a.OpenAIBPSCredentialState(time.Now())
 		if state.Status == "expired" || state.Status == "revoked" || state.Status == "auth_failed" {
@@ -222,7 +230,7 @@ func (a *Account) IsSchedulable() bool {
 // 手动 Schedulable 开关:spark 影子拥有独立 spark 配额窗口,母账号 global 429(走 RateLimitResetAt)
 // 不应连坐 spark(否则重新耦合影子架构本应解耦的两条 429 道)。nil receiver 返回 false。
 func (a *Account) IsCredentialUsableForShadow() bool {
-	if a == nil || !a.IsActive() {
+	if a == nil || !a.IsActive() || a.IsOpenAITiboQualityIsolated() {
 		return false
 	}
 	now := time.Now()

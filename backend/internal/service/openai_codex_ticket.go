@@ -301,6 +301,7 @@ func (s *OpenAIGatewayService) storeOpenAICodexTicket(ctx context.Context, accou
 	s.openaiCodexTickets.Store(openAICodexTicketKey(account.ID, model), ticket)
 	return nil
 }
+
 // applyOpenAICodexTicket 在出站请求上补齐 x-codex-turn-state：仅当请求没有回带
 // 该头时注入已捕获的有效门票（客户端自己回合内的回带保持原样，见
 // applyOpenAICodexTicketWithGeneration）。请求路径不现场打票；仅在无票策略
@@ -312,6 +313,10 @@ func (s *OpenAIGatewayService) applyOpenAICodexTicket(ctx context.Context, accou
 }
 
 func (s *OpenAIGatewayService) applyOpenAICodexTicketWithGeneration(ctx context.Context, account *Account, model string, h http.Header) (*openAICodexTicket, error) {
+	// Quality probes must observe the account without borrowing a business ticket.
+	if isOpenAITiboSyntheticProbe(ctx, account) {
+		return nil, nil
+	}
 	if s == nil || h == nil || !isOpenAICodexTicketAccount(account) || !s.openAICodexTicketEnabledContext(ctx) {
 		return nil, nil
 	}

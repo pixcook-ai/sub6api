@@ -83,6 +83,33 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	if account == nil {
 		return errors.New("account is nil")
 	}
+	if err := s.checkOpenAITiboQualitySnapshotAdmission(ctx, account, firstClientMessage); err != nil {
+		return NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "account is isolated by Tibo quality monitoring", err)
+	}
+	// Wrap the existing turn hook, preserving pricing/slot behavior. Run the
+	// quality check after it, since acquiring the next turn can wait.
+	qualityHooks := OpenAIWSIngressHooks{}
+	if hooks != nil {
+		qualityHooks = *hooks
+	}
+	beforeQualityTurn := qualityHooks.BeforeTurn
+	qualityTurnCleanupOnReject := true
+	qualityHooks.BeforeTurn = func(turn int) error {
+		if beforeQualityTurn != nil {
+			if err := beforeQualityTurn(turn); err != nil {
+				return err
+			}
+		}
+		if err := s.checkOpenAITiboQualityAdmissionForPrevious(ctx, account, ""); err != nil {
+			if qualityTurnCleanupOnReject && beforeQualityTurn != nil && qualityHooks.AfterTurn != nil {
+				// The original hook may already hold the turn's concurrency slot.
+				qualityHooks.AfterTurn(turn, nil, err)
+			}
+			return NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "account is isolated by Tibo quality monitoring", err)
+		}
+		return nil
+	}
+	hooks = &qualityHooks
 	// A handler may reuse the same gin context across account failover attempts.
 	// Never let an OAuth attempt's response aliases leak into the next account.
 	setCodexToolNameReverse(c, nil)
@@ -140,6 +167,8 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			// 首轮准入由握手路径完成；后续 response.create 会在写入上游前
 			// 依次回调 BeforeRequest 和 BeforeTurn，并在终止或失败时回调
 			// AfterTurn，从而覆盖 turn 级利润复核、定价冻结和并发槽位释放。
+			// The passthrough adapter always reports a failed relay turn itself.
+			qualityTurnCleanupOnReject = false
 			return s.proxyResponsesWebSocketV2Passthrough(
 				ctx,
 				c,
@@ -1007,6 +1036,9 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		}
 		turnStart := time.Now()
 		wroteDownstream := false
+		if err := s.checkOpenAITiboQualityAdmission(ctx, account, payload); err != nil {
+			return nil, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "account is isolated by Tibo quality monitoring", err)
+		}
 		if err := lease.WriteJSONWithContextTimeout(ctx, json.RawMessage(payload), s.openAIWSWriteTimeout()); err != nil {
 			return nil, wrapOpenAIWSIngressTurnError(
 				"write_upstream",

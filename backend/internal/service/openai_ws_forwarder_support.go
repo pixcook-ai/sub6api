@@ -505,9 +505,20 @@ func (s *OpenAIGatewayService) selectAccountByPreviousResponseIDForCapability(
 	if s == nil {
 		return nil, nil
 	}
+	if err := s.checkOpenAITiboPreviousResponseAdmission(ctx, groupID, previousResponseID); err != nil {
+		return nil, err
+	}
 	accountID, account, responseID, store := s.resolveAccountByPreviousResponseIDForCapability(ctx, groupID, previousResponseID, requestedModel, excludedIDs, requiredCapability, requireCompact)
 	if accountID <= 0 || account == nil || store == nil {
+		// A quality-isolated owner retains its response binding. Recheck it
+		// before treating an unavailable resolution as permission to fail over.
+		if err := s.checkOpenAITiboPreviousResponseAdmission(ctx, groupID, previousResponseID); err != nil {
+			return nil, err
+		}
 		return nil, nil
+	}
+	if err := s.checkOpenAITiboQualityAdmissionForPrevious(ctx, account, previousResponseID); err != nil {
+		return nil, err
 	}
 
 	result, acquireErr := s.tryAcquireAccountSlot(ctx, accountID, account.Concurrency)
@@ -596,11 +607,18 @@ func (s *OpenAIGatewayService) resolveAccountByPreviousResponseIDForCapability(
 	if !account.IsOpenAIApiKey() && s.getOpenAIWSProtocolResolver().Resolve(account).Transport != OpenAIUpstreamTransportResponsesWebsocketV2 {
 		return 0, nil, "", nil
 	}
+	if account.IsOpenAITiboQualityIsolated() {
+		// Quarantine preserves the upstream response owner for later recovery.
+		return 0, nil, "", nil
+	}
 	if shouldClearStickySession(account, requestedModel) || !account.IsOpenAI() || !account.IsSchedulable() {
 		_ = store.DeleteResponseAccount(ctx, derefGroupID(groupID), responseID)
 		return 0, nil, "", nil
 	}
 	if !parentHealthyForShadow(account, s.parentAccountLookup(ctx)) {
+		if err := s.checkOpenAITiboQualityAdmissionForPrevious(ctx, account, responseID); err != nil {
+			return 0, nil, "", nil
+		}
 		_ = store.DeleteResponseAccount(ctx, derefGroupID(groupID), responseID)
 		return 0, nil, "", nil
 	}
@@ -629,6 +647,9 @@ func (s *OpenAIGatewayService) resolveAccountByPreviousResponseIDForCapability(
 			_ = store.DeleteResponseAccount(ctx, derefGroupID(groupID), responseID)
 			return 0, nil, "", nil
 		}
+		if latest.IsOpenAITiboQualityIsolated() {
+			return 0, nil, "", nil
+		}
 		if shouldClearStickySession(latest, requestedModel) || !latest.IsOpenAI() || !latest.IsSchedulable() {
 			_ = store.DeleteResponseAccount(ctx, derefGroupID(groupID), responseID)
 			return 0, nil, "", nil
@@ -640,6 +661,9 @@ func (s *OpenAIGatewayService) resolveAccountByPreviousResponseIDForCapability(
 			return 0, nil, "", nil
 		}
 		if !parentHealthyForShadow(latest, s.parentAccountLookup(ctx)) {
+			if err := s.checkOpenAITiboQualityAdmissionForPrevious(ctx, latest, responseID); err != nil {
+				return 0, nil, "", nil
+			}
 			_ = store.DeleteResponseAccount(ctx, derefGroupID(groupID), responseID)
 			return 0, nil, "", nil
 		}
