@@ -108,7 +108,10 @@ export default {
           }
         }
       },
+
       bps: {
+        usageSourceHint: 'Requests, tokens and costs are tracked locally. Percentages are ChatGPT/Codex quotas, not separate BPS limits.',
+        quotaUnavailable: 'Some upstream quota is unavailable (—). Local usage statistics remain available.',
         testInterrupted: 'The BPS test stream ended without a completion result.',
         riskTitle: "Account suspension risk",
         riskDescription: "Using OpenAI BPS may result in account restrictions or suspension. Proceed with caution.",
@@ -127,7 +130,7 @@ export default {
         credentialStatus: {"unknown": "Token expiration is unknown", "not_expired": "Token has not expired (not verified)", "expired": "Token expired", "revoked": "Token revoked", "auth_failed": "Token authentication failed"},
 
         saveAndTest: 'Save and test connection',
-        monitorHint: 'Use the Sub4API endpoint and a BPS group API key for Responses probes. Upstream quota queries are unavailable.',
+        monitorHint: 'Use the Sub4API endpoint and a BPS group API key for Responses probes. Query usage windows from the account list.',
         keepToken: "Leave blank to keep the existing token",
         tokenHint: "Paste a ChatGPT Access Token. Replace it manually when it expires; test the connection from the account list after saving.",
         tokenRequired: "Access Token is required",

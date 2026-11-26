@@ -22,6 +22,25 @@ describe('UsageProgressBar', () => {
     vi.useRealTimers()
   })
 
+  it('未知配额保留本地统计，不显示零用量或立即重置', () => {
+    const wrapper = mount(UsageProgressBar, {
+      props: {
+        label: '5h',
+        utilization: 0,
+        quotaUnknown: true,
+        showNowWhenIdle: true,
+        color: 'indigo',
+        windowStats: { requests: 5, tokens: 500, cost: 1.5, user_cost: 1 }
+      }
+    })
+
+    expect(wrapper.text()).toContain('5 req')
+    expect(wrapper.text()).toContain('—')
+    expect(wrapper.text()).not.toContain('0%')
+    expect(wrapper.text()).not.toContain('usage.resetNow')
+    wrapper.unmount()
+  })
+
   it('showNowWhenIdle=true 且利用率为 0 但有未来 resetsAt 时显示倒计时', () => {
     const wrapper = mount(UsageProgressBar, {
       props: {

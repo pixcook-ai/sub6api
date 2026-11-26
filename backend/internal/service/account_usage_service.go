@@ -146,10 +146,11 @@ type WindowStats struct {
 
 // UsageProgress 使用量进度
 type UsageProgress struct {
-	Utilization      float64      `json:"utilization"`            // 使用率百分比 (0-100+，100表示100%)
-	ResetsAt         *time.Time   `json:"resets_at"`              // 重置时间
-	RemainingSeconds int          `json:"remaining_seconds"`      // 距重置剩余秒数
-	WindowStats      *WindowStats `json:"window_stats,omitempty"` // 窗口期统计（从窗口开始到当前的使用量）
+	Utilization      float64      `json:"utilization"`             // 使用率百分比 (0-100+，100表示100%)
+	QuotaUnknown     bool         `json:"quota_unknown,omitempty"` // 本地统计不代表上游配额使用率
+	ResetsAt         *time.Time   `json:"resets_at"`               // 重置时间
+	RemainingSeconds int          `json:"remaining_seconds"`       // 距重置剩余秒数
+	WindowStats      *WindowStats `json:"window_stats,omitempty"`  // 窗口期统计（从窗口开始到当前的使用量）
 	UsedRequests     int64        `json:"used_requests,omitempty"`
 	LimitRequests    int64        `json:"limit_requests,omitempty"`
 }
@@ -359,8 +360,7 @@ func (s *AccountUsageService) getUsageForAccount(ctx context.Context, account *A
 	}
 
 	if account.Platform == PlatformOpenAIBPS && account.Type == AccountTypeOAuth {
-		// BPS has no /wham/usage quota; only local request/token/cost windows are meaningful.
-		return s.getOpenAIBPSUsage(ctx, account)
+		return s.getOpenAIBPSUsage(ctx, account, forceProbe)
 	}
 
 	if account.Platform == PlatformOpenAI && account.Type == AccountTypeOAuth {
@@ -759,37 +759,23 @@ func (s *AccountUsageService) getOpenAIUsage(ctx context.Context, account *Accou
 
 	if stats, err := s.usageLogRepo.GetAccountWindowStats(ctx, account.ID, codexWindowStatsStart(usage.FiveHour, 5*time.Hour, now)); err == nil {
 		if usage.FiveHour == nil {
-			usage.FiveHour = &UsageProgress{Utilization: 0}
+			usage.FiveHour = &UsageProgress{QuotaUnknown: usage.ThirtyDay != nil}
 		}
 		usage.FiveHour.WindowStats = windowStatsFromAccountStats(stats)
 	}
 
 	if stats, err := s.usageLogRepo.GetAccountWindowStats(ctx, account.ID, codexWindowStatsStart(usage.SevenDay, 7*24*time.Hour, now)); err == nil {
 		if usage.SevenDay == nil {
-			usage.SevenDay = &UsageProgress{Utilization: 0}
+			usage.SevenDay = &UsageProgress{QuotaUnknown: usage.ThirtyDay != nil}
 		}
 		usage.SevenDay.WindowStats = windowStatsFromAccountStats(stats)
 	}
+	if usage.ThirtyDay != nil {
+		if stats, err := s.usageLogRepo.GetAccountWindowStats(ctx, account.ID, codexWindowStatsStart(usage.ThirtyDay, 30*24*time.Hour, now)); err == nil {
+			usage.ThirtyDay.WindowStats = windowStatsFromAccountStats(stats)
+		}
+	}
 
-	return usage, nil
-}
-
-// getOpenAIBPSUsage reports locally measured 5h/7d windows for an openai_bps account.
-// It never contacts upstream, so it cannot fail with a stale-quota warning.
-func (s *AccountUsageService) getOpenAIBPSUsage(ctx context.Context, account *Account) (*UsageInfo, error) {
-	now := time.Now()
-	usage := &UsageInfo{UpdatedAt: &now}
-	if account == nil || s.usageLogRepo == nil {
-		return usage, nil
-	}
-	usage.FiveHour = &UsageProgress{Utilization: 0}
-	usage.SevenDay = &UsageProgress{Utilization: 0}
-	if stats, err := s.usageLogRepo.GetAccountWindowStats(ctx, account.ID, now.Add(-5*time.Hour)); err == nil {
-		usage.FiveHour.WindowStats = windowStatsFromAccountStats(stats)
-	}
-	if stats, err := s.usageLogRepo.GetAccountWindowStats(ctx, account.ID, now.Add(-7*24*time.Hour)); err == nil {
-		usage.SevenDay.WindowStats = windowStatsFromAccountStats(stats)
-	}
 	return usage, nil
 }
 
@@ -800,7 +786,7 @@ func shouldRefreshOpenAICodexSnapshot(account *Account, usage *UsageInfo, now ti
 	if usage == nil {
 		return true
 	}
-	if usage.FiveHour == nil || usage.SevenDay == nil {
+	if usage.ThirtyDay == nil && (usage.FiveHour == nil || usage.SevenDay == nil) {
 		return true
 	}
 	if account.IsRateLimited() {
@@ -977,18 +963,38 @@ func mergeAccountExtra(account *Account, updates map[string]any) {
 	}
 }
 
-// applyExtraToUsage rebuilds the codex 5h/7d windows in usage from the
+// applyExtraToUsage rebuilds the Codex windows in usage from the
 // account's Extra map.  Called after mergeAccountExtra to make the in-memory
 // UsageInfo consistent with the just-persisted Extra values.
 func applyExtraToUsage(usage *UsageInfo, extra map[string]any, now time.Time) {
 	if usage == nil {
 		return
 	}
-	if progress := buildCodexUsageProgressFromExtra(extra, "5h", now); progress != nil {
-		usage.FiveHour = progress
-	}
-	if progress := buildCodexUsageProgressFromExtra(extra, "7d", now); progress != nil {
-		usage.SevenDay = progress
+	usage.FiveHour, usage.SevenDay, usage.ThirtyDay = nil, nil, nil
+	for _, slot := range []string{"5h", "7d"} {
+		progress := buildCodexUsageProgressFromExtra(extra, slot, now)
+		if progress == nil {
+			continue
+		}
+		// Legacy Codex normalization stores every long window in the 7d slot.
+		// Respect the explicit duration before assigning a user-visible label.
+		window := slot
+		switch parseExtraInt(extra["codex_"+slot+"_window_minutes"]) {
+		case 300:
+			window = "5h"
+		case 10080:
+			window = "7d"
+		case 43200:
+			window = "30d"
+		}
+		switch window {
+		case "5h":
+			usage.FiveHour = progress
+		case "7d":
+			usage.SevenDay = progress
+		case "30d":
+			usage.ThirtyDay = progress
+		}
 	}
 }
 

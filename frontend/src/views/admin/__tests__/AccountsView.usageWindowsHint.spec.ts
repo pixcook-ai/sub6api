@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
-import { defineComponent } from 'vue'
+import { defineComponent, onMounted } from 'vue'
 
 import AccountsView from '../AccountsView.vue'
 
@@ -8,12 +8,14 @@ const {
   listAccounts,
   listWithEtag,
   getBatchTodayStats,
+  getBatchUsage,
   getAllProxies,
   getAllGroups
 } = vi.hoisted(() => ({
   listAccounts: vi.fn(),
   listWithEtag: vi.fn(),
   getBatchTodayStats: vi.fn(),
+  getBatchUsage: vi.fn(),
   getAllProxies: vi.fn(),
   getAllGroups: vi.fn()
 }))
@@ -25,6 +27,7 @@ vi.mock('@/api/admin', () => ({
       list: listAccounts,
       listWithEtag,
       getBatchTodayStats,
+      getBatchUsage,
       getUpstreamBillingProbeSettings: vi.fn().mockResolvedValue({ enabled: true, interval_minutes: 30 }),
       delete: vi.fn(),
       batchClearError: vi.fn(),
@@ -94,8 +97,12 @@ const HelpTooltipStub = {
 }
 
 const AccountUsageCellStub = defineComponent({
-  props: ['account'],
-  template: '<div data-test="usage-cell" />'
+  props: ['account', 'requestBatchedUsage', 'batchedUsage', 'batchedUsageLoading'],
+  setup(props) {
+    onMounted(() => props.requestBatchedUsage?.(props.account))
+    return {}
+  },
+  template: '<div data-test="usage-cell">{{ batchedUsage?.five_hour?.utilization }}|{{ batchedUsage?.seven_day?.utilization }}|{{ batchedUsageLoading }}</div>'
 })
 
 function mountView() {
@@ -148,6 +155,7 @@ describe('admin AccountsView usage windows hint', () => {
     listAccounts.mockReset()
     listWithEtag.mockReset()
     getBatchTodayStats.mockReset()
+    getBatchUsage.mockReset()
     getAllProxies.mockReset()
     getAllGroups.mockReset()
 
@@ -164,6 +172,7 @@ describe('admin AccountsView usage windows hint', () => {
       data: null
     })
     getBatchTodayStats.mockResolvedValue({ stats: {} })
+    getBatchUsage.mockResolvedValue({ usage: {}, errors: {} })
     getAllProxies.mockResolvedValue([])
     getAllGroups.mockResolvedValue([])
   })
@@ -190,6 +199,45 @@ describe('admin AccountsView usage windows hint', () => {
     const hint = wrapper.find('[data-test="usage-windows-hint"]')
     expect(hint.exists()).toBe(true)
     expect(hint.text()).toBe('admin.accounts.usageWindowsHint')
+  })
+
+  it('loads BPS OAuth usage through the desktop batch callback and passes both windows to the cell', async () => {
+    listAccounts.mockResolvedValueOnce({
+      items: [{
+        id: 9801,
+        name: 'bps-account',
+        platform: 'openai_bps',
+        type: 'oauth',
+        status: 'active',
+        schedulable: true,
+        rate_multiplier: 1,
+        created_at: '2026-11-26T00:00:00Z',
+        updated_at: '2026-11-26T00:00:00Z'
+      }],
+      total: 1,
+      page: 1,
+      page_size: 20,
+      pages: 1
+    })
+    getBatchUsage.mockResolvedValueOnce({
+      usage: {
+        '9801': {
+          five_hour: { utilization: 23 },
+          seven_day: { utilization: 67 }
+        }
+      },
+      errors: {}
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+    await new Promise(resolve => setTimeout(resolve, 10))
+    await flushPromises()
+
+    expect(getBatchUsage).toHaveBeenCalledTimes(1)
+    expect(getBatchUsage).toHaveBeenCalledWith([9801], false)
+    expect(wrapper.get('[data-test="usage-cell"]').text()).toBe('23|67|false')
+    wrapper.unmount()
   })
 
   it('refreshes Tibo history for a paused idle account without replacing its Codex tickets', async () => {

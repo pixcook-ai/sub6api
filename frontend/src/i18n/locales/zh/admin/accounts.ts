@@ -108,7 +108,10 @@ export default {
           }
         }
       },
+
       bps: {
+        usageSourceHint: '请求、Token 和费用为本站统计；百分比为 ChatGPT/Codex 配额，不代表 BPS 独立额度。',
+        quotaUnavailable: '未获取到完整上游配额，— 表示未知；本地统计仍可查看。',
         testInterrupted: 'BPS 测试流已中断，未收到完成结果。',
         riskTitle: "封号风险提示",
         riskDescription: "使用 OpenAI BPS 可能存在账号被限制或封禁的风险，请谨慎使用。",
@@ -127,7 +130,7 @@ export default {
         credentialStatus: {"unknown": "Token 到期时间未知", "not_expired": "Token 未到期（不代表已通过验证）", "expired": "Token 已过期", "revoked": "Token 已被撤销", "auth_failed": "Token 认证失败"},
 
         saveAndTest: '保存并测试连接',
-        monitorHint: '填写 Sub4API 地址和 BPS 分组的 API Key，使用 Responses 探活；不提供上游配额查询。',
+        monitorHint: '填写 Sub4API 地址和 BPS 分组的 API Key，使用 Responses 探活；用量窗口请在账号列表查询。',
         keepToken: "留空保留现有 Token",
         tokenHint: "手动粘贴 ChatGPT Access Token。到期后需在此替换；保存后可在账号列表测试连接。",
         tokenRequired: "请输入 Access Token",
