@@ -145,3 +145,41 @@ func TestBatchLoginSnapshotTracksProgressAndClearsItAfterCreation(t *testing.T) 
 		t.Fatal("late progress overwrote terminal state")
 	}
 }
+
+func TestBatchLoginTerminalProgressPreservesOnlyFailedStage(t *testing.T) {
+	for _, status := range []string{BatchLoginItemFailed, BatchLoginItemCreated, BatchLoginItemSkipped, BatchLoginItemCanceled} {
+		t.Run(status, func(t *testing.T) {
+			job := &batchLoginJobState{items: []BatchLoginItem{{Status: BatchLoginItemRunning, Stage: "password"}}}
+			job.update(0, status, "codex_oauth_http_429", 0)
+			job.setProgress(0, "totp")
+			item := job.snapshot().Items[0]
+			wantStage := ""
+			if status == BatchLoginItemFailed {
+				wantStage = "password"
+			}
+			if item.Stage != wantStage || item.Code != "codex_oauth_http_429" || item.Status != status {
+				t.Fatalf("unexpected terminal item %+v", item)
+			}
+		})
+	}
+}
+
+func TestBatchLoginFailedSnapshotPreservesHTTPCodeAndStage(t *testing.T) {
+	for _, code := range []string{"codex_oauth_risk_control_http_403", "codex_oauth_http_429", "codex_token_exchange_http_503"} {
+		t.Run(code, func(t *testing.T) {
+			runner := func(ctx context.Context, provider string, entry BatchLoginEntry, proxy string, onProgress func(string)) (*batchLoginRecord, string) {
+				onProgress("password")
+				return parseBatchLoginOutput([]byte(`{"ok":false,"code":"`+code+`"}`), nil)
+			}
+			svc := newBatchLoginTestService(t, &fakeBatchAdmin{}, runner, 1)
+			job, err := svc.Start(context.Background(), &BatchLoginInput{Entries: entries("fixture@example.invalid"), Targets: []string{"codex"}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			item := waitBatchLoginJob(t, svc, job.ID).Items[0]
+			if item.Status != BatchLoginItemFailed || item.Stage != "password" || item.Code != code {
+				t.Fatalf("unexpected failed snapshot %+v", item)
+			}
+		})
+	}
+}

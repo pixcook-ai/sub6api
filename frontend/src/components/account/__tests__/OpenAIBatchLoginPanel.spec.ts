@@ -50,6 +50,57 @@ afterEach(() => {
 })
 
 describe('OpenAIBatchLoginPanel', () => {
+  it.each([
+    { targets: ['codex'] },
+    { targets: ['bps', 'codex'] }
+  ])('sends the independently selected batch targets $targets and their own groups', async ({ targets: selectedTargets }) => {
+    api.startBatchLogin.mockResolvedValue({ id: 'targets', status: 'running', items: [] })
+    const wrapper = render('zh')
+    if (!selectedTargets.includes('bps')) {
+      await wrapper.get('input[type="checkbox"][value="bps"]').setValue(false)
+    }
+    await wrapper.get('input[type="checkbox"][value="codex"]').setValue(true)
+    for (const selector of wrapper.findAllComponents({ name: 'GroupSelector' })) {
+      selector.vm.$emit('update:modelValue', selector.props('platform') === 'openai_bps' ? [10] : [20])
+    }
+    await wrapper.get('textarea').setValue(LINE)
+    await wrapper.get('button.btn-primary').trigger('click')
+    await flushPromises()
+
+    expect(api.startBatchLogin).toHaveBeenCalledWith(expect.objectContaining({
+      targets: selectedTargets,
+      bps_group_ids: selectedTargets.includes('bps') ? [10] : [],
+      codex_group_ids: [20]
+    }))
+    wrapper.unmount()
+  })
+
+  it.each([
+    ['403', '上游拒绝访问或要求安全验证'],
+    ['429', '请求过于频繁'],
+    ['503', '上游服务暂时不可用'],
+    ['418', '']
+  ])('shows HTTP %s with the failed login step', async (status, description) => {
+    api.startBatchLogin.mockResolvedValue({
+      id: 'http-error', status: 'running', items: []
+    })
+    api.getBatchLogin.mockResolvedValue({
+      id: 'http-error', status: 'done',
+      items: [{ email: 'a@example.com', target: 'codex', status: 'failed', stage: 'password', code: `codex_oauth_http_${status}` }]
+    })
+    const wrapper = render('zh')
+    await wrapper.get('textarea').setValue(LINE)
+    await wrapper.get('button.btn-primary').trigger('click')
+    await flushPromises()
+    await vi.advanceTimersByTimeAsync(1000)
+
+    expect(wrapper.get('li').text()).toContain('验证密码失败')
+    expect(wrapper.get('li').text()).toContain(`HTTP ${status}`)
+    if (description) expect(wrapper.get('li').text()).toContain(description)
+    expect(wrapper.get('li').text()).not.toContain('codex_oauth_http_')
+    wrapper.unmount()
+  })
+
   it('updates each running step from polling and displays the final status after completion', async () => {
     const item = { email: 'a@example.com', target: 'codex' }
     api.startBatchLogin.mockResolvedValue({

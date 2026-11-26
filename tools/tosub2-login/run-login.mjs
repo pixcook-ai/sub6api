@@ -124,10 +124,17 @@ child.on("message", (message) => {
 
 child.on("error", () => finish({ ok: false, code: "worker_spawn_failed" }, 1));
 let reason = "";
+let reasonBuffer = "";
+function collectReason(data, final = false) {
+  const text = reasonBuffer + String(data) + (final ? "\n" : "");
+  const match = /\[reason\] ([a-z0-9_]{1,96})(?=\r|\n|\[)/.exec(text);
+  if (match) reason = match[1];
+  reasonBuffer = text.slice(-128);
+}
 child.stderr?.on("data", (d) => {
-  const m = /\[reason\] ([a-z_]+)/.exec(String(d));
-  if (m) reason = m[1];
+  collectReason(d);
 });
 child.on("close", () => {
+  collectReason("", true);
   finish({ ok: false, code: reason || "login_failed" }, 1);
 });

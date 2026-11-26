@@ -55,7 +55,7 @@ func (j *batchLoginJobState) update(idx int, status, code string, accountID int6
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	j.items[idx].Status, j.items[idx].Code, j.items[idx].AccountID = status, code, accountID
-	if status != BatchLoginItemRunning {
+	if status != BatchLoginItemRunning && status != BatchLoginItemFailed {
 		j.items[idx].Stage = ""
 	}
 }

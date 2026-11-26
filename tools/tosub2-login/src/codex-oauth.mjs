@@ -6,7 +6,10 @@ const PROFILE = /^oauth_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[
 const AUTH = "https://auth.openai.com";
 const SCOPE = "openid profile email offline_access";
 const AUDIENCE = "https://api.openai.com/v1";
-const fail = (code) => Object.assign(new Error(code), { code });
+const fail = (code, httpStatus) => {
+  const status = Number.isInteger(httpStatus) && httpStatus >= 400 && httpStatus <= 599 ? ` HTTP ${httpStatus}` : "";
+  return Object.assign(new Error(code + status), { code });
+};
 const nowMs = (now) => typeof now === "function" ? now() : now ?? Date.now();
 
 export function codexAuthBase(value = AUTH) {
@@ -129,10 +132,10 @@ async function requestTokens(form, { authBase, fetchImpl = fetch, refresh = fals
     });
   } catch { throw fail(refresh ? "codex_refresh_outcome_unknown" : "codex_token_exchange_outcome_unknown"); }
   let payload;
-  try { payload = await response.json(); } catch { throw fail(refresh ? "codex_refresh_outcome_unknown" : "codex_invalid_token_response"); }
+  try { payload = await response.json(); } catch { throw fail(refresh ? "codex_refresh_outcome_unknown" : "codex_invalid_token_response", response.status); }
   if (!response.ok) {
-    if (payload?.error === "invalid_grant") throw fail("codex_invalid_grant");
-    throw fail(refresh && response.status >= 500 ? "codex_refresh_outcome_unknown" : "codex_token_endpoint_rejected");
+    if (payload?.error === "invalid_grant") throw fail("codex_invalid_grant", response.status);
+    throw fail(refresh && response.status >= 500 ? "codex_refresh_outcome_unknown" : "codex_token_endpoint_rejected", response.status);
   }
   return payload;
 }

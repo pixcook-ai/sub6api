@@ -1577,6 +1577,15 @@ export default {
             token_exchange: 'Exchanging tokens…',
             create_account: 'Creating account…'
           },
+          batchLoginStepFailed: '{step} failed',
+          batchLoginHttpErrors: {
+            403: 'Upstream denied access or requires security verification',
+            429: 'Too many requests',
+            500: 'Upstream internal server error',
+            502: 'Upstream gateway error',
+            503: 'Upstream service temporarily unavailable',
+            504: 'Upstream gateway timeout'
+          },
           batchLoginItemCodes: {
             already_exists: 'Account already exists',
             login_failed: 'Login failed',

@@ -12,6 +12,13 @@ const TRANSPORT_FAILURES = new Set(["proxy_error", "tls_error", "risk_control"])
 
 export function classifyLoginFailure(raw) {
   const text = String(raw || "");
+  const category = classifyFailureCategory(text);
+  const status = /\bHTTP(?:\/[\d.]+)?\s+([45]\d{2})\b/i.exec(text)?.[1];
+  if (status) return category ? `${category}_http_${status}` : `http_${status}`;
+  return category;
+}
+
+function classifyFailureCategory(text) {
   if (/EMAIL_OTP_REQUIRED/.test(text)) return "email_otp_required";
   if (/EXCEL_ADDITIONAL_VERIFICATION_REQUIRED/.test(text)) return "additional_verification_required";
   if (/EXCEL_CALLBACK_STATE_MISMATCH/.test(text)) return "callback_state_mismatch";
@@ -33,6 +40,6 @@ export function classifyLoginFailure(raw) {
 
 export function stageLoginFailure(stage, category) {
   if (!LOGIN_STAGES.has(stage)) return category;
-  if (!TRANSPORT_FAILURES.has(category)) return category;
+  if (!TRANSPORT_FAILURES.has(category) && !/^(?:[a-z_]+_)?http_[45]\d{2}$/.test(category)) return category;
   return `${stage}_${category}`;
 }

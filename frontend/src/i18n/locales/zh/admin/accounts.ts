@@ -1673,6 +1673,15 @@ export default {
             token_exchange: '交换令牌…',
             create_account: '创建账号…'
           },
+          batchLoginStepFailed: '{step}失败',
+          batchLoginHttpErrors: {
+            403: '上游拒绝访问或要求安全验证',
+            429: '请求过于频繁',
+            500: '上游服务器内部错误',
+            502: '上游网关错误',
+            503: '上游服务暂时不可用',
+            504: '上游网关超时'
+          },
           batchLoginItemCodes: {
             already_exists: '账号已存在',
             login_failed: '登录失败',

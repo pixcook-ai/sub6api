@@ -172,10 +172,22 @@ function statusLabel(item: BatchLoginItem): string {
   if (item.status === 'running' && item.stage && PROGRESS_STAGES.has(item.stage)) {
     return t(`admin.accounts.oauth.openai.batchLoginProgress.${item.stage}`)
   }
+  if (item.status === 'failed' && item.stage && PROGRESS_STAGES.has(item.stage)) {
+    return t('admin.accounts.oauth.openai.batchLoginStepFailed', {
+      step: t(`admin.accounts.oauth.openai.batchLoginProgress.${item.stage}`).replace(/…$/, '')
+    })
+  }
   return t(`admin.accounts.oauth.openai.batchLoginItemStatus.${item.status}`)
 }
 
 function codeLabel(code: string): string {
+  const httpFailure = /(?:^|_)http_([45]\d{2})$/.exec(code)
+  if (httpFailure) {
+    const status = httpFailure[1]
+    const key = `admin.accounts.oauth.openai.batchLoginHttpErrors.${status}`
+    const description = t(key)
+    return description === key ? `HTTP ${status}` : `HTTP ${status} · ${description}`
+  }
   const transportFailures = ['proxy_error', 'tls_error', 'risk_control']
   const transportFailure = transportFailures.find((failure) => code.endsWith(`_${failure}`))
   if (transportFailure) {
