@@ -341,7 +341,16 @@ async function run() {
       // Recovery must reuse the already resolved proxy session and TLS identity.
       await transport.configure(proxyTemplate || null, { force: true });
     } else {
-      await transport.prepareProxy(proxyTemplate, `${chatgptBase}/`);
+      try {
+        await transport.prepareProxy(proxyTemplate, `${chatgptBase}/`);
+      } catch (error) {
+        if (args.oauthProvider) {
+          const reason = classifyLoginFailure(String(error && error.message || error)) || "proxy_error";
+          process.stderr.write("[reason] " + reason);
+          throw new Error((args.oauthProvider === "codex" ? "codex" : "bps") + "_login_failed");
+        }
+        throw error;
+      }
     }
     if (args.oauthProvider) {
       try {
@@ -350,6 +359,9 @@ async function run() {
         // Web login errors can contain upstream text; the IPC branch emits only codes.
         const prefix = args.oauthProvider === "codex" ? "codex" : "bps";
         const code = new RegExp("^" + prefix + "_[a-z_]+$").test(error?.code || "") ? error.code : prefix + "_login_failed";
+        const raw = String(error && error.message || error);
+        const reason = classifyLoginFailure(raw);
+        if (reason) process.stderr.write('[reason] ' + reason);
         throw new Error(code);
       }
       return;
@@ -1996,7 +2008,12 @@ async function refreshOAuthToken({ authBase, clientId, refreshToken, transport }
 
 async function askEmailOtp(rl, client, authBase) {
   for (;;) {
-    const value = await ask(rl, "Email OTP (r=resend, q=quit): ");
+    let value;
+    try {
+      value = await ask(rl, "Email OTP (r=resend, q=quit): ");
+    } catch {
+      throw new Error("EMAIL_OTP_REQUIRED: login needs an email verification code");
+    }
     if (value.toLowerCase() === "q") throw new Error("Stopped before email OTP validation");
     if (value.toLowerCase() === "r") {
       console.log("[info] Resending email OTP...");
@@ -2536,3 +2553,22 @@ run().catch((error) => {
 function isProxyRiskControlError(error) {
   return /PROXY_RISK_CONTROL|PROXY_CONNECTION_RETRY/i.test(String(error?.message || ""));
 }
+
+// Maps a raw login error to a fixed, non-sensitive category. Raw text is never emitted.
+function classifyLoginFailure(raw) {
+  const text = String(raw || '');
+  if (/EMAIL_OTP_REQUIRED/.test(text)) return 'email_otp_required';
+  if (/TLS connect error|SSLError|CertificateVerify/i.test(text)) return 'tls_error';
+  if (/PROXY_|proxy/i.test(text)) return 'proxy_error';
+  if (/security-check|cloudflare|HTTP 403/i.test(text)) return 'risk_control';
+  if (/Expected JSON/i.test(text)) return 'unexpected_response';
+  if (/UNEXPECTED_LOGIN_PAGE/.test(text)) return 'unexpected_login_page';
+  if (/password/i.test(text) && /(incorrect|invalid|wrong|fail|reject)/i.test(text)) return 'password_rejected';
+  if (/(mfa|totp|2fa|otp|verification code)/i.test(text)) return 'mfa_failed';
+  if (/phone/i.test(text)) return 'phone_required';
+  if (/SESSION_SELECTION|session selection/i.test(text)) return 'session_selection';
+  if (/WORKSPACE/i.test(text)) return 'workspace_unavailable';
+  const m = /^([A-Z][A-Z_]{4,}):/.exec(text);
+  return m ? m[1].toLowerCase() : '';
+}
+

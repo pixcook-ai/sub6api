@@ -5,7 +5,7 @@
 - 来源仓库：poxiao33/toSub2（本地副本 `../toSub2`）
 - 来源提交：`dae89f4fbe2918f092d368e0f49fc6ccf7cf6c38`
 - 许可证：MIT（见 `LICENSE`）
-- 引入方式：`git show <commit>:<path>`，文件内容未做修改
+- 引入方式：`git show <commit>:<path>`；仅 src/protocol-login.mjs 在失败分支增加了 [reason] 分类输出（tls_error、proxy_error、risk_control），其余未修改
 
 ## 文件清单
 

@@ -49,7 +49,7 @@ Go lint 以基座提交 `a3eaf63afc672ffedf7844e6cfc5cb6750d52a3e` 为既有问�
 
 | 项目 | 变更前（HEAD~1） | 变更后（f92150779） |
 |---|---|---|
-| RUNTIME_SHA256 | 36ee679dbf84f41062671400d95048b88c3083ca46f9da03e91bb253607dc412 | ff3eaa736f7e999b67945e81ec727598c5e3373fa1fd17f593e783ee28f47fc7 |
+| RUNTIME_SHA256 | 36ee679dbf84f41062671400d95048b88c3083ca46f9da03e91bb253607dc412 | fa47f9511f24bafd6d1af59f8c012248f71d7e80ff1ec2906d6205a684990806 |
 | MIGRATIONS_SHA256 | 823246b620db3e3be2bb0b5429dcf6e1566d77317edad67409289868ecb40760 | 1c9c7ca17251f6c49453c13e5b11e60eb4202f3e0e91cbf4e3f3cc27b5a9d5e4 |
 
 变更前一列只是本仓库上一个提交的值。服务器当前基线必须读取 `/opt/sub6api/MIGRATIONS_SHA256`、`/opt/sub6api/RUNTIME_SHA256` 与 `SOURCE_COMMIT`，并对该提交按 `docs/SUB6API_CICD.md` 的方法复算，确认一致后再继续。若服务器的值与本表不同，说明线上与本仓库历史存在差异，先停止并核实。
@@ -59,9 +59,16 @@ Go lint 以基座提交 `a3eaf63afc672ffedf7844e6cfc5cb6750d52a3e` 为既有问�
 1. 核实服务器实际部署提交与上述基线，保存 `compose.json` 与当前镜像 ID。
 2. 手动触发 `sub6api-backup.service`，确认备份成功。迁移 251 只新增 `openai_login_credentials` 表，不改既有表，但仍应先备份。
 3. 在构建机用主 Dockerfile 构建新的运行时基底镜像（含 `tosub2-runtime` 阶段产物），验证：`node --version`、`/opt/tosub2-venv/bin/python -c 'import curl_cffi'`、`node /app/tools/tosub2-login/run-login.mjs` 缺凭据时返回 `missing_credentials`。注意本机验证的是 aarch64，生产为 amd64，需在 amd64 上重新验证 curl_cffi 的 musllinux wheel。
-4. 将新基底镜像加载到服务器，更新 `/opt/sub6api/RUNTIME_SHA256` 为 `ff3eaa73…`，更新 `/opt/sub6api/MIGRATIONS_SHA256` 为 `1c9c7ca1…`，并调整 `deploy-sub6api.sh` 使其以新基底镜像（而非旧镜像）构建应用层。
+4. 将新基底镜像加载到服务器，更新 `/opt/sub6api/RUNTIME_SHA256` 为 `fa47f951…`，更新 `/opt/sub6api/MIGRATIONS_SHA256` 为 `1c9c7ca1…`，并调整 `deploy-sub6api.sh` 使其以新基底镜像（而非旧镜像）构建应用层。
 5. 确认 `totp.encryption_key`（32 字节，64 位十六进制）已配置。缺失时，保存凭据与自动重授权会失败。
 6. 评审后将分支合并到 main，触发 `Deploy Sub6API`。迁移 251 在应用启动时自动执行。
+
+
+运行时基线现在额外覆盖 `tools/tosub2-login` 的文件清单（`git ls-tree`），登录运行时变化会要求重新核对基底镜像。上表“变更后”的 RUNTIME_SHA256 以提交本次脚本改动之后的 HEAD 为准；最终值以 `bash scripts/release/runtime-baseline.sh <verified-commit>` 对实际发布提交的计算结果为准。
+
+### 运行时基底镜像（RUNTIME_BASE_IMAGE）
+
+`deploy-sub6api.sh` 现在支持服务器上的 `/opt/sub6api/RUNTIME_BASE_IMAGE`：文件内容为已加载并验证过的基底镜像引用，格式必须是 `sub6api:runtime-<字符>`。存在该文件时，脚本直接以它为基底构建应用层，并拒绝不存在或格式非法的引用；不存在时保持原行为（以当前运行镜像为基底）。首次发布步骤：在 amd64 上构建含 Node、jsdom、curl_cffi 和 `/app/tools/tosub2-login` 的基底镜像，`docker load` 到服务器并验证，写入 `RUNTIME_BASE_IMAGE`，再更新两个基线。
 
 ### 部署后验收
 

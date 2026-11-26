@@ -70,7 +70,7 @@ const child = fork(path.join(here, "src", "protocol-login.mjs"), childArgs, {
   cwd: here,
   env,
   // stdin is kept as a pipe and closed: the login script falls back to prompts when it needs input.
-  stdio: ["pipe", "ignore", "ignore", "ipc"],
+  stdio: ["pipe", "ignore", "pipe", "ipc"],
 });
 child.stdin?.on("error", () => {});
 child.stdin?.end();
@@ -115,4 +115,11 @@ child.on("message", (message) => {
 });
 
 child.on("error", () => finish({ ok: false, code: "worker_spawn_failed" }, 1));
-child.on("exit", () => finish({ ok: false, code: "login_failed" }, 1));
+let reason = "";
+child.stderr?.on("data", (d) => {
+  const m = /\[reason\] ([a-z_]+)/.exec(String(d));
+  if (m) reason = m[1];
+});
+child.on("close", () => {
+  finish({ ok: false, code: reason || "login_failed" }, 1);
+});

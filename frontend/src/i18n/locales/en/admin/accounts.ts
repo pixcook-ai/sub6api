@@ -1419,6 +1419,7 @@ export default {
           batchLoginItemCodes: {
             already_exists: 'Account already exists',
             login_failed: 'Login failed',
+            email_otp_required: 'Account requires an email verification code; cannot log in automatically',
             login_timeout: 'Login timed out',
             missing_credentials: 'Missing credentials',
             invalid_arguments: 'Invalid arguments',

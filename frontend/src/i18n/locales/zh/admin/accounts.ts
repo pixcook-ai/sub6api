@@ -1515,6 +1515,7 @@ export default {
           batchLoginItemCodes: {
             already_exists: '账号已存在',
             login_failed: '登录失败',
+            email_otp_required: '该账号需要邮箱验证码，无法自动登录',
             login_timeout: '登录超时',
             missing_credentials: '缺少凭据',
             invalid_arguments: '参数无效',

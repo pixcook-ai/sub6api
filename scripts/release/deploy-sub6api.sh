@@ -22,8 +22,16 @@ chmod 600 "$release/compose.before.json"
 # Backup must complete before changing the app image.
 systemctl start sub6api-backup.service
 test "$(systemctl show sub6api-backup.service -p Result --value)" = success
-base="sub6api:runtime-${previous#sha256:}"
-docker tag "$previous" "$base"
+# A prepared runtime base (docker-loaded and verified beforehand) wins; otherwise keep the
+# previous behaviour of reusing the running image as the base.
+if [[ -f "$root/RUNTIME_BASE_IMAGE" ]]; then
+  base=$(tr -d '[:space:]' < "$root/RUNTIME_BASE_IMAGE")
+  [[ "$base" =~ ^sub6api:runtime-[A-Za-z0-9._-]+$ ]] || { echo 'Invalid RUNTIME_BASE_IMAGE reference' >&2; exit 1; }
+  docker image inspect "$base" >/dev/null || { echo 'Prepared runtime base image is not loaded' >&2; exit 1; }
+else
+  base="sub6api:runtime-${previous#sha256:}"
+  docker tag "$previous" "$base"
+fi
 mkdir -p runtime
 cp sub2api runtime/sub2api
 chmod 755 runtime/sub2api
