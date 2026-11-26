@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
+import { defineComponent } from 'vue'
 
 import AccountsView from '../AccountsView.vue'
 
@@ -79,6 +80,9 @@ const DataTableStub = {
       <div v-for="row in data" :key="row.id" data-test="account-rate">
         <slot name="cell-rate_multiplier" :row="row" />
       </div>
+      <div v-for="row in data" :key="'usage-' + row.id" data-test="account-usage">
+        <slot name="cell-usage" :row="row" />
+      </div>
     </div>
   `
 }
@@ -88,6 +92,11 @@ const HelpTooltipStub = {
   props: ['content', 'widthClass'],
   template: '<span data-test="usage-windows-hint">{{ content }}</span>'
 }
+
+const AccountUsageCellStub = defineComponent({
+  props: ['account'],
+  template: '<div data-test="usage-cell" />'
+})
 
 function mountView() {
   return mount(AccountsView, {
@@ -125,7 +134,7 @@ function mountView() {
         AccountStatusIndicator: true,
         AccountTodayStatsCell: true,
         AccountGroupsCell: true,
-        AccountUsageCell: true,
+        AccountUsageCell: AccountUsageCellStub,
         Icon: true
       }
     }
@@ -181,6 +190,32 @@ describe('admin AccountsView usage windows hint', () => {
     const hint = wrapper.find('[data-test="usage-windows-hint"]')
     expect(hint.exists()).toBe(true)
     expect(hint.text()).toBe('admin.accounts.usageWindowsHint')
+  })
+
+  it('refreshes Tibo history for a paused idle account without replacing its Codex tickets', async () => {
+    const account = {
+      id: 9892, name: 'paused-tibo', platform: 'openai', type: 'apikey',
+      status: 'active', schedulable: false, rate_multiplier: 1,
+      created_at: '2026-11-26T00:00:00Z', updated_at: '2026-11-26T00:00:00Z',
+      codex_turn_tickets: [{ model: 'gpt-6-astra', ready: true, remaining_seconds: 30, blocked: false }],
+      tibo_account_statuses: []
+    }
+    const page = { items: [account], total: 1, page: 1, page_size: 20, pages: 1 }
+    listAccounts.mockResolvedValueOnce(page)
+    const wrapper = mountView()
+    await flushPromises()
+    const next = { ...account, tibo_account_statuses: [{ model: 'gpt-6-astra', tibo_routes: [{
+      route: 'http', verdict: 'healthy', probes_hour: 1, flips_hour: 0,
+      recent_samples: [{ verdict: 'healthy' }]
+    }] }] }
+    listWithEtag.mockResolvedValueOnce({ notModified: false, etag: 'tibo-updated', data: { ...page, items: [next] } })
+    await (wrapper.vm as any).refreshAccountsIncrementally()
+    await flushPromises()
+    const rendered = wrapper.getComponent(AccountUsageCellStub).props('account')
+    expect(rendered.tibo_account_statuses).toEqual(next.tibo_account_statuses)
+    expect(rendered.codex_turn_tickets).toEqual(account.codex_turn_tickets)
+    expect(rendered.schedulable).toBe(false)
+    wrapper.unmount()
   })
 
   it('keeps Ollama Cloud in the single usage column and ignores legacy column preferences', async () => {

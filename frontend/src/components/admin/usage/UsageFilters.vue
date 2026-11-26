@@ -150,6 +150,11 @@
           <Select v-model="filters.upstream_model_mismatch" :options="upstreamModelMismatchOptions" @change="emitChange" />
         </div>
 
+        <div v-if="mode === 'usage'" class="w-full sm:w-auto sm:min-w-[200px]">
+          <label class="input-label">{{ t('admin.usage.routeDegradedFilter') }}</label>
+          <Select v-model="filters.route_degraded" :options="routeDegradedOptions" @change="emitChange" />
+        </div>
+
         <!-- Error Phase Filter (errors only) -->
         <div v-if="mode === 'errors'" class="w-full sm:w-auto sm:min-w-[180px]">
           <label class="input-label">{{ t('admin.ops.errorLog.type') }}</label>
@@ -321,6 +326,12 @@ const billingModeOptions = ref<SelectOption[]>([
   { value: 'per_request', label: t('admin.usage.billingModePerRequest') },
   { value: 'image', label: t('admin.usage.billingModeImage') },
   { value: 'video', label: t('admin.usage.billingModeVideo') }
+])
+
+const routeDegradedOptions = computed<SelectOption[]>(() => [
+  { value: null, label: t('admin.usage.allRouteDegraded') },
+  { value: true, label: t('admin.usage.routeDegradedOnly') },
+  { value: false, label: t('admin.usage.routeNotDegradedOnly') }
 ])
 
 const upstreamModelMismatchOptions = ref<SelectOption[]>([

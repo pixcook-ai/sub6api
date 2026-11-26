@@ -1,4 +1,15 @@
 <template>
+  <div :aria-busy="loading || activeQueryLoading || batchedUsageLoading">
+    <div v-if="tiboRoutes.length" class="mb-1 space-y-0.5" data-testid="tibo-routes">
+      <TiboRouteSpark
+        v-for="route in tiboRoutes"
+        :key="route.model + ':' + route.route"
+        :model="route.model"
+        :verdict="route.verdict"
+        :samples="route.recent_samples"
+        compact
+      />
+    </div>
   <div ref="rootRef" v-if="showUsageWindows">
     <template v-if="account.platform === 'openai_bps'">
       <BPSCredentialStatus :state="bpsCredentialState" />
@@ -694,6 +705,7 @@
       >-</div>
     </div>
   </div>
+  </div>
 </template>
 
 <script setup lang="ts">
@@ -707,6 +719,7 @@ import { buildOpenAIUsageRefreshKey } from '@/utils/accountUsageRefresh'
 import { enqueueUsageRequest } from '@/utils/usageLoadQueue'
 import { formatCompactNumber } from '@/utils/format'
 import UsageProgressBar from './UsageProgressBar.vue'
+import TiboRouteSpark from './TiboRouteSpark.vue'
 import AccountQuotaInfo from './AccountQuotaInfo.vue'
 import ClaudeResetCreditsCell from './ClaudeResetCreditsCell.vue'
 import OpenAIQuotaResetCell from './OpenAIQuotaResetCell.vue'
@@ -837,6 +850,13 @@ const geminiUsageAvailable = computed(() => {
     !!usageInfo.value?.gemini_shared_minute ||
     !!usageInfo.value?.gemini_pro_minute ||
     !!usageInfo.value?.gemini_flash_minute
+  )
+})
+
+const tiboRoutes = computed(() => {
+  if (props.account.platform !== 'openai') return []
+  return (props.account.tibo_account_statuses ?? []).flatMap(status =>
+    (status.tibo_routes ?? []).map(route => ({ ...route, model: status.model }))
   )
 })
 

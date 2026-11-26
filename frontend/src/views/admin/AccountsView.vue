@@ -546,7 +546,7 @@ import Icon from '@/components/icons/Icon.vue'
 import ErrorPassthroughRulesModal from '@/components/admin/ErrorPassthroughRulesModal.vue'
 import TLSFingerprintProfilesModal from '@/components/admin/TLSFingerprintProfilesModal.vue'
 import { fetchAllAccountIds } from '@/utils/accountSelection'
-import { buildGrokUsageRefreshKey, buildOpenAIUsageRefreshKey } from '@/utils/accountUsageRefresh'
+import { buildGrokUsageRefreshKey, buildOpenAIUsageRefreshKey, buildOpenAITiboRefreshKey } from '@/utils/accountUsageRefresh'
 import { formatDateTime, formatRelativeTime } from '@/utils/format'
 import { proxyExpiryBadgeClass, proxyExpiryLabelKey } from '@/utils/proxyExpiry'
 import { extractApiErrorMessage } from '@/utils/apiError'
@@ -1436,7 +1436,8 @@ const shouldReplaceAutoRefreshRow = (current: Account, next: Account) => {
     current.overload_until !== next.overload_until ||
     current.temp_unschedulable_until !== next.temp_unschedulable_until ||
     buildOpenAIUsageRefreshKey(current) !== buildOpenAIUsageRefreshKey(next) ||
-    buildGrokUsageRefreshKey(current) !== buildGrokUsageRefreshKey(next)
+    buildGrokUsageRefreshKey(current) !== buildGrokUsageRefreshKey(next) ||
+    buildOpenAITiboRefreshKey(current) !== buildOpenAITiboRefreshKey(next)
   )
 }
 

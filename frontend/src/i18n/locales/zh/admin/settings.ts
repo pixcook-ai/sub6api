@@ -1,5 +1,29 @@
 export default {
     settings: {
+      tibo: {
+        "title": "Tibo 质量探测与自动处置",
+        "description": "按账号定向探测 OpenAI Responses 能力，记录最近 24 次明确结果。默认关闭，探测会产生上游流量与用量。",
+        "enabled": "启用后台 Tibo 探测",
+        "enabledHint": "关闭后停止新探测和自动处置；已保存的历史、已有质量隔离与管理员暂停均保留。",
+        "pauseOnDegraded": "异常时停止账号调度",
+        "pauseHint": "新鲜探测结果判为降智时，增加独立的质量隔离标记；不会修改管理员的调度开关。未知、网络错误和限流不视为降智。",
+        "autoResume": "健康后自动解除质量隔离",
+        "autoResumeHint": "仅清除 Tibo 质量隔离，绝不会开启管理员手动暂停的账号。关闭时请在账号编辑中手动解除隔离。",
+        "autoGroup": "按探测结果自动迁移分组（可选）",
+        "autoGroupHint": "仅迁移已加入下列任一组的 OpenAI OAuth 账号；保留其他分组关联。不按名称匹配，不创建分组；与质量隔离互相独立。",
+        "healthy_group_id": "健康结果目标分组",
+        "degraded_group_id": "降智结果目标分组",
+        "chooseGroup": "选择一个 OpenAI 分组",
+        "unavailableGroup": "分组 #{id} 已不可用，请重新选择",
+        "groupValidation": "请选择两个不同且启用的 OpenAI 分组。关闭自动迁组时无需选择分组。",
+        "signalCaution": "Tibo 是启发式信号，单题不能证明模型内部降级。自动处置沿用明确主动样本结果，可能误报；请先观察探测记录再开启自动动作。保存设置不会根据旧样本批量处置账号。",
+        "saved": "Tibo 设置已保存",
+        "retry": "重新加载设置",
+        "retryGroups": "重新加载分组",
+        "groupsLoadFailed": "加载分组失败",
+        "loadFailed": "加载 Tibo 设置失败",
+        "saveFailed": "保存 Tibo 设置失败"
+      },
       title: '系统设置',
       description: '管理注册、邮箱验证、默认值和 SMTP 设置',
       tabs: {

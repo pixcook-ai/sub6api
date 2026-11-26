@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildGrokUsageRefreshKey, buildOpenAIUsageRefreshKey } from '../accountUsageRefresh'
+import { buildGrokUsageRefreshKey, buildOpenAIUsageRefreshKey, buildOpenAITiboRefreshKey } from '../accountUsageRefresh'
 
 describe('buildOpenAIUsageRefreshKey', () => {
   it('会在 codex 快照变化时生成不同 key', () => {
@@ -157,5 +157,24 @@ describe('buildGrokUsageRefreshKey', () => {
       platform: 'openai',
       extra: { grok_usage_snapshot: { subscription_tier: 'SuperGrok' } }
     } as any)).toBe('')
+  })
+})
+
+
+describe('buildOpenAITiboRefreshKey', () => {
+  it('refreshes quality history for paused idle accounts independently of ticket state', () => {
+    const base = { platform: 'openai' as const, extra: {}, tibo_account_statuses: [] }
+    const healthy = {
+      ...base,
+      tibo_account_statuses: [{ model: 'gpt-6-astra', tibo_routes: [{ route: 'http' as const, verdict: 'healthy' as const, probes_hour: 1, flips_hour: 0 }] }]
+    }
+    expect(buildOpenAITiboRefreshKey(base)).not.toBe(buildOpenAITiboRefreshKey(healthy))
+    expect(buildOpenAITiboRefreshKey(healthy)).not.toBe(buildOpenAITiboRefreshKey({
+      ...healthy, extra: { openai_tibo_quality_isolated: true }
+    }))
+    expect(buildOpenAITiboRefreshKey(healthy)).toBe(buildOpenAITiboRefreshKey({
+      ...healthy, codex_turn_tickets: [{ model: 'gpt-6-astra', ready: true }]
+    } as typeof healthy))
+    expect(buildOpenAITiboRefreshKey({ ...healthy, platform: 'anthropic' })).toBe('')
   })
 })

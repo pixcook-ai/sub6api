@@ -143,6 +143,8 @@ docs/*
 !docs/BATCH_IMAGE_MVP.md
 !docs/COMPOSITE_GROUPS.md
 !docs/openai-bps.md
+!docs/tibo-quality-probing.md
+!docs/tibo-port-20261126.md
 !docs/openai-bps-sources.md
 !docs/PLUGIN_DEVELOPMENT.md
 !docs/channel-monitor-v2-safe-defaults.md

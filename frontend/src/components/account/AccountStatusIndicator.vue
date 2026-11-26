@@ -1,6 +1,10 @@
 <template>
   <div class="flex items-center gap-2">
-    <div v-if="bpsCredentialFailed" class="flex flex-col gap-1">
+    <div v-if="account.platform === 'openai' && account.extra?.openai_tibo_quality_isolated === true" class="flex flex-col items-center gap-1" data-testid="tibo-quality-isolated">
+      <span class="badge text-xs badge-danger">{{ t('admin.accounts.openai.tiboQualityIsolated') }}</span>
+      <span v-if="!account.schedulable" class="text-[11px] text-gray-500 dark:text-gray-400">{{ t('admin.accounts.openai.tiboManualPauseRetained') }}</span>
+    </div>
+    <div v-else-if="bpsCredentialFailed" class="flex flex-col gap-1">
       <BPSCredentialStatus :state="bpsCredentialState" :show-expiry="false" />
       <span v-if="account.status !== 'active' && account.status !== 'error'" class="badge badge-gray text-xs">{{ t(`admin.accounts.status.${account.status}`) }}</span>
       <span v-if="account.schedulable === false" class="text-[11px] text-gray-500">{{ t('admin.accounts.status.paused') }}</span>

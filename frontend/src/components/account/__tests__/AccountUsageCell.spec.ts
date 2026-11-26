@@ -130,6 +130,26 @@ describe('AccountUsageCell', () => {
     })
   })
 
+  it('updates independent Tibo history without treating existing Codex tickets as probe results', async () => {
+    const current = makeAccount({
+      id: 9891, platform: 'openai', type: 'apikey', schedulable: false,
+      codex_turn_tickets: [{ model: 'gpt-6-astra', ready: true, remaining_seconds: 30, blocked: false }],
+      tibo_account_statuses: [{ model: 'gpt-6-astra', tibo_routes: [{ route: 'http', verdict: 'degraded', probes_hour: 1, flips_hour: 0, recent_samples: [{ verdict: 'degraded' }] }] }]
+    })
+    const wrapper = mount(AccountUsageCell, { props: { account: current } })
+    expect(wrapper.findAll('[data-testid="tibo-dot"]')).toHaveLength(24)
+    expect(wrapper.findAll('[data-verdict="degraded"]')).toHaveLength(1)
+    await wrapper.setProps({ account: { ...current, tibo_account_statuses: [{
+      model: 'gpt-6-astra', tibo_routes: [{ route: 'http', verdict: 'healthy', probes_hour: 2, flips_hour: 0, recent_samples: [{ verdict: 'degraded' }, { verdict: 'healthy' }] }]
+    }] } })
+    expect(wrapper.findAll('[data-verdict="healthy"]')).toHaveLength(1)
+    expect(wrapper.props('account').schedulable).toBe(false)
+    expect(getUsage).not.toHaveBeenCalled()
+    await wrapper.setProps({ account: { ...current, tibo_account_statuses: [] } })
+    expect(wrapper.find('[data-testid="tibo-routes"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
   it.each(['oauth', 'setup-token'] as const)('does not repeat Codex ticket status in OpenAI %s usage windows', async (type) => {
     getUsage.mockResolvedValue({ five_hour: { utilization: 25 } })
     const wrapper = mount(AccountUsageCell, {

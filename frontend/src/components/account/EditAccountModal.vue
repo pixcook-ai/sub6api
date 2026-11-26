@@ -2396,6 +2396,12 @@
         <div class="mt-3 grid gap-2 sm:grid-cols-2"><div v-for="ticket in codexTurnTickets" :key="ticket.model" class="rounded-lg border border-gray-200 p-3 text-xs dark:border-dark-600"><div class="flex justify-between gap-2"><span class="break-all font-mono font-semibold">{{ ticket.model }}</span><span :class="ticket.ready ? 'text-emerald-600' : 'text-amber-600'">{{ ticket.ready ? '●' : '○' }} {{ t(ticket.ready ? 'admin.accounts.openai.codexTicketReadyShort' : 'admin.accounts.openai.codexTicketMissingShort') }}</span></div><p class="mt-2 text-gray-500">{{ ticket.length }} bytes · turn-state {{ ticket.turn_state_present ? '✓' : '—' }} · Cookie {{ ticket.cookie_present ? '✓' : '—' }}</p></div></div>
       </div>
 
+      <TiboAccountHealthPanel
+        v-if="account?.platform === 'openai'"
+        :account="account"
+        @updated="emit('updated', $event)"
+      />
+
       <!-- Codex 指纹收敛模式（仅 OpenAI OAuth） -->
       <div
         v-if="account?.platform === 'openai' && account?.type === 'oauth'"
@@ -3200,6 +3206,7 @@ import HelpTooltip from '@/components/common/HelpTooltip.vue'
 import UpstreamRequestIdHeaderField from '@/components/account/UpstreamRequestIdHeaderField.vue'
 import OpenAIRequestTimezoneField from '@/components/account/OpenAIRequestTimezoneField.vue'
 import Toggle from '@/components/common/Toggle.vue'
+import TiboAccountHealthPanel from '@/components/account/TiboAccountHealthPanel.vue'
 import Icon from '@/components/icons/Icon.vue'
 import ProxySelector from '@/components/common/ProxySelector.vue'
 import ProxyAdBanner from '@/components/common/ProxyAdBanner.vue'
