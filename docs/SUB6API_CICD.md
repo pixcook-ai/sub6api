@@ -47,9 +47,9 @@ Go lint 以基座提交 `a3eaf63afc672ffedf7844e6cfc5cb6750d52a3e` 为既有问�
 
 ### 本地计算的基线（仅供对照）
 
-| 项目 | 变更前（HEAD~1） | 变更后（f92150779） |
+| 项目 | 变更前（HEAD~1） | 变更后（ef6126fc7 及之后） |
 |---|---|---|
-| RUNTIME_SHA256 | 36ee679dbf84f41062671400d95048b88c3083ca46f9da03e91bb253607dc412 | fa47f9511f24bafd6d1af59f8c012248f71d7e80ff1ec2906d6205a684990806 |
+| RUNTIME_SHA256 | 36ee679dbf84f41062671400d95048b88c3083ca46f9da03e91bb253607dc412 | 40465c83ab78691fcc6fde5f5712f63c631dcdde8ca66a968fa2105cbb009510 |
 | MIGRATIONS_SHA256 | 823246b620db3e3be2bb0b5429dcf6e1566d77317edad67409289868ecb40760 | 1c9c7ca17251f6c49453c13e5b11e60eb4202f3e0e91cbf4e3f3cc27b5a9d5e4 |
 
 变更前一列只是本仓库上一个提交的值。服务器当前基线必须读取 `/opt/sub6api/MIGRATIONS_SHA256`、`/opt/sub6api/RUNTIME_SHA256` 与 `SOURCE_COMMIT`，并对该提交按 `docs/SUB6API_CICD.md` 的方法复算，确认一致后再继续。若服务器的值与本表不同，说明线上与本仓库历史存在差异，先停止并核实。
