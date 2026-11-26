@@ -58,3 +58,13 @@
 证据保存于 `/private/tmp/sub6api-bps-parity-20261126/`：`current-backend-final.log`、`current-handler-repository-unit.log`、`cas-integration.log`、`migration-check-final.safe.json`、`current-frontend-tests.log`、`current-frontend-build.log`、`subscription-baseline-cfca59ff.log`、`runtime-acceptance.safe.json`、`tool-probe-real.txt` 及两张真实页面截图。敏感备份另存私有临时目录，不提交。
 
 未以真实上游验收后台定时触发、批量续期和失败分支；这些范围有本地回归与仓储集成证据。点数/重置/邀请/隐私、图片附件、搜索回退及双授权自动恢复维持上述边界，本轮未宣称与普通 OAuth 完全等价。未远程部署、推送或创建 PR。
+
+## 红框统计行复核（2026-11-27）
+
+按用户“和参考仓库保持一致”的要求，继续复用 `UsageProgressBar.vue` 原有统计行。与参考仓库逐字比较该模板一致：请求数或 Token 大于零才显示请求数、Token、A 账号费用；`user_cost` 非空时显示 U 用户费用。全零或统计缺失时隐藏，不另加零值常显或未知金额占位。
+
+本地 59090 的 BPS #17/#18 用量 API 均返回 5H/7D/30D 的真实 `window_stats` 对象，其中请求数、Token、账号费用和用户费用均为 0，因此当前页面没有统计行符合参考规则。管理页连接/工具测试不等同于通过业务网关产生的计费用量记录。
+
+组件回归覆盖全零隐藏，以及主动刷新到 `4000` 请求、`778500000` Token、账号费用 `1302.97`、用户费用 `1100.25` 后，复用原组件呈现 `4.0K req`、`778.5M`、`A $1302.97`、`U $1100.25`。这些非零值仅为渲染回归输入，并非真实账号消费。
+
+参考的预计总费用仅用于普通 OAuth 7D，以当前窗口费用除以已用比例估算。当前独立 BPS 身份仍遵循前述额度边界，不拿 ChatGPT/Codex 百分比推算 BPS 总费用。本轮未变更生产组件、数据库或本地运行服务。

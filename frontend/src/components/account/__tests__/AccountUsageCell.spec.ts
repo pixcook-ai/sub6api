@@ -150,6 +150,36 @@ describe('AccountUsageCell', () => {
     wrapper.unmount()
   })
 
+  it('BPS 沿用参考统计行：零用量隐藏，刷新后显示请求、Token 和 A/U 费用', async () => {
+    const emptyStats = { requests: 0, tokens: 0, cost: 0, user_cost: 0 }
+    getUsage.mockResolvedValue({
+      five_hour: { utilization: 0, quota_unknown: true, window_stats: emptyStats },
+      seven_day: { utilization: 0, quota_unknown: true, window_stats: emptyStats },
+      thirty_day: { utilization: 1, window_stats: emptyStats }
+    })
+    const wrapper = mount(AccountUsageCell, {
+      props: { account: makeAccount({ id: 9901, platform: 'openai_bps' }) }
+    })
+    await flushPromises()
+    expect(wrapper.text()).not.toContain('0 req')
+    expect(wrapper.text()).not.toContain('A $0.00')
+    expect(wrapper.text()).not.toContain('U $0.00')
+    expect(wrapper.find('[data-test="estimated-total-cost"]').exists()).toBe(false)
+
+    getUsage.mockResolvedValueOnce({
+      seven_day: { utilization: 100, window_stats: { requests: 4000, tokens: 778500000, cost: 1302.97, user_cost: 1100.25 } }
+    })
+    await wrapper.get('[data-test="bps-usage-query"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('4.0K req')
+    expect(wrapper.text()).toContain('778.5M')
+    expect(wrapper.text()).toContain('A $1302.97')
+    expect(wrapper.text()).toContain('U $1100.25')
+    // ChatGPT/Codex 百分比不能用于推算独立 BPS 的费用上限。
+    expect(wrapper.find('[data-test="estimated-total-cost"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
   it('BPS 显示真实用量窗口并支持主动刷新', async () => {
     getUsage.mockResolvedValue({
       five_hour: { utilization: 25, resets_at: '2099-01-01T02:00:00Z' },
