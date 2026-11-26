@@ -487,13 +487,13 @@ export function rotateProxySession(proxyUrl) {
   const username = decodeURIComponent(parsed.username);
   const rotatedUsername = username.replace(/(^|-)sid-[A-Za-z0-9]+(?=-|$)/, `$1sid-${randomSessionId()}`);
   if (rotatedUsername !== username) {
-    parsed.username = rotatedUsername;
+    parsed.username = encodeURIComponent(rotatedUsername);
     return parsed.toString();
   }
 
   const password = decodeURIComponent(parsed.password);
   const rotatedPassword = rotateKookeeySession(password);
-  if (rotatedPassword !== password) parsed.password = rotatedPassword;
+  if (rotatedPassword !== password) parsed.password = encodeURIComponent(rotatedPassword);
   return parsed.toString();
 }
 
