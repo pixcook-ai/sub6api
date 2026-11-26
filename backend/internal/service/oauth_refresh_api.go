@@ -193,10 +193,17 @@ func (api *OAuthRefreshAPI) RefreshIfNeeded(
 	}
 	defer localMu.Unlock()
 
+	// Excel RT rotation must not proceed with only a process-local lock.
+	if account.IsOpenAIBPS() && api.tokenCache == nil {
+		return nil, &providerConfigurationRefreshError{err: errors.New("BPS refresh distributed lock is not configured")}
+	}
 	// 1. 获取分布式锁
 	if api.tokenCache != nil {
 		acquired, lockErr := api.tokenCache.AcquireRefreshLock(ctx, cacheKey, api.lockTTL)
 		if lockErr != nil {
+			if account.IsOpenAIBPS() {
+				return nil, &providerCycleContainmentRefreshError{err: errors.New("BPS refresh distributed lock is unavailable")}
+			}
 			// Redis 错误，降级为无锁刷新（进程内互斥锁仍生效）
 			slog.Warn("oauth_refresh_lock_failed_degraded",
 				"account_id", account.ID,
@@ -228,7 +235,12 @@ func (api *OAuthRefreshAPI) RefreshIfNeeded(
 	if freshAccount.ID != account.ID {
 		return nil, fmt.Errorf("%w: account identity mismatch", errOAuthRefreshAccountRereadFailed)
 	}
-	if !freshAccount.IsActive() {
+	_, recoverBPSError := bpsRefreshDiagnosisCleanup(freshAccount)
+	allowBPSManualRecovery := freshAccount.IsOpenAIBPS() && isOpenAIBPSManualRefresh(ctx) && recoverBPSError
+	if freshAccount.IsOpenAIBPS() && !freshAccount.IsActive() && !allowBPSManualRecovery {
+		return nil, infraBPSRefreshInactiveError()
+	}
+	if !freshAccount.IsActive() && !allowBPSManualRecovery {
 		if requestPath {
 			return nil, fmt.Errorf("%w: account is not active", errOAuthRefreshAccountStateChanged)
 		}
@@ -248,12 +260,17 @@ func (api *OAuthRefreshAPI) RefreshIfNeeded(
 		}
 		return &OAuthRefreshResult{Account: freshAccount}, nil
 	}
+	if freshAccount.IsOpenAIBPS() {
+		if _, ok := api.accountRepo.(OpenAIBPSOAuthRefreshRepository); !ok {
+			return nil, &providerConfigurationRefreshError{err: errors.New("BPS OAuth refresh CAS repository is not configured")}
+		}
+	}
 	if failure := api.openAIRefreshFailure(freshAccount); failure != nil {
 		return &OAuthRefreshResult{Account: snapshotOAuthRefreshAccount(freshAccount)}, failure
 	}
 
 	// 3. 二次检查是否仍需刷新（另一条路径可能已刷新）
-	if !executor.NeedsRefresh(freshAccount, refreshWindow) {
+	if !(freshAccount.IsOpenAIBPS() && isOpenAIBPSManualRefresh(ctx)) && !executor.NeedsRefresh(freshAccount, refreshWindow) {
 		return &OAuthRefreshResult{
 			Account: freshAccount,
 		}, nil
@@ -311,6 +328,9 @@ func (api *OAuthRefreshAPI) RefreshIfNeeded(
 	// 5. 设置版本号 + 更新 DB
 	if newCredentials != nil {
 		newCredentials["_token_version"] = time.Now().UnixMilli()
+		if freshAccount.IsOpenAIBPS() {
+			return api.persistOpenAIBPSRefresh(ctx, cacheKey, attemptedAccount, newCredentials)
+		}
 		if freshAccount.IsGrokOAuth() {
 			conditionalRepo, ok := api.accountRepo.(GrokOAuthRefreshSuccessRepository)
 			if !ok {

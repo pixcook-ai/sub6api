@@ -26,8 +26,15 @@ func WriteOpenAIBPSError(c *gin.Context, err error) {
 	}
 	setOpsUpstreamError(c, failure.Status, failure.Message, "")
 	payload := gin.H{"type": "server_error", "code": failure.Code, "message": failure.Message}
-	if failure.Status == 400 || failure.Status == 409 {
+	switch failure.Status {
+	case 400, 409:
 		payload["type"] = "invalid_request_error"
+	case 401:
+		payload["type"] = "authentication_error"
+	case 403:
+		payload["type"] = "permission_error"
+	case 429:
+		payload["type"] = "rate_limit_error"
 	}
 	if c.Writer.Written() && strings.Contains(c.Writer.Header().Get("Content-Type"), "text/event-stream") {
 		MarkOpsStreamError(c, failure.Code, failure.Message, failure.Status)
@@ -36,12 +43,51 @@ func WriteOpenAIBPSError(c *gin.Context, err error) {
 		if responseID == "" {
 			responseID = "resp_bps_error"
 		}
-		data, _ := json.Marshal(gin.H{"type": "response.failed", "sequence_number": sequence, "response": gin.H{"id": responseID, "object": "response", "status": "failed", "error": payload}})
+		response := gin.H{"id": responseID, "object": "response", "status": "failed", "error": payload}
+		if usage, ok := c.Get("bps_failure_usage"); ok {
+			response["usage"] = usage
+		}
+		data, _ := json.Marshal(gin.H{"type": "response.failed", "sequence_number": sequence, "response": response})
 		_, _ = fmt.Fprintf(c.Writer, "event: response.failed\ndata: %s\n\n", data)
 		c.Writer.Flush()
 		return
 	}
 	c.JSON(failure.Status, gin.H{"error": payload})
+}
+
+// Only explicit provider identifiers may change model or credential health.
+// Free text and unknown identifiers remain a safe generic failure.
+func (s *OpenAIGatewayService) bpsTerminalError(ctx context.Context, c *gin.Context, account *Account, typ string, payload map[string]any, model string) *bpsError {
+	failure := &bpsError{502, "bps_response_failed", "BPS failed to complete the response"}
+	if typ == "response.cancelled" {
+		return &bpsError{502, "bps_response_cancelled", "BPS cancelled the response"}
+	}
+	response, _ := payload["response"].(map[string]any)
+	detail, _ := response["error"].(map[string]any)
+	if detail == nil {
+		detail, _ = payload["error"].(map[string]any)
+	}
+	if detail == nil && typ == "error" {
+		detail = payload
+	}
+	code := stringValue(detail["code"])
+	switch code {
+	case "rate_limit_exceeded":
+		failure = &bpsError{429, "bps_rate_limited", "BPS rate limit was reached"}
+	case "model_not_allowed", "basispoints_model_access_changed":
+		failure = &bpsError{403, "bps_model_not_allowed", "BPS model is not permitted"}
+		if s.accountRepo != nil {
+			_ = s.accountRepo.SetModelRateLimit(ctx, account.ID, model, time.Now().Add(30*time.Minute), "BPS model is not permitted: "+code)
+		}
+	case "token_expired", "token_revoked", "invalid_api_key":
+		failure = &bpsError{401, "bps_invalid_credentials", "BPS credentials were rejected"}
+		s.recordOpenAIBPSCredentialFailure(ctx, account, code)
+	default:
+		return failure
+	}
+	c.Set("bps_upstream_error_code", code)
+	appendOpsUpstreamError(c, OpsUpstreamErrorEvent{AccountID: account.ID, AccountName: account.Name, Platform: account.Platform, UpstreamStatusCode: c.GetInt("bps_upstream_status"), Kind: "stream_error", Message: failure.Message, Detail: code})
+	return failure
 }
 
 func buildOpenAIBPSRequest(ctx context.Context, account *Account, body []byte) (*http.Request, error) {
@@ -154,6 +200,9 @@ func readBPSEvents(resp *http.Response, maxSize int, consume func(string, map[st
 		event := "response.completed"
 		if response["status"] != "completed" {
 			event = "response.failed"
+			if response["status"] == "cancelled" {
+				event = "response.cancelled"
+			}
 		}
 		return consume(event, map[string]any{"type": event, "response": response})
 	}
@@ -182,7 +231,7 @@ func readBPSEvents(resp *http.Response, maxSize int, consume func(string, map[st
 			typ = event
 		}
 		event = ""
-		terminal = typ == "response.completed" || typ == "response.done" || typ == "response.failed" || typ == "response.incomplete" || typ == "error"
+		terminal = typ == "response.completed" || typ == "response.done" || typ == "response.failed" || typ == "response.incomplete" || typ == "response.cancelled" || typ == "error"
 		return consume(typ, payload)
 	}
 	for scanner.Scan() {
@@ -273,6 +322,12 @@ func (s *OpenAIGatewayService) forwardOpenAIBPS(ctx context.Context, c *gin.Cont
 		}
 		return nil, err
 	}
+	if ctx.Err() != nil {
+		if resp != nil && resp.Body != nil {
+			_ = resp.Body.Close()
+		}
+		return nil, ctx.Err()
+	}
 	c.Set("bps_upstream_status", resp.StatusCode)
 	requestID := strings.ReplaceAll(resp.Header.Get("x-request-id"), snapshot.AccessToken, "[REDACTED]")
 	c.Set("bps_upstream_request_id", requestID)
@@ -334,14 +389,25 @@ func (s *OpenAIGatewayService) forwardOpenAIBPS(ctx context.Context, c *gin.Cont
 	}
 	err = readBPSEvents(resp, maxSize, func(typ string, payload map[string]any) error {
 		timer.Reset(idle)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		if completed {
 			return nil
 		}
-		if typ == "response.failed" || typ == "response.incomplete" || typ == "error" {
+		if typ == "response.failed" || typ == "response.incomplete" || typ == "response.cancelled" || typ == "error" {
+			result.UpstreamTerminalEvent = typ
 			if v, ok := payload["response"].(map[string]any); ok {
 				result.Usage = bpsReadUsage(v)
+				result.ResponseID = stringValue(v["id"])
+				if result.ResponseID != "" {
+					c.Set("bps_response_id", result.ResponseID)
+				}
+			} else {
+				result.Usage = bpsReadUsage(payload)
 			}
-			return &bpsError{502, "bps_response_failed", "BPS failed to complete the response"}
+			c.Set("bps_failure_usage", result.Usage)
+			return s.bpsTerminalError(ctx, c, account, typ, payload, r.Model)
 		}
 		if typ == "response.completed" || typ == "response.done" {
 			response, ok := payload["response"].(map[string]any)
@@ -484,14 +550,18 @@ func (s *OpenAIGatewayService) forwardOpenAIBPS(ctx context.Context, c *gin.Cont
 		return emit(typ, payload)
 	})
 	result.Duration = time.Since(started)
-	if timedOut.Load() && !completed {
+	if ctx.Err() != nil {
+		err = ctx.Err()
+	} else if timedOut.Load() && !completed {
 		err = &bpsError{504, "bps_upstream_timeout", "BPS upstream stopped sending data"}
 	}
 	if err == nil && !completed {
 		err = &bpsError{502, "bps_stream_interrupted", "BPS stream ended before response.completed"}
 	}
 	if err != nil {
-		result.UpstreamTerminalEvent = "response.failed"
+		if result.UpstreamTerminalEvent == "" {
+			result.UpstreamTerminalEvent = "response.failed"
+		}
 		return result, err
 	}
 	result.UpstreamTerminalEvent = "response.completed"

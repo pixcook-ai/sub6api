@@ -8,13 +8,17 @@ import (
 	"time"
 
 	"github.com/MACOS-DO/sub4api/internal/pkg/openai"
+	"github.com/imroc/req/v3"
 	"github.com/stretchr/testify/require"
 )
 
 type openaiBPSRefreshClientStub struct {
-	calls    int32
-	clientID string
-	response *openai.TokenResponse
+	calls        int32
+	clientID     string
+	refreshToken string
+	response     *openai.TokenResponse
+	err          error
+	onRefresh    func()
 }
 
 func (s *openaiBPSRefreshClientStub) ExchangeCode(ctx context.Context, code, codeVerifier, redirectURI, proxyURL, clientID string) (*openai.TokenResponse, error) {
@@ -28,7 +32,11 @@ func (s *openaiBPSRefreshClientStub) RefreshToken(ctx context.Context, refreshTo
 func (s *openaiBPSRefreshClientStub) RefreshTokenWithClientID(ctx context.Context, refreshToken, proxyURL string, clientID string) (*openai.TokenResponse, error) {
 	atomic.AddInt32(&s.calls, 1)
 	s.clientID = clientID
-	return s.response, nil
+	s.refreshToken = refreshToken
+	if s.onRefresh != nil {
+		s.onRefresh()
+	}
+	return s.response, s.err
 }
 
 func bpsRefreshAccount(clientID, refreshToken string, expiresIn time.Duration) *Account {
@@ -100,4 +108,39 @@ func TestOpenAIBPSTokenRefresher_RefreshKeepsOldRefreshTokenWhenNotRotated(t *te
 	creds, err := refresher.Refresh(context.Background(), bpsRefreshAccount(openai.ExcelClientID, "old-refresh", 10*time.Minute))
 	require.NoError(t, err)
 	require.Equal(t, "old-refresh", creds["refresh_token"], "an empty refresh response must not erase the stored token")
+}
+
+func TestOpenAIBPSTokenRefresher_SkipsChatGPTEnrichmentAndPrivacy(t *testing.T) {
+	client := &openaiBPSRefreshClientStub{response: &openai.TokenResponse{AccessToken: "new-access", ExpiresIn: 3600}}
+	oauth := NewOpenAIOAuthService(nil, client)
+	calls := 0
+	oauth.SetPrivacyClientFactory(func(string) (*req.Client, error) { calls++; return nil, errors.New("must not be called") })
+	_, err := NewOpenAIBPSTokenRefresher(oauth).Refresh(context.Background(), bpsRefreshAccount(openai.ExcelClientID, "rt", time.Hour))
+	require.NoError(t, err)
+	require.Zero(t, calls)
+}
+
+type bpsRefreshProxyRepo struct {
+	ProxyRepository
+	proxy *Proxy
+	err   error
+}
+
+func (r *bpsRefreshProxyRepo) GetByID(context.Context, int64) (*Proxy, error) { return r.proxy, r.err }
+func TestOpenAIBPSTokenRefresher_ConfiguredProxyFailsClosed(t *testing.T) {
+	for _, repo := range []ProxyRepository{nil, &bpsRefreshProxyRepo{err: errors.New("proxy unavailable")}, &bpsRefreshProxyRepo{}} {
+		client := &openaiBPSRefreshClientStub{response: &openai.TokenResponse{AccessToken: "new-access", ExpiresIn: 3600}}
+		a := bpsRefreshAccount(openai.ExcelClientID, "rt", time.Hour)
+		id := int64(7)
+		a.ProxyID = &id
+		_, err := NewOpenAIBPSTokenRefresher(NewOpenAIOAuthService(repo, client)).Refresh(context.Background(), a)
+		require.Error(t, err)
+		require.Zero(t, client.calls)
+	}
+}
+func TestOpenAIBPSTokenRefresher_RefreshRejectsWrongGrantBeforeUpstream(t *testing.T) {
+	client := &openaiBPSRefreshClientStub{}
+	_, err := NewOpenAIBPSTokenRefresher(NewOpenAIOAuthService(nil, client)).Refresh(context.Background(), bpsRefreshAccount(openai.ClientID, "rt", time.Hour))
+	require.Error(t, err)
+	require.Zero(t, client.calls)
 }

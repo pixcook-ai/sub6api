@@ -79,6 +79,9 @@
           :options="openAITestModeOptions"
           :disabled="status === 'connecting'"
         />
+        <p v-if="isBPSOAuthAccount && testMode === 'bps_tools'" class="text-xs text-gray-500 dark:text-gray-400">
+          {{ t('admin.accounts.bps.toolRoundtripHint') }}
+        </p>
       </div>
 
       <div v-if="supportsPromptInput" class="space-y-1.5">
@@ -414,7 +417,7 @@ const generatedImages = ref<PreviewMedia[]>([])
 const generatedAudios = ref<PreviewMedia[]>([])
 const generatedVideos = ref<PreviewMedia[]>([])
 const previewImageUrl = ref('')
-const testMode = ref<'default' | 'compact'>('default')
+const testMode = ref<'default' | 'compact' | 'bps_tools'>('default')
 const grokTestMode = ref<'text' | 'image' | 'video' | 'search' | 'tts' | 'stt' | 'realtime'>('text')
 const uploadImageDataURL = ref('')
 const uploadImagePreview = ref('')
@@ -424,11 +427,16 @@ const uploadAudioName = ref('')
 const imageFileInput = ref<HTMLInputElement | null>(null)
 const audioFileInput = ref<HTMLInputElement | null>(null)
 const isOpenAIAccount = computed(() => (props.account?.platform === 'openai' || props.account?.platform === 'openai_bps'))
+const isBPSOAuthAccount = computed(() => props.account?.platform === 'openai_bps' && props.account.type === 'oauth')
 const isGrokAccount = computed(() => props.account?.platform === 'grok')
-const openAITestModeOptions = computed(() => [
-  { value: 'default', label: t('admin.accounts.openai.testModeDefault') },
-  { value: 'compact', label: t('admin.accounts.openai.testModeCompact') }
-])
+const openAITestModeOptions = computed(() => {
+  const options = [
+    { value: 'default', label: t('admin.accounts.openai.testModeDefault') },
+    { value: 'compact', label: t('admin.accounts.openai.testModeCompact') }
+  ]
+  if (isBPSOAuthAccount.value) options.push({ value: 'bps_tools', label: t('admin.accounts.bps.toolRoundtripTest') })
+  return options
+})
 const grokTestModeOptions = computed(() => [
   { value: 'text', label: t('admin.accounts.grok.testModeText') },
   { value: 'image', label: t('admin.accounts.grok.testModeImage') },

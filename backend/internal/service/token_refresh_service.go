@@ -455,6 +455,12 @@ func (p *tokenRefreshProviderState) recordResult(err error) {
 			return
 		}
 	}
+	if p.registration.platform == PlatformOpenAIBPS {
+		var localError *openAIBPSAccountRefreshError
+		if errors.As(err, &localError) {
+			return
+		}
+	}
 	var attemptTimeoutErr *refreshAttemptTimeoutError
 	if errors.As(err, &attemptTimeoutErr) {
 		p.consecutiveFailures++
@@ -905,6 +911,8 @@ func (s *TokenRefreshService) refreshWithRetryWithRateGate(
 				credentialsPersisted = result.NewCredentials != nil
 				_ = result.NewCredentials // 统一 API 已设置 _token_version 并更新 DB，无需重复操作
 			}
+		} else if account.IsOpenAIBPS() {
+			err = &providerConfigurationRefreshError{err: errors.New("BPS refresh requires the shared OAuth refresh API")}
 		} else {
 			// 降级：直接调用 refresher（兼容旧路径）
 			releaseRate := func() {}
@@ -995,6 +1003,9 @@ func (s *TokenRefreshService) refreshWithRetryWithRateGate(
 			return &providerConfigurationRefreshError{err: err}
 		}
 
+		if account.IsOpenAIBPS() {
+			return s.handleOpenAIBPSRefreshFailure(ctx, account, err)
+		}
 		// 不可重试错误（invalid_grant/invalid_client 等）直接标记 error 状态并返回
 		if isNonRetryableRefreshError(err) {
 			errorMsg := "Token refresh failed (non-retryable): " + logredact.RedactText(err.Error())
@@ -1174,6 +1185,10 @@ func (s *TokenRefreshService) retryBackoff(accountID int64, attempt int) time.Du
 
 // postRefreshActions 刷新成功后的后续动作（清除错误状态、缓存失效、调度器同步等）
 func (s *TokenRefreshService) postRefreshActions(ctx context.Context, account *Account) {
+	if account.IsOpenAIBPS() {
+		s.postRefreshStateSync(ctx, account)
+		return
+	}
 	s.clearAntigravityForceTokenRefresh(ctx, account, "success")
 
 	// Antigravity 账户：如果之前是因为缺少 project_id 而标记为 error，现在成功获取到了，清除错误状态

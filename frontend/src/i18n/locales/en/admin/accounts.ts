@@ -110,6 +110,8 @@ export default {
       },
 
       bps: {
+        toolRoundtripTest: 'Tool roundtrip test',
+        toolRoundtripHint: 'Verifies text, a tool call, and continuation with its result using three requests.',
         usageSourceHint: 'Requests, tokens and costs are tracked locally. Percentages are ChatGPT/Codex quotas, not separate BPS limits.',
         quotaUnavailable: 'Some upstream quota is unavailable (—). Local usage statistics remain available.',
         testInterrupted: 'The BPS test stream ended without a completion result.',

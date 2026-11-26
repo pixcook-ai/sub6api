@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -38,15 +39,37 @@ func (r *OpenAIBPSTokenRefresher) NeedsRefresh(account *Account, refreshWindow t
 }
 
 func (r *OpenAIBPSTokenRefresher) Refresh(ctx context.Context, account *Account) (map[string]any, error) {
+	if !r.CanRefresh(account) {
+		return nil, fmt.Errorf("BPS refresh requires an official Excel grant and refresh token")
+	}
+	if r.oauth == nil || r.oauth.oauthClient == nil {
+		return nil, fmt.Errorf("BPS OAuth client is not configured")
+	}
 	var proxyURL string
-	if account.ProxyID != nil && r.oauth.proxyRepo != nil {
-		if proxy, err := r.oauth.proxyRepo.GetByID(ctx, *account.ProxyID); err == nil && proxy != nil {
-			proxyURL = proxy.URL()
+	if account.ProxyID != nil {
+		if r.oauth.proxyRepo == nil {
+			return nil, bpsRefreshProxyUnavailable("BPS refresh proxy repository is not configured")
+		}
+		proxy, err := r.oauth.proxyRepo.GetByID(ctx, *account.ProxyID)
+		if err != nil || proxy == nil {
+			return nil, bpsRefreshProxyUnavailable("BPS refresh configured proxy is unavailable")
+		}
+		proxyURL = proxy.URL()
+		if strings.TrimSpace(proxyURL) == "" {
+			return nil, bpsRefreshProxyUnavailable("BPS refresh configured proxy URL is empty")
 		}
 	}
-	tokenInfo, err := r.oauth.RefreshTokenWithClientID(ctx, strings.TrimSpace(account.GetCredential("refresh_token")), proxyURL, openai.ExcelClientID)
+	// Excel grants do not authorize the ordinary Codex enrichment/privacy calls.
+	tokenResp, err := r.oauth.oauthClient.RefreshTokenWithClientID(ctx, strings.TrimSpace(account.GetCredential("refresh_token")), proxyURL, openai.ExcelClientID)
 	if err != nil {
 		return nil, err
+	}
+	if tokenResp == nil || strings.TrimSpace(tokenResp.AccessToken) == "" {
+		return nil, fmt.Errorf("BPS refresh returned no access token")
+	}
+	tokenInfo := &OpenAITokenInfo{AccessToken: tokenResp.AccessToken, RefreshToken: tokenResp.RefreshToken, ClientID: openai.ExcelClientID, ExpiresAt: openAIRefreshedTokenExpiresAt(tokenResp.AccessToken, tokenResp.ExpiresIn)}
+	if tokenInfo.ExpiresAt <= time.Now().Unix() {
+		return nil, fmt.Errorf("BPS refresh returned no future expiry")
 	}
 	creds := r.oauth.BuildAccountCredentials(tokenInfo)
 	// The operator-selected workspace must survive a refresh.

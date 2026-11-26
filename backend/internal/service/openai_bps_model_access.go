@@ -55,8 +55,11 @@ func bpsAccessModelIDs(raw []byte) ([]string, error) {
 		if (entry.Available != nil && !*entry.Available) || (entry.Enabled != nil && !*entry.Enabled) || (entry.Picker != nil && !*entry.Picker) {
 			continue
 		}
-		if entry.Policy != nil && strings.EqualFold(entry.Policy.State, "disabled") {
-			continue
+		if entry.Policy != nil {
+			switch strings.ToLower(strings.TrimSpace(entry.Policy.State)) {
+			case "disabled", "unconfigured":
+				continue
+			}
 		}
 		seen[entry.ID] = true
 		ids = append(ids, entry.ID)

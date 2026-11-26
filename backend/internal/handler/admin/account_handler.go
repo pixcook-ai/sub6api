@@ -53,6 +53,7 @@ type AccountHandler struct {
 	adminService            service.AdminService
 	oauthService            *service.OAuthService
 	openaiOAuthService      *service.OpenAIOAuthService
+	openAIBPSRefreshAPI     *service.OAuthRefreshAPI
 	geminiOAuthService      *service.GeminiOAuthService
 	antigravityOAuthService *service.AntigravityOAuthService
 	grokOAuthService        service.GrokOAuthTokenService
@@ -94,6 +95,10 @@ func (h *AccountHandler) SetCodexTicketSettings(settings *service.SettingService
 func (h *AccountHandler) SetCodexTicketGateway(gateway *service.OpenAIGatewayService) {
 	h.codexTicketGateway = gateway
 	h.codexDiagnostic = gateway
+}
+
+func (h *AccountHandler) SetOpenAIBPSRefreshAPI(api *service.OAuthRefreshAPI) {
+	h.openAIBPSRefreshAPI = api
 }
 
 // NewAccountHandler creates a new admin account handler
@@ -1461,7 +1466,8 @@ func (h *AccountHandler) PreviewFromCRS(c *gin.Context) {
 // Returns (updatedAccount, warning, error) where warning is used for Antigravity ProjectIDMissing scenario.
 func (h *AccountHandler) refreshSingleAccount(ctx context.Context, account *service.Account) (*service.Account, string, error) {
 	if account.IsOpenAIBPS() {
-		return nil, "", infraerrors.BadRequest("BPS_MANUAL_TOKEN_ONLY", "Replace access_token in the BPS account settings; automatic refresh is unsupported")
+		updated, err := h.openAIBPSRefreshAPI.RefreshOpenAIBPSAccount(ctx, account, h.openaiOAuthService)
+		return updated, "", err
 	}
 	if !account.IsOAuth() {
 		return nil, "", infraerrors.BadRequest("NOT_OAUTH", "cannot refresh non-OAuth account")

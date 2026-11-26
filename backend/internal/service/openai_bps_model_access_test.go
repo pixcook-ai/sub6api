@@ -21,6 +21,12 @@ func TestBPSAccessModelIDs_ExplicitDenialIsEmptyNotError(t *testing.T) {
 	require.NotNil(t, ids)
 }
 
+func TestBPSAccessModelIDs_UnconfiguredPolicyIsNotAnAvailableModel(t *testing.T) {
+	ids, err := bpsAccessModelIDs([]byte(`{"allowed":true,"model_catalog":{"models":[{"id":"gpt-6-astra","policy":{"state":"enabled"}},{"id":"gpt-6.1-sol","policy":{"state":"unconfigured"}}]}}`))
+	require.NoError(t, err)
+	require.Equal(t, []string{"gpt-6-astra"}, ids)
+}
+
 func TestBPSAccessModelIDs_MalformedEnvelopeIsError(t *testing.T) {
 	for _, raw := range []string{`not json`, `{}`, `{"allowed":true}`, `{"allowed":true,"model_catalog":{}}`} {
 		_, err := bpsAccessModelIDs([]byte(raw))

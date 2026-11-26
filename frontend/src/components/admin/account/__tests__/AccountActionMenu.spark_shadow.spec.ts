@@ -49,6 +49,45 @@ const getBodyText = () => document.body.textContent ?? ''
 const getBodyButtons = () => Array.from(document.body.querySelectorAll('button'))
 
 describe('AccountActionMenu — spark shadow 按钮可见性', () => {
+  it('BPS 有可续期凭据时仅开放刷新令牌并触发 refresh-token 事件', async () => {
+    const account = makeAccount({
+      platform: 'openai_bps',
+      credentials_status: { has_access_token: true, has_refresh_token: true }
+    })
+    const wrapper = mount(AccountActionMenu, {
+      props: { show: true, account, anchorRect },
+      attachTo: document.body,
+    })
+    try {
+      const body = getBodyText()
+      expect(body).toContain('admin.accounts.refreshToken')
+      expect(body).not.toContain('admin.accounts.reAuthorize')
+      expect(body).not.toContain('admin.accounts.setPrivacy')
+      expect(body).not.toContain('admin.accounts.createSparkShadow')
+      const refreshButton = getBodyButtons().find(button => button.textContent?.includes('admin.accounts.refreshToken'))
+      refreshButton!.click()
+      await wrapper.vm.$nextTick()
+      expect(wrapper.emitted('refresh-token')).toEqual([[account]])
+      expect(wrapper.emitted('close')).toHaveLength(1)
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it.each([undefined, false])('BPS 仅有 AT 或未确认存在 RT 时隐藏刷新入口（RT：%s）', (hasRefreshToken) => {
+    const account = makeAccount({
+      platform: 'openai_bps',
+      credentials_status: hasRefreshToken === undefined ? undefined : { has_refresh_token: hasRefreshToken }
+    })
+    const wrapper = mount(AccountActionMenu, {
+      props: { show: true, account, anchorRect },
+      attachTo: document.body,
+    })
+    expect(getBodyText()).not.toContain('admin.accounts.refreshToken')
+    expect(getBodyText()).not.toContain('admin.accounts.reAuthorize')
+    wrapper.unmount()
+  })
+
   it('普通账号显示「复制账号」按钮', () => {
     const account = makeAccount({ platform: 'anthropic', type: 'apikey', parent_account_id: null })
     const wrapper = mount(AccountActionMenu, {
@@ -149,6 +188,7 @@ describe('AccountActionMenu — spark shadow 按钮可见性', () => {
     })
     const body = getBodyText()
     expect(body).toContain('admin.accounts.reAuthorize')
+    expect(body).toContain('admin.accounts.refreshToken')
     expect(body).toContain('admin.accounts.setPrivacy')
     wrapper.unmount()
   })

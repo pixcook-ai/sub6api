@@ -158,6 +158,8 @@ type AccountTestService struct {
 	openaiGatewayService      *OpenAIGatewayService
 	iqStateProbeAccounts      sync.Map
 	modelTraceAccounts        sync.Map
+	bpsToolsProbeMu           sync.Mutex
+	bpsToolsProbeAccounts     map[int64]struct{}
 	iqQuestionMu              sync.Mutex
 	iqQuestionRunning         map[int64]int
 	agentIdentityTaskMu       sync.Mutex
@@ -375,6 +377,9 @@ func (s *AccountTestService) TestAccountConnection(c *gin.Context, accountID int
 }
 
 func (s *AccountTestService) testAccountConnection(c *gin.Context, account *Account, modelID, prompt, mode string, testOpts AccountTestOptions) error {
+	if mode == AccountTestModeBPSTools && (account == nil || !account.IsOpenAIBPS() || account.Type != AccountTypeOAuth) {
+		return s.sendErrorAndEnd(c, "BPS tool probes require an OpenAI BPS OAuth account")
+	}
 	// Synthetic UI load-test accounts exercise the real SSE parsing and modal
 	// interactions, but intentionally do not send their placeholder credentials
 	// to an upstream provider.

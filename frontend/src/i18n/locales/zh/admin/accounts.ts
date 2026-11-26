@@ -110,6 +110,8 @@ export default {
       },
 
       bps: {
+        toolRoundtripTest: '工具闭环测试',
+        toolRoundtripHint: '依次验证文本、工具调用和结果续接，共发送三次请求。',
         usageSourceHint: '请求、Token 和费用为本站统计；百分比为 ChatGPT/Codex 配额，不代表 BPS 独立额度。',
         quotaUnavailable: '未获取到完整上游配额，— 表示未知；本地统计仍可查看。',
         testInterrupted: 'BPS 测试流已中断，未收到完成结果。',

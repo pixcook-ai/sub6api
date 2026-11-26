@@ -8,7 +8,7 @@
 2. 创建 **OpenAI BPS** 账号时会显示账号限制/封禁风险提示。点击保存或保存并测试后，必须在确认弹窗中确认风险才会创建；取消会保留输入。填写 `access_token`。`chatgpt_account_id` 留空时从 JWT 提取，填写时覆盖默认账号；同时提取 JWT 的到期时间。解析 JWT 只读取信息，不验证真实性。
 3. 绑定 BPS 分组，按需要选择代理、调整模型映射。默认候选模型为 `gpt-6-astra`、`gpt-5.6-sol`；模型映射支持管理员设置别名和白名单。删除全部规则表示不限模型。
 4. 在创建或编辑窗口选择“保存并测试连接”，用保存后的账号打开测试窗口。分别选择两个模型测试文本和压缩。账号列表也保留连接测试入口。测试开始只表示正在请求上游；实际响应显示 HTTP 状态、上游模型及请求 ID，失败保留原始错误码。测试结束及关闭弹窗时刷新账号状态。
-5. Token 到期或被上游撤销后需手动替换。账号状态栏、用量列和编辑窗口分别显示已过期、已撤销或认证失败；JWT 未到期不代表上游认证有效。自然到期提示每 30 秒更新，不依赖列表自动刷新。编辑时留空保留原 Token 及诊断，替换新 Token 不会解除管理员主动停用或关闭调度的状态；历史暂停账号需手动恢复调度。
+5. 仅导入 Access Token 的账号到期或被撤销后需手动替换；通过官方 Excel 客户端取得并保存 Refresh Token 的账号支持后台续期，以及菜单或批量操作中的“刷新令牌”。刷新沿用账号代理、workspace 和共享分布式锁，按原凭证版本有条件保存，失败不退回直连、不调用普通 Codex 隐私设置或自动重新登录。账号状态栏、用量列和编辑窗口分别显示已过期、已撤销或认证失败；JWT 未到期不代表上游认证有效。自然到期提示每 30 秒更新。编辑时留空保留原 Token 及诊断；刷新或替换 Token 不会解除管理员主动停用或关闭调度的状态。
 6. 使用该分组的 **Sub4API API Key** 配置 Codex，`wire_api = "responses"`，`supports_websockets = false`。API Key 使用说明提供 Codex 配置和模型目录。
 7. Composite 分组必须为 BPS 添加显式路由。模型目录仅发布启用的 Responses/通用路由且有合格 BPS 账号承接的模型；精确路由直接发布别名，前缀路由筛选可枚举的账号模型。没有有效候选时返回空列表。普通 `gpt-*` 自动识别规则仍选择 OpenAI。
 
@@ -20,7 +20,7 @@
 - 推理强度 `low` / `medium` / `high` / `xhigh`，默认 `medium`；`max` 等不支持的值明确报错。
 - `/responses/compact` 和带 `compaction_trigger` 的 Responses 压缩请求。
 - `text.format.type=json_object/json_schema` 的 JSON 与 SSE 输出，采用提示词约束和本地最终结果校验。
-- 不提供 WebSocket、Chat Completions、Claude Messages、图像/音频、自动续期或 Excel 本地凭证读取。不能用 `previous_response_id` 或 `item_reference` 代替完整历史。
+- 不提供 WebSocket、Chat Completions、Claude Messages、图像/音频或 Excel 本地凭证读取。自动续期仅适用于保存了正规 Excel Refresh Token 的账号；没有 RT 的账号仍需手动替换 AT。不能用 `previous_response_id` 或 `item_reference` 代替完整历史。
 - 模型目录声明串行工具、文本输入及 HTTP。目录的 200,000 token 上下文和 160,000 token 压缩阈值是保守的本地策略，不是上游配额或能力保证。
 
 ## 会话、工具与压缩
@@ -49,13 +49,17 @@
 
 认证失败停止账号调度；过期 token 在调度前被排除。`basispoints_model_access_changed` 和 `model_not_allowed` 统一归为 `bps_model_not_allowed`，按映射后的上游模型冷却 30 分钟，原始错误码保留在诊断中；账号其他模型继续可用。普通 403 不直接判定整个账号失效。参数错误不重试，429 根据 `Retry-After` 冷却。只有尚未绑定上下文且尚未输出的新会话，才能在网络错误、429 或 5xx 时有限换号。
 
-渠道监测选择 OpenAI BPS，填写 **Sub4API 地址和 BPS 分组 API Key**，使用 Responses 探活。监测模板支持 BPS；不提供上游配额探测。
+渠道监测选择 OpenAI BPS，填写 **Sub4API 地址和 BPS 分组 API Key**，使用 Responses 探活。监测模板支持 BPS。
+
+账号列表支持 BPS 登录账号的 5h／7d／30d 用量窗口，按上游实际返回的周期显示，并提供“查询”按钮。后端使用该账号的凭证、workspace 和代理，只读尝试 ChatGPT `/backend-api/wham/usage`；显示该接口返回的 ChatGPT/Codex 账号配额，不据此推断 BPS 模型独立额度。即使上游只返回 30d，也保留 5h／7d 本地统计。读取失败、窗口缺失或缓存过期时，百分比显示 `—`，不将未知配额显示为 `0%`。快照缓存 10 分钟，手动查询绕过缓存；替换凭证或 workspace 后不复用旧快照。查询不会发送模型请求、重置配额、读取点数或改变账号调度。两份本地测试账号已实际返回 30d；这不保证所有 Excel grant 都具有相同权限。
+
+连接测试支持“BPS 工具闭环”：使用同一账号、模型和独立测试会话，顺序执行 nonce 文本、固定 echo 工具调用、工具结果续接，三阶段都完成且精确验证才报告成功。该操作会发送三次模型请求，保留各步 Token 用量及安全上游诊断，每账号最多一个、进程内最多三个并行探测；不会执行任意用户工具或代码。HTTP 200 内的明确限流、模型权限及认证错误与未知错误分别处理，取消终态保留已取得用量，不作为成功或重试重放。
 
 ## 验证与上线
 
 仓库测试覆盖压缩轮次保持、连续压缩、旧摘要兼容、显式 Composite 目录、标准模型格式、结构化 JSON/SSE、错误 schema、文档内/外引用、大整数、未验证文本隔离、工具续接与拒答，以及凭证提取/覆盖/过期/脱敏、账号状态保留、平台隔离、两种调度路径、快照身份、请求头、JSON/SSE、未知工具、参数 schema、双层 JSON、连续工具往返、摘要恢复、API Key 隔离、Redis 闲置过期、双模型模拟连接及端点边界。Redis 使用 miniredis，并通过独立客户端验证跨实例读写及原子账号绑定。
 
-本次没有真实 BPS token。两模型的实际权限、真实 Codex 工具与压缩闭环尚未验收；迁移目前通过 SQL 回归断言，未在真实 PostgreSQL 执行。正式启用前，在测试环境应用迁移，用实际账号分别验证文本、SSE、function/custom/namespace、`update_plan`，以及“压缩 → 新一轮对话 → 工具调用”。
+初次协议移植未使用真实 BPS token；当时的两模型权限、真实 Codex 工具与压缩闭环及真实数据库迁移未验收。本轮已用两份本地账号核验只读 30d 配额；凭证 CAS 使用隔离 PostgreSQL 验证。真实 OAuth 续期、全部模型权限、真实客户端“压缩 → 新一轮对话 → 工具调用”仍须分别验收，不能从离线回归或用量查询成功推断。
 
 主要验证命令：
 

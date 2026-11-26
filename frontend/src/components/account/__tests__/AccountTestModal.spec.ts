@@ -148,6 +148,35 @@ describe('AccountTestModal', () => {
     })
   })
 
+  it('offers and posts the BPS tool roundtrip mode through the public account test endpoint', async () => {
+    const wrapper = mount(AccountTestModal, {
+      props: { show: false, account: { ...buildAccount(), platform: 'openai_bps' } },
+      global: { stubs: { BaseDialog: BaseDialogStub, Select: SelectStub, TextArea: TextAreaStub, Icon: true } }
+    })
+    await wrapper.setProps({ show: true })
+    await flushPromises()
+    const mode = wrapper.findAll('select').find(select => select.find('option[value="bps_tools"]').exists())
+    expect(mode).toBeDefined()
+    await mode!.setValue('bps_tools')
+    await (wrapper.vm as any).startTest()
+    await flushPromises()
+
+    const [url, options] = (global.fetch as any).mock.calls[0]
+    expect(url).toContain('/admin/accounts/1/test')
+    expect(JSON.parse(options.body)).toMatchObject({ model_id: 'gpt-5.4', mode: 'bps_tools', prompt: '' })
+    wrapper.unmount()
+  })
+
+  it('keeps BPS tool probes out of ordinary OpenAI account test modes', async () => {
+    const wrapper = mount(AccountTestModal, {
+      props: { show: true, account: buildAccount() },
+      global: { stubs: { BaseDialog: BaseDialogStub, Select: SelectStub, TextArea: TextAreaStub, Icon: true } }
+    })
+    await flushPromises()
+    expect(wrapper.find('option[value="bps_tools"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
   it('renders Chat Completions path status from test SSE', async () => {
     const encoder = new TextEncoder()
     const chunks = [
