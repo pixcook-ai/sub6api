@@ -217,7 +217,7 @@ func (s *AccountTestService) runModelTraceSample(ctx context.Context, accountID 
 				sample.Error = "output_limit"
 				return sample
 			}
-			output.WriteString(event.Text)
+			_, _ = output.WriteString(event.Text)
 		case "error":
 			failed = true
 		}

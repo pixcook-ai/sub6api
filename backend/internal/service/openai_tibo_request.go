@@ -14,7 +14,7 @@ import (
 
 func requireOpenAITiboProxyBinding(account *Account, proxyURL string) error {
 	if account != nil && account.ProxyID != nil && strings.TrimSpace(proxyURL) == "" {
-		return fmt.Errorf("Tibo account proxy is unavailable")
+		return fmt.Errorf("tibo account proxy is unavailable")
 	}
 	return nil
 }

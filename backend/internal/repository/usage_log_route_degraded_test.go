@@ -358,9 +358,10 @@ func TestUsageLogAggregatesApplyRouteDegradedFilter(t *testing.T) {
 				condition := routeDegradedCondition("route_degraded", degraded)
 				columns := []string{"date", "requests", "input_tokens", "output_tokens", "cache_creation_tokens", "cache_read_tokens", "total_tokens", "cost", "actual_cost"}
 				from := "FROM usage_logs"
-				if kind == "model" {
+				switch kind {
+				case "model":
 					columns = []string{"model", "requests", "input_tokens", "output_tokens", "cache_creation_tokens", "cache_read_tokens", "total_tokens", "cost", "actual_cost", "account_cost"}
-				} else if kind == "group" {
+				case "group":
 					from += " ul"
 					condition = routeDegradedCondition("ul.route_degraded", degraded)
 					columns = []string{"group_id", "group_name", "requests", "total_tokens", "cost", "actual_cost", "account_cost"}

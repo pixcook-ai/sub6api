@@ -110,7 +110,7 @@ func (s *OpenAIGatewayService) FetchOpenAIBPSModelIDs(ctx context.Context, accou
 	if resp == nil || resp.Body == nil {
 		return nil, fmt.Errorf("BPS model discovery returned no response")
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("BPS model discovery returned HTTP %d", resp.StatusCode)
 	}

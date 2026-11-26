@@ -270,7 +270,7 @@ func (api *OAuthRefreshAPI) RefreshIfNeeded(
 	}
 
 	// 3. 二次检查是否仍需刷新（另一条路径可能已刷新）
-	if !(freshAccount.IsOpenAIBPS() && isOpenAIBPSManualRefresh(ctx)) && !executor.NeedsRefresh(freshAccount, refreshWindow) {
+	if (!freshAccount.IsOpenAIBPS() || !isOpenAIBPSManualRefresh(ctx)) && !executor.NeedsRefresh(freshAccount, refreshWindow) {
 		return &OAuthRefreshResult{
 			Account: freshAccount,
 		}, nil

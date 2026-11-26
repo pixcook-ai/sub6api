@@ -23,6 +23,8 @@ func TestOpenAIBPSTransformResponseStripsUpstreamInstructions(t *testing.T) {
 	output, ok := transformed["output"].([]any)
 	require.True(t, ok)
 	require.Len(t, output, 1)
-	require.Equal(t, "message", output[0].(map[string]any)["type"])
+	message, ok := output[0].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "message", message["type"])
 	require.Equal(t, "completed", transformed["status"])
 }

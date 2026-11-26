@@ -146,23 +146,25 @@ func (s *AccountTestService) testBPSToolRoundtrip(c *gin.Context, account *Accou
 	s.sendEvent(c, TestEvent{Type: "test_start", Model: model})
 	input := []any{bpsMessage("user", "Reply with exactly this nonce and nothing else: "+nonce)}
 	text, err := s.runBPSToolProbeStep(ctx, c, account, model, session, input, nil, false)
-	if err != nil || !bpsToolProbeExactText(text.response, nonce) {
+	textOutput, outputOK := text.response["output"].([]any)
+	if err != nil || !outputOK || !bpsToolProbeExactText(text.response, nonce) {
 		return s.failBPSToolProbe(c, text, "bps_tool_probe_text_failed", "BPS text probe did not return the expected completed response")
 	}
 	s.sendEvent(c, TestEvent{Type: "status", Text: "BPS text response verified"})
 	s.sendEvent(c, TestEvent{Type: "content", Text: nonce})
-	input = append(input, text.response["output"].([]any)...)
+	input = append(input, textOutput...)
 	input = append(input, bpsMessage("user", "Call "+bpsToolProbeName+" exactly once with nonce "+nonce+". After its result, reply with exactly that nonce and nothing else."))
 	called, err := s.runBPSToolProbeStep(ctx, c, account, model, session, input, tools, true)
 	if err != nil {
 		return s.failBPSToolProbe(c, called, "bps_tool_probe_call_failed", "BPS tool call did not complete")
 	}
 	callID, ok := bpsToolProbeExactCall(called.response, nonce)
-	if !ok {
+	callOutput, outputOK := called.response["output"].([]any)
+	if !ok || !outputOK {
 		return s.failBPSToolProbe(c, called, "bps_tool_probe_call_failed", "BPS did not return exactly one valid echo tool call")
 	}
 	s.sendEvent(c, TestEvent{Type: "status", Text: "BPS tool call verified"})
-	input = append(input, called.response["output"].([]any)...)
+	input = append(input, callOutput...)
 	input = append(input, map[string]any{"type": "function_call_output", "call_id": callID, "output": nonce})
 	finished, err := s.runBPSToolProbeStep(ctx, c, account, model, session, input, tools, false)
 	if err != nil || !bpsToolProbeExactText(finished.response, nonce) {
@@ -272,7 +274,7 @@ func bpsToolProbeExactText(response map[string]any, nonce string) bool {
 				return false
 			}
 			sawText = true
-			text.WriteString(value)
+			_, _ = text.WriteString(value)
 		}
 	}
 	return sawText && strings.TrimSpace(text.String()) == nonce
