@@ -1419,7 +1419,12 @@ export default {
           batchLoginItemCodes: {
             already_exists: 'Account already exists',
             login_failed: 'Login failed',
-            email_otp_required: 'Account requires an email verification code; cannot log in automatically',
+            proxy_error: 'Proxy connection failed',
+            tls_error: 'TLS handshake failed',
+            risk_control: 'Security check was triggered',
+            email_otp_required: 'Automated login stopped at email verification. Authorization is incomplete.',
+            additional_verification_required: 'This authorization reached an additional verification step that the automated flow cannot complete.',
+            callback_state_mismatch: 'Authorization callback state did not match',
             login_timeout: 'Login timed out',
             missing_credentials: 'Missing credentials',
             invalid_arguments: 'Invalid arguments',
@@ -1433,6 +1438,15 @@ export default {
             invalid_expiry: 'Returned expiry is invalid',
             lookup_failed: 'Duplicate check failed',
             create_failed: 'Account creation failed'
+          },
+          batchLoginFailureStages: {
+            codex_chatgpt_preflight: 'Codex ChatGPT proxy preflight',
+            bps_auth_preflight: 'Excel / BPS authorization-domain preflight',
+            codex_chatgpt_login: 'Codex ChatGPT web login',
+            codex_oauth: 'Codex OAuth authorization',
+            codex_token_exchange: 'Codex token exchange',
+            bps_oauth_login: 'Excel / BPS OAuth authorization',
+            bps_token_exchange: 'Excel / BPS token exchange'
           },
           codexPatEmpty: 'Please enter a Codex personal access token',
           codexPatImportFailed: 'Failed to create Codex PAT account',

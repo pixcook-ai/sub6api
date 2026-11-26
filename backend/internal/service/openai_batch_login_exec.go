@@ -16,7 +16,7 @@ import (
 	"github.com/MACOS-DO/sub4api/internal/config"
 )
 
-var batchLoginCodePattern = regexp.MustCompile(`^[a-z0-9_]{1,40}$`)
+var batchLoginCodePattern = regexp.MustCompile(`^[a-z0-9_]{1,96}$`)
 
 // batchLoginRecord holds only the whitelisted fields emitted by run-login.mjs.
 type batchLoginRecord struct {

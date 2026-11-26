@@ -4,8 +4,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import readline from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
+import { pathToFileURL } from "node:url";
 import { bpsAuthBase, createBpsOAuthTransaction } from "./bps-oauth.mjs";
+import { loginBpsExcelPassword } from "./bps-excel-password-flow.mjs";
+import { loginCodexPassword } from "./codex-password-flow.mjs";
 import { CODEX_CLIENT_ID, CODEX_CALLBACK, codexAuthBase, createCodexOAuthTransaction } from "./codex-oauth.mjs";
+import { classifyLoginFailure, stageLoginFailure } from "./login-failure.mjs";
 import {
   browserIdentityForTlsProfile,
   shouldUseTlsTransport,
@@ -342,10 +346,13 @@ async function run() {
       await transport.configure(proxyTemplate || null, { force: true });
     } else {
       try {
-        await transport.prepareProxy(proxyTemplate, `${chatgptBase}/`);
+        const preflightBase = args.oauthProvider ? authBase : chatgptBase;
+        await transport.prepareProxy(proxyTemplate, `${preflightBase}/`);
       } catch (error) {
         if (args.oauthProvider) {
-          const reason = classifyLoginFailure(String(error && error.message || error)) || "proxy_error";
+          const stage = args.oauthProvider === "codex" ? "codex_oauth" : "bps_auth_preflight";
+          const category = classifyLoginFailure(String(error && error.message || error)) || "proxy_error";
+          const reason = stageLoginFailure(stage, category);
           process.stderr.write("[reason] " + reason);
           throw new Error((args.oauthProvider === "codex" ? "codex" : "bps") + "_login_failed");
         }
@@ -360,7 +367,7 @@ async function run() {
         const prefix = args.oauthProvider === "codex" ? "codex" : "bps";
         const code = new RegExp("^" + prefix + "_[a-z_]+$").test(error?.code || "") ? error.code : prefix + "_login_failed";
         const raw = String(error && error.message || error);
-        const reason = classifyLoginFailure(raw);
+        const reason = stageLoginFailure(error?.loginStage, classifyLoginFailure(raw));
         if (reason) process.stderr.write('[reason] ' + reason);
         throw new Error(code);
       }
@@ -702,7 +709,7 @@ async function run() {
   }
 }
 
-async function runManagedOAuthLogin({ args, transport, authBase, chatgptBase }) {
+export async function runManagedOAuthLogin({ args, transport, authBase, chatgptBase }) {
   const rl = readline.createInterface({ input, output });
   try {
     const email = args.email.trim().toLowerCase();
@@ -712,13 +719,16 @@ async function runManagedOAuthLogin({ args, transport, authBase, chatgptBase }) 
     const client = new ProtocolClient({ transport });
     client.sensitive = true;
     console.log("[" + providerPrefix + "] Sign in to the selected profile");
-    await loginChatgptWeb(client, { authBase, chatgptBase, email, rl,
-      password: process.env.CHATGPT_LOGIN_PASSWORD || "", totpSecret: process.env.CHATGPT_TOTP_SECRET || "", targetWorkspaceId: args.targetWorkspaceId });
-    const transaction = (codexProvider ? createCodexOAuthTransaction : createBpsOAuthTransaction)({ profileRef: args.oauthProfileRef, email, authBase });
+    let transaction;
+    if (codexProvider) {
+      transaction = createCodexOAuthTransaction({ profileRef: args.oauthProfileRef, email, authBase });
+    } else {
+      transaction = createBpsOAuthTransaction({ profileRef: args.oauthProfileRef, email, authBase });
+    }
     client.stopBeforeFollow = (value) => {
       if (transaction.isCallback(value)) return true;
       const target = new URL(value);
-      if (target.origin !== authBase && target.origin !== chatgptBase) {
+      if (target.origin !== authBase && (codexProvider || target.origin !== chatgptBase)) {
         throw Object.assign(new Error(providerPrefix + "_callback_mismatch"), { code: providerPrefix + "_callback_mismatch" });
       }
       return false;
@@ -726,33 +736,44 @@ async function runManagedOAuthLogin({ args, transport, authBase, chatgptBase }) 
     let callback;
     let workspaceId = args.targetWorkspaceId;
     if (codexProvider) {
-      const result = await runCodexOauth(client, { authBase, chatgptBase, email, rl, phone: args.phone,
-        codexClientId: CODEX_CLIENT_ID, codexRedirectUri: CODEX_CALLBACK, transaction, targetWorkspaceId: args.targetWorkspaceId });
+      const result = await withLoginStage("codex_oauth", () => loginCodexPassword(client, {
+        authBase, email, rl, transaction,
+        password: process.env.CHATGPT_LOGIN_PASSWORD || "",
+        totpSecret: process.env.CHATGPT_TOTP_SECRET || "",
+        targetWorkspaceId: args.targetWorkspaceId,
+      }, {
+        isPasswordLoginPage, isAuthLoginPage, getContinueUrl, createSentinelHeaders, authJsonStep,
+        verifyPassword, isMfaChallengePayload, completeTotpMfaIfNeeded, pickWorkspaceId,
+        selectChatgptLoginWorkspaceIfNeeded, continueFlow,
+      }));
       callback = result.callbackUrl;
       workspaceId = args.targetWorkspaceId || result.workspaceId || undefined;
     } else {
-      const authorized = await client.follow(transaction.authorizationUrl);
-      callback = authorized.finalUrl;
-      if (!transaction.isCallback(callback)) {
-        const sessionId = extractFirstSessionId(authorized.last?.text || "");
-        if (!sessionId) throw new Error("BPS account session selection required");
-        let { data: current } = await authJsonStep(client, authBase, "POST", "/api/accounts/session/select", { session_id: sessionId }, { referer: authorized.finalUrl });
-        if (isPhoneBindingRequired(current)) {
-          current = await bindPhoneIfNeeded(client, { authBase, rl, phone: args.phone }, current, getContinueUrl(current));
-        }
-        const directCallback = transaction.isCallback(getContinueUrl(current)) && !Array.isArray(current?.["oai-client-auth-session"]?.workspaces);
-        const selectedWorkspaceId = directCallback ? null : pickWorkspaceId(current, args.targetWorkspaceId);
-        workspaceId = args.targetWorkspaceId || selectedWorkspaceId || undefined;
-        if (selectedWorkspaceId) {
-          const selected = await authJsonStep(client, authBase, "POST", "/api/accounts/workspace/select",
-            { workspace_id: selectedWorkspaceId }, { referer: getContinueUrl(current) || authorized.finalUrl });
-          current = selected.data;
-        }
-        const continued = await continueFlow(client, current);
-        callback = continued?.finalUrl;
-      }
+      const result = await withLoginStage("bps_oauth_login", () => loginBpsExcelPassword(client, {
+        authBase,
+        email,
+        rl,
+        password: process.env.CHATGPT_LOGIN_PASSWORD || "",
+        totpSecret: process.env.CHATGPT_TOTP_SECRET || "",
+        transaction,
+        targetWorkspaceId: args.targetWorkspaceId,
+      }, {
+        isPasswordLoginPage,
+        isAuthLoginPage,
+        getContinueUrl,
+        createSentinelHeaders,
+        authJsonStep,
+        verifyPassword,
+        isMfaChallengePayload,
+        completeTotpMfaIfNeeded,
+        pickWorkspaceId,
+        selectChatgptLoginWorkspaceIfNeeded,
+        continueFlow,
+      }));
+      callback = result.callbackUrl;
+      workspaceId = result.workspaceId;
     }
-    const record = await transaction.exchangeCallback(callback, {
+    const record = await withLoginStage(codexProvider ? "codex_token_exchange" : "bps_token_exchange", () => transaction.exchangeCallback(callback, {
       expectedIdentity: { workspaceId },
       fetchImpl: async (url, options) => {
         if (!transport.enabled) return fetch(url, options);
@@ -762,7 +783,7 @@ async function runManagedOAuthLogin({ args, transport, authBase, chatgptBase }) 
         try { return await transport.fetch(url, { ...options, retryRiskControl: false }); }
         finally { transport.cloudflareSolver = solver; }
       },
-    });
+    }));
     await new Promise((resolve, reject) => process.send(
       { type: "oauth_tokens", profileRef: args.oauthProfileRef, record,
         transport: { proxyUrl: transport.hasConfiguredProxy() ? transport.configuredProxy : "", tlsProfile: transport.profile } },
@@ -770,6 +791,15 @@ async function runManagedOAuthLogin({ args, transport, authBase, chatgptBase }) 
     ));
     console.log("[" + providerPrefix + "] OAuth credentials delivered securely to the controller");
   } finally { rl.close(); }
+}
+
+async function withLoginStage(stage, operation) {
+  try {
+    return await operation();
+  } catch (error) {
+    if (error && typeof error === "object" && !error.loginStage) error.loginStage = stage;
+    throw error;
+  }
 }
 
 async function addChatgptPassword(client, {
@@ -2541,34 +2571,17 @@ Notes:
 `);
 }
 
-run().catch((error) => {
-  if (isProxyRiskControlError(error)) {
-    console.error(`[proxy-risk-retry] ${String(error.message || "Proxy security check").slice(0, 320)}`);
-  } else {
-    console.error(`[error] ${error.message}`);
-  }
-  process.exitCode = 1;
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+  run().catch((error) => {
+    if (isProxyRiskControlError(error)) {
+      console.error(`[proxy-risk-retry] ${String(error.message || "Proxy security check").slice(0, 320)}`);
+    } else {
+      console.error(`[error] ${error.message}`);
+    }
+    process.exitCode = 1;
+  });
+}
 
 function isProxyRiskControlError(error) {
   return /PROXY_RISK_CONTROL|PROXY_CONNECTION_RETRY/i.test(String(error?.message || ""));
 }
-
-// Maps a raw login error to a fixed, non-sensitive category. Raw text is never emitted.
-function classifyLoginFailure(raw) {
-  const text = String(raw || '');
-  if (/EMAIL_OTP_REQUIRED/.test(text)) return 'email_otp_required';
-  if (/TLS connect error|SSLError|CertificateVerify/i.test(text)) return 'tls_error';
-  if (/PROXY_|proxy/i.test(text)) return 'proxy_error';
-  if (/security-check|cloudflare|HTTP 403/i.test(text)) return 'risk_control';
-  if (/Expected JSON/i.test(text)) return 'unexpected_response';
-  if (/UNEXPECTED_LOGIN_PAGE/.test(text)) return 'unexpected_login_page';
-  if (/password/i.test(text) && /(incorrect|invalid|wrong|fail|reject)/i.test(text)) return 'password_rejected';
-  if (/(mfa|totp|2fa|otp|verification code)/i.test(text)) return 'mfa_failed';
-  if (/phone/i.test(text)) return 'phone_required';
-  if (/SESSION_SELECTION|session selection/i.test(text)) return 'session_selection';
-  if (/WORKSPACE/i.test(text)) return 'workspace_unavailable';
-  const m = /^([A-Z][A-Z_]{4,}):/.exec(text);
-  return m ? m[1].toLowerCase() : '';
-}
-

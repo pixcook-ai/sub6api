@@ -209,6 +209,9 @@ func TestParseBatchLoginOutput(t *testing.T) {
 	if _, code := parseBatchLoginOutput([]byte("{\"ok\":false,\"code\":\"login_timeout\"}\n"), nil); code != "login_timeout" {
 		t.Fatalf("code %q", code)
 	}
+	if _, code := parseBatchLoginOutput([]byte("{\"ok\":false,\"code\":\"codex_chatgpt_preflight_risk_control\"}\n"), nil); code != "codex_chatgpt_preflight_risk_control" {
+		t.Fatalf("staged code %q", code)
+	}
 	if _, code := parseBatchLoginOutput([]byte("{\"ok\":false,\"code\":\"Bad Code With Secret pw\"}"), nil); code != "login_failed" {
 		t.Fatalf("unsafe code leaked: %q", code)
 	}

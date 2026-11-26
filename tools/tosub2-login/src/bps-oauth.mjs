@@ -145,14 +145,14 @@ export function createBpsOAuthTransaction(options = {}) {
   const ttlMs = options.ttlMs ?? 10 * 60_000;
   if (!Number.isSafeInteger(ttlMs) || ttlMs < 1 || ttlMs > 30 * 60_000) throw fail("bps_invalid_transaction_expiry");
   const expiresAt = nowMs(options.now) + ttlMs;
-  const state = crypto.randomBytes(32).toString("base64url");
+  const state = `bps.${crypto.randomBytes(24).toString("base64url")}.PC`;
   let verifier = crypto.randomBytes(48).toString("base64url");
   let consumed = false;
   const authorization = new URL(`${authBase}/api/accounts/authorize`);
   authorization.search = new URLSearchParams({
     client_id: BPS_EXCEL_CLIENT_ID, response_type: "code", redirect_uri: BPS_EXCEL_CALLBACK,
     scope: SCOPE, audience: AUDIENCE, code_challenge_method: "S256",
-    code_challenge: crypto.createHash("sha256").update(verifier).digest("base64url"), state, platform: "OfficeOnline",
+    code_challenge: crypto.createHash("sha256").update(verifier).digest("base64url"), state, platform: "PC",
   }).toString();
   return Object.freeze({
     profileRef, authorizationUrl: authorization.toString(), redirectUri: BPS_EXCEL_CALLBACK, state, expiresAt,

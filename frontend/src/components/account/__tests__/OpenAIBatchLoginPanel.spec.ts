@@ -1,6 +1,7 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createI18n } from 'vue-i18n'
+import zhAccounts from '@/i18n/locales/zh/admin/accounts'
 import OpenAIBatchLoginPanel from '../OpenAIBatchLoginPanel.vue'
 
 const api = vi.hoisted(() => ({
@@ -19,17 +20,17 @@ vi.mock('@/api/admin', () => ({
 
 const LINE = 'a@example.com----pw-secret----JBSWY3DPEHPK3PXP'
 
-function render() {
+function render(locale = 'en') {
   return mount(OpenAIBatchLoginPanel, {
     props: { proxyId: 5, concurrency: 7, priority: 2 },
     global: {
       plugins: [
         createI18n({
           legacy: false,
-          locale: 'en',
+          locale,
           missingWarn: false,
           fallbackWarn: false,
-          messages: { en: {} }
+          messages: { en: {}, zh: { admin: zhAccounts } }
         })
       ],
       stubs: { GroupSelector: true }
@@ -109,5 +110,47 @@ describe('OpenAIBatchLoginPanel', () => {
     wrapper.unmount()
     await vi.advanceTimersByTimeAsync(10000)
     expect(api.getBatchLogin.mock.calls.length).toBe(callsBefore)
+  })
+
+  it('describes email verification as an incomplete automated login', async () => {
+    const item = { email: 'a@example.com', target: 'bps' }
+    api.startBatchLogin.mockResolvedValue({
+      id: 'job3',
+      status: 'running',
+      items: [{ ...item, status: 'pending' }]
+    })
+    api.getBatchLogin.mockResolvedValue({
+      id: 'job3',
+      status: 'done',
+      items: [{ ...item, status: 'failed', code: 'email_otp_required' }]
+    })
+    const wrapper = render('zh')
+    await wrapper.get('textarea').setValue(LINE)
+    await wrapper.get('button.btn-primary').trigger('click')
+    await flushPromises()
+
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(wrapper.get('li').text()).toContain('自动登录停在邮箱验证码步骤，授权尚未完成')
+  })
+
+  it('shows the Codex stage and risk-control category for a failed preflight', async () => {
+    const item = { email: 'a@example.com', target: 'codex' }
+    api.startBatchLogin.mockResolvedValue({
+      id: 'job4',
+      status: 'running',
+      items: [{ ...item, status: 'pending' }]
+    })
+    api.getBatchLogin.mockResolvedValue({
+      id: 'job4',
+      status: 'done',
+      items: [{ ...item, status: 'failed', code: 'codex_chatgpt_preflight_risk_control' }]
+    })
+    const wrapper = render('zh')
+    await wrapper.get('textarea').setValue(LINE)
+    await wrapper.get('button.btn-primary').trigger('click')
+    await flushPromises()
+
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(wrapper.get('li').text()).toContain('Codex ChatGPT 代理预检: 命中安全校验')
   })
 })

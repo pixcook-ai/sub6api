@@ -166,6 +166,16 @@ function targetLabel(target: BatchLoginTarget): string {
 }
 
 function codeLabel(code: string): string {
+  const transportFailures = ['proxy_error', 'tls_error', 'risk_control']
+  const transportFailure = transportFailures.find((failure) => code.endsWith(`_${failure}`))
+  if (transportFailure) {
+    const stage = code.slice(0, -(transportFailure.length + 1))
+    const stageKey = `admin.accounts.oauth.openai.batchLoginFailureStages.${stage}`
+    const stageLabel = t(stageKey)
+    if (stageLabel !== stageKey) {
+      return `${stageLabel}: ${t(`admin.accounts.oauth.openai.batchLoginItemCodes.${transportFailure}`)}`
+    }
+  }
   const key = `admin.accounts.oauth.openai.batchLoginItemCodes.${code}`
   const label = t(key)
   return label === key ? code : label

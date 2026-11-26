@@ -1515,7 +1515,12 @@ export default {
           batchLoginItemCodes: {
             already_exists: '账号已存在',
             login_failed: '登录失败',
-            email_otp_required: '该账号需要邮箱验证码，无法自动登录',
+            proxy_error: '代理连接失败',
+            tls_error: 'TLS 握手失败',
+            risk_control: '命中安全校验',
+            email_otp_required: '自动登录停在邮箱验证码步骤，授权尚未完成',
+            additional_verification_required: '本次授权遇到了额外验证步骤，自动流程无法继续',
+            callback_state_mismatch: '授权回调状态不匹配',
             login_timeout: '登录超时',
             missing_credentials: '缺少凭据',
             invalid_arguments: '参数无效',
@@ -1529,6 +1534,15 @@ export default {
             invalid_expiry: '返回过期时间无效',
             lookup_failed: '查重失败',
             create_failed: '建号失败'
+          },
+          batchLoginFailureStages: {
+            codex_chatgpt_preflight: 'Codex ChatGPT 代理预检',
+            bps_auth_preflight: 'Excel / BPS 授权域名预检',
+            codex_chatgpt_login: 'Codex ChatGPT 网页登录',
+            codex_oauth: 'Codex OAuth 授权',
+            codex_token_exchange: 'Codex Token 交换',
+            bps_oauth_login: 'Excel / BPS OAuth 授权',
+            bps_token_exchange: 'Excel / BPS Token 交换'
           },
           codexPatEmpty: '请输入 Codex Personal Access Token',
           codexPatImportFailed: 'Codex PAT 账号创建失败',
