@@ -1583,6 +1583,7 @@ export default {
             '方式1：复制完整的链接\n(http://localhost:xxx/auth/callback?code=...)\n方式2：仅复制 code 参数的值',
           authCodeHint: '您可以直接复制整个链接或仅复制 code 参数值，系统会自动识别',
           excelTitle: 'Excel / BPS 账户授权',
+          channelLabel: '授权渠道',
           excelTypeLabel: 'Excel / BPS 授权',
           excelTypeDesc: '使用 Excel 官方加载项的独立授权，与 Codex 授权互不通用。',
           excelSessionMismatch: '授权返回的 client 不是 Excel 官方 client，请重新生成授权链接。',

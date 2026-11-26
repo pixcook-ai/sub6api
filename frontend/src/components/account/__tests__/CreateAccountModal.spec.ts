@@ -9,6 +9,7 @@ const {
   showWarningMock,
   importCodexSessionMock,
   createOpenAICodexPATMock,
+  generateAuthUrlMock,
   authIsSimpleMode,
 } = vi.hoisted(() => ({
   createAccountMock: vi.fn(),
@@ -17,6 +18,7 @@ const {
   showWarningMock: vi.fn(),
   importCodexSessionMock: vi.fn(),
   createOpenAICodexPATMock: vi.fn(),
+  generateAuthUrlMock: vi.fn(),
   authIsSimpleMode: { value: true },
 }))
 
@@ -45,6 +47,7 @@ vi.mock('@/api/admin', () => ({
       checkMixedChannelRisk: vi.fn().mockResolvedValue({ has_risk: false }),
       importCodexSession: importCodexSessionMock,
       createOpenAICodexPAT: createOpenAICodexPATMock,
+      generateAuthUrl: generateAuthUrlMock,
     },
     settings: {
       getWebSearchEmulationConfig: vi.fn().mockResolvedValue({ enabled: false, providers: [] }),
@@ -52,6 +55,9 @@ vi.mock('@/api/admin', () => ({
     },
     tlsFingerprintProfiles: {
       list: vi.fn().mockResolvedValue([]),
+    },
+    groups: {
+      getAll: vi.fn().mockResolvedValue([]),
     },
   },
 }))
@@ -69,6 +75,7 @@ vi.mock('vue-i18n', async () => {
 })
 
 import CreateAccountModal from '../CreateAccountModal.vue'
+import OAuthAuthorizationFlow from '../OAuthAuthorizationFlow.vue'
 
 const BaseDialogStub = defineComponent({
   name: 'BaseDialog',
@@ -84,11 +91,22 @@ const OAuthAuthorizationFlowStub = defineComponent({
     showAgentIdentityOption: Boolean,
     showCodexPatOption: Boolean,
     initialInputMethod: String,
+    authUrl: String,
+    sessionId: String,
   },
-  data: () => ({ inputMethod: 'manual' }),
-  emits: ['import-codex-session', 'import-codex-pat'],
+  data: () => ({ inputMethod: 'manual', authCode: '', oauthState: '', refreshToken: '' }),
+  emits: ['import-codex-session', 'import-codex-pat', 'generate-url', 'update:input-method'],
+  methods: {
+    reset() {
+      this.inputMethod = 'manual'
+      this.authCode = ''
+      this.oauthState = ''
+      this.refreshToken = ''
+    },
+  },
   template: `
     <div>
+      <slot v-if="inputMethod === 'manual'" name="manual-options" />
       <button data-testid="import-codex-session" @click="$emit('import-codex-session', 'session-json')">session</button>
       <button data-testid="import-codex-pat" @click="$emit('import-codex-pat', 'pat-token')">pat</button>
     </div>
@@ -133,13 +151,13 @@ const ModelWhitelistSelectorStub = defineComponent({
   >models</button>`,
 })
 
-function mountModal(groups: any[] = []) {
+function mountModal(groups: any[] = [], useRealOAuthFlow = false) {
   return mount(CreateAccountModal, {
     props: { show: true, proxies: [], groups },
     global: {
       stubs: {
         BaseDialog: BaseDialogStub,
-        OAuthAuthorizationFlow: OAuthAuthorizationFlowStub,
+        OAuthAuthorizationFlow: useRealOAuthFlow ? false : OAuthAuthorizationFlowStub,
         ConfirmDialog: true,
         Select: true,
         Icon: true,
@@ -210,6 +228,10 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
       warnings: [],
     })
     createOpenAICodexPATMock.mockReset().mockResolvedValue({})
+    generateAuthUrlMock.mockReset().mockResolvedValue({
+      auth_url: 'https://auth.example.com/authorize?state=test-state',
+      session_id: 'test-session',
+    })
   })
 
   afterEach(() => vi.useRealTimers())
@@ -599,6 +621,136 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
     expect(flow.props('showAgentIdentityOption')).toBe(true)
     expect(flow.props('showCodexPatOption')).toBe(true)
     expect(flow.props('initialInputMethod')).toBe('manual')
+  })
+
+  it('keeps the manual OAuth channel selection out of step one', async () => {
+    const wrapper = mountModal()
+    await selectButtonByText(wrapper, 'OpenAI')
+
+    expect(wrapper.find('[data-testid="openai-excel-oauth"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="openai-oauth-channel"]').exists()).toBe(false)
+  })
+
+  it('shows the Codex and Excel channel choices for manual authorization', async () => {
+    const wrapper = await openCodexImportStep()
+    const channel = wrapper.get('[data-testid="openai-oauth-channel"]')
+    const radios = channel.findAll<HTMLInputElement>('input[type="radio"]')
+
+    expect(channel.text()).toContain('Codex OAuth')
+    expect(channel.text()).toContain('Excel / BPS OAuth')
+    expect(radios).toHaveLength(2)
+    expect(radios[0]?.element.checked).toBe(true)
+    expect(radios[1]?.element.checked).toBe(false)
+
+    const flow = wrapper.getComponent(OAuthAuthorizationFlowStub)
+    flow.vm.inputMethod = 'batch_login'
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="openai-oauth-channel"]').exists()).toBe(false)
+  })
+
+  it('uses the Excel OAuth client when generating the selected manual channel URL', async () => {
+    const wrapper = await openCodexImportStep()
+    const radios = wrapper.get('[data-testid="openai-oauth-channel"]').findAll('input[type="radio"]')
+    await radios[1]?.setValue(true)
+
+    const flow = wrapper.getComponent(OAuthAuthorizationFlowStub)
+    flow.vm.$emit('generate-url')
+    await flushPromises()
+
+    expect(generateAuthUrlMock).toHaveBeenCalledWith('/admin/openai/generate-auth-url', {
+      oauth_client: 'excel',
+    })
+    expect(flow.props('authUrl')).toBe('https://auth.example.com/authorize?state=test-state')
+    expect(flow.props('sessionId')).toBe('test-session')
+  })
+
+  it('clears the actual manual callback when changing channels and keeps batch targets independent', async () => {
+    const wrapper = mountModal([], true)
+    await selectButtonByText(wrapper, 'OpenAI')
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('OpenAI account')
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    const flow = wrapper.getComponent(OAuthAuthorizationFlow)
+    const channel = wrapper.get('[data-testid="openai-oauth-channel"]')
+
+    flow.vm.$emit('generate-url')
+    await flushPromises()
+    expect(generateAuthUrlMock).toHaveBeenLastCalledWith('/admin/openai/generate-auth-url', {})
+    await flow.get('textarea').setValue('http://localhost/callback?code=old-code&state=old-state')
+    await flushPromises()
+    expect(flow.vm.authCode).toBe('old-code')
+    expect(flow.vm.oauthState).toBe('old-state')
+
+    await channel.findAll('input[type="radio"]')[1]?.setValue(true)
+    await flushPromises()
+    expect(flow.props('authUrl')).toBe('')
+    expect(flow.props('sessionId')).toBe('')
+    expect(flow.vm.authCode).toBe('')
+    expect(flow.vm.oauthState).toBe('')
+
+    await flow.get('input[type="radio"][value="batch_login"]').setValue(true)
+    await flushPromises()
+    expect(wrapper.find('[data-testid="openai-oauth-channel"]').exists()).toBe(false)
+    expect(flow.get<HTMLInputElement>('input[type="radio"][value="batch_login"]').element.checked).toBe(true)
+    expect(flow.get<HTMLInputElement>('input[type="checkbox"][value="bps"]').element.checked).toBe(true)
+    expect(flow.get<HTMLInputElement>('input[type="checkbox"][value="codex"]').element.checked).toBe(false)
+    await flow.get('input[type="checkbox"][value="bps"]').setValue(false)
+    await flow.get('input[type="checkbox"][value="codex"]').setValue(true)
+    expect(flow.get<HTMLInputElement>('input[type="radio"][value="batch_login"]').element.checked).toBe(true)
+
+    await flow.get('input[type="radio"][value="manual"]').setValue(true)
+    await flushPromises()
+    expect(wrapper.get('[data-testid="openai-oauth-channel"]').findAll<HTMLInputElement>('input[type="radio"]')[0]?.element.checked).toBe(true)
+    flow.vm.$emit('generate-url')
+    await flushPromises()
+    expect(generateAuthUrlMock).toHaveBeenLastCalledWith('/admin/openai/generate-auth-url', {})
+    wrapper.unmount()
+  })
+
+  it('preserves the selected refresh-token method when leaving the Excel manual channel', async () => {
+    const wrapper = await openCodexImportStep()
+    const radios = wrapper.get('[data-testid="openai-oauth-channel"]').findAll('input[type="radio"]')
+    await radios[1]?.setValue(true)
+    const flow = wrapper.getComponent(OAuthAuthorizationFlowStub)
+    const reset = vi.spyOn(flow.vm, 'reset')
+
+    flow.vm.inputMethod = 'refresh_token'
+    flow.vm.$emit('update:input-method', 'refresh_token')
+    await flushPromises()
+
+    expect(flow.vm.inputMethod).toBe('refresh_token')
+    expect(reset).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-testid="openai-oauth-channel"]').exists()).toBe(false)
+  })
+
+  it('clears the generated session, child credentials, and pricing groups when changing channels', async () => {
+    authIsSimpleMode.value = false
+    const wrapper = await openCodexImportStep()
+    const radios = wrapper.get('[data-testid="openai-oauth-channel"]').findAll('input[type="radio"]')
+    await radios[1]?.setValue(true)
+    await wrapper.get('[data-testid="select-pricing-groups"]').trigger('click')
+
+    const flow = wrapper.getComponent(OAuthAuthorizationFlowStub)
+    flow.vm.$emit('generate-url')
+    await flushPromises()
+    flow.vm.authCode = 'old-code'
+    flow.vm.oauthState = 'old-state'
+    flow.vm.refreshToken = 'old-refresh-token'
+    const reset = vi.spyOn(flow.vm, 'reset')
+    expect(wrapper.getComponent(GroupSelectorStub).props('modelValue')).toEqual([1, 2])
+
+    await radios[0]?.setValue(true)
+    await flushPromises()
+
+    expect(flow.props('authUrl')).toBe('')
+    expect(flow.props('sessionId')).toBe('')
+    expect(reset).toHaveBeenCalledOnce()
+    expect(flow.vm.authCode).toBe('')
+    expect(flow.vm.oauthState).toBe('')
+    expect(flow.vm.refreshToken).toBe('')
+
+    await radios[1]?.setValue(true)
+    expect(wrapper.getComponent(GroupSelectorStub).props('modelValue')).toEqual([])
   })
 
   it.each([

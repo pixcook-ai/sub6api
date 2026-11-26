@@ -441,13 +441,6 @@
           </button>
 
         </div>
-        <label v-if="accountCategory === 'oauth-based'" class="mt-3 flex items-start gap-2 text-sm text-gray-700 dark:text-gray-200" data-testid="openai-excel-oauth">
-          <input v-model="openaiExcelOAuth" type="checkbox" class="mt-0.5 rounded border-gray-300 text-primary-600 focus:ring-primary-500 dark:border-dark-500" />
-          <span>
-            <span class="block font-medium">{{ t('admin.accounts.oauth.openai.excelTypeLabel') }}</span>
-            <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.accounts.oauth.openai.excelTypeDesc') }}</span>
-          </span>
-        </label>
       </div>
 
       <!-- Account Type Selection (Grok) -->
@@ -3620,7 +3613,33 @@
         @authorize-password="handleGrokAuthorizePassword"
         @batch-login-created="emit('created')"
         @batch-login-busy="batchLoginBusy = $event"
-      />
+        @update:input-method="handleAuthInputMethodChange"
+      >
+        <template v-if="form.platform === 'openai'" #manual-options>
+          <fieldset data-testid="openai-oauth-channel">
+            <legend class="mb-2 text-sm font-medium text-blue-800 dark:text-blue-300">
+              {{ t('admin.accounts.oauth.openai.channelLabel') }}
+            </legend>
+            <div class="flex flex-wrap gap-4">
+              <label class="flex cursor-pointer items-center gap-2 text-sm text-blue-900 dark:text-blue-200">
+                <input v-model="openaiExcelOAuth" type="radio" :value="false" :disabled="currentOAuthLoading" class="text-blue-600 focus:ring-blue-500" />
+                Codex OAuth
+              </label>
+              <label class="flex cursor-pointer items-center gap-2 text-sm text-blue-900 dark:text-blue-200">
+                <input v-model="openaiExcelOAuth" type="radio" :value="true" :disabled="currentOAuthLoading" class="text-blue-600 focus:ring-blue-500" />
+                Excel / BPS OAuth
+              </label>
+            </div>
+          </fieldset>
+          <GroupSelector
+            v-if="isOpenAIBPSOAuth"
+            v-model="form.group_ids"
+            :groups="groups"
+            platform="openai_bps"
+            :mixed-scheduling="mixedScheduling"
+          />
+        </template>
+      </OAuthAuthorizationFlow>
 
     </div>
 
@@ -4873,6 +4892,16 @@ const canExchangeCode = computed(() => {
 })
 
 // Watchers
+watch(openaiExcelOAuth, () => {
+  openaiOAuth.resetState()
+  if (oauthFlowRef.value?.inputMethod === 'manual') oauthFlowRef.value.reset()
+  form.group_ids = []
+})
+
+const handleAuthInputMethodChange = (method: AuthInputMethod) => {
+  if (method !== 'manual') openaiExcelOAuth.value = false
+}
+
 watch(
   () => props.show,
   (newVal) => {
@@ -5409,6 +5438,7 @@ const submitCreateAccount = async (payload: CreateAccountRequest) => {
 
 // Methods
 const resetForm = () => {
+  openaiExcelOAuth.value = false
   pendingBPSCreate.value = null
   bpsDraft.value = newBPSAccountDraft()
   bpsTestAfterSave.value = false

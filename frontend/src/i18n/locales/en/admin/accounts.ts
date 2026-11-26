@@ -1487,6 +1487,7 @@ export default {
           authCodeHint:
             'You can copy the entire URL or just the code parameter value, the system will auto-detect',
           excelTitle: 'Excel / BPS Account Authorization',
+          channelLabel: 'Authorization channel',
           excelTypeLabel: 'Excel / BPS authorization',
           excelTypeDesc: 'Uses the official Excel add-in authorization, which is independent from Codex authorization.',
           excelSessionMismatch: 'The authorization returned a client that is not the official Excel client. Please regenerate the authorization URL.',
