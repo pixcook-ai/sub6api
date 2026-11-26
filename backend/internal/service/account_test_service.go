@@ -156,6 +156,10 @@ type AccountTestService struct {
 	modelMetadataRegistryAt   time.Time
 	pluginManager             *PluginManager
 	openaiGatewayService      *OpenAIGatewayService
+	iqStateProbeAccounts      sync.Map
+	modelTraceAccounts        sync.Map
+	iqQuestionMu              sync.Mutex
+	iqQuestionRunning         map[int64]int
 	agentIdentityTaskMu       sync.Mutex
 	agentIdentityWS           agentIdentityWSConnectionInvalidator
 	// grokWSDialer is optional; realtime account tests use the default OpenAI-style
@@ -363,15 +367,14 @@ func createTestPayload(modelID string) (map[string]any, error) {
 // mode is optional - "compact" routes OpenAI accounts to the /responses/compact probe path
 // opts is optional media (image/audio data URLs for real generation / STT).
 func (s *AccountTestService) TestAccountConnection(c *gin.Context, accountID int64, modelID string, prompt string, mode string, opts ...AccountTestOptions) error {
-	ctx := c.Request.Context()
-	testOpts := firstAccountTestOptions(opts)
-
-	// Get account
-	account, err := s.accountRepo.GetByID(ctx, accountID)
+	account, err := s.accountRepo.GetByID(c.Request.Context(), accountID)
 	if err != nil {
 		return s.sendErrorAndEnd(c, "Account not found")
 	}
+	return s.testAccountConnection(c, account, modelID, prompt, mode, firstAccountTestOptions(opts))
+}
 
+func (s *AccountTestService) testAccountConnection(c *gin.Context, account *Account, modelID, prompt, mode string, testOpts AccountTestOptions) error {
 	// Synthetic UI load-test accounts exercise the real SSE parsing and modal
 	// interactions, but intentionally do not send their placeholder credentials
 	// to an upstream provider.
@@ -390,6 +393,9 @@ func (s *AccountTestService) TestAccountConnection(c *gin.Context, accountID int
 	if account.IsCNProvider() {
 		switch account.GetAPIProtocol() {
 		case APIProtocolAdaptive:
+			if _, questionTest := iqQuestionOptionsFromContext(c.Request.Context()); questionTest {
+				return s.testCNProviderChatCompletionsConnection(c, account, modelID, prompt)
+			}
 			return s.testCNProviderAdaptiveConnection(c, account, modelID, prompt)
 		case APIProtocolResponses:
 			return s.testOpenAIAccountConnection(c, account, modelID, prompt, normalizeAccountTestMode(mode))
@@ -497,6 +503,7 @@ func (s *AccountTestService) testCNProviderChatCompletionsConnection(c *gin.Cont
 // testClaudeAccountConnection tests an Anthropic Claude account's connection
 func (s *AccountTestService) testClaudeAccountConnection(c *gin.Context, account *Account, modelID string) error {
 	ctx := c.Request.Context()
+	questionOptions, questionTest := iqQuestionOptionsFromContext(ctx)
 
 	// Determine the model to use
 	testModelID := modelID
@@ -505,7 +512,7 @@ func (s *AccountTestService) testClaudeAccountConnection(c *gin.Context, account
 	}
 
 	// API Key 账号测试连接时也需要应用通配符模型映射。
-	if account.Type == "apikey" {
+	if account.Type == "apikey" || (questionTest && account.Type != AccountTypeServiceAccount) {
 		testModelID = account.GetMappedModel(testModelID)
 	}
 
@@ -558,6 +565,9 @@ func (s *AccountTestService) testClaudeAccountConnection(c *gin.Context, account
 	if err != nil {
 		return s.sendErrorAndEnd(c, "Failed to create test payload")
 	}
+	if questionTest {
+		applyIQClaudePayload(payload, testModelID, questionOptions, account.IsOAuth())
+	}
 	payloadBytes, _ := json.Marshal(payload)
 
 	// Send test_start event
@@ -608,7 +618,7 @@ func (s *AccountTestService) testClaudeAccountConnection(c *gin.Context, account
 		errMsg := fmt.Sprintf("API returned %d: %s", resp.StatusCode, string(body))
 
 		// 403 表示账号被上游封禁，标记为 error 状态
-		if resp.StatusCode == http.StatusForbidden {
+		if resp.StatusCode == http.StatusForbidden && !questionTest {
 			_ = s.accountRepo.SetError(ctx, account.ID, errMsg)
 		}
 
@@ -620,6 +630,7 @@ func (s *AccountTestService) testClaudeAccountConnection(c *gin.Context, account
 }
 
 func (s *AccountTestService) testClaudeVertexServiceAccountConnection(c *gin.Context, ctx context.Context, account *Account, testModelID string) error {
+	questionOptions, questionTest := iqQuestionOptionsFromContext(ctx)
 	if mappedModel, matched := account.ResolveMappedModel(testModelID); matched {
 		testModelID = mappedModel
 	} else {
@@ -635,6 +646,9 @@ func (s *AccountTestService) testClaudeVertexServiceAccountConnection(c *gin.Con
 	payload, err := createTestPayload(testModelID)
 	if err != nil {
 		return s.sendErrorAndEnd(c, "Failed to create test payload")
+	}
+	if questionTest {
+		applyIQClaudePayload(payload, testModelID, questionOptions, false)
 	}
 	payloadBytes, _ := json.Marshal(payload)
 	vertexBody, err := buildVertexAnthropicRequestBody(payloadBytes)
@@ -678,7 +692,7 @@ func (s *AccountTestService) testClaudeVertexServiceAccountConnection(c *gin.Con
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		errMsg := fmt.Sprintf("API returned %d: %s", resp.StatusCode, string(body))
-		if resp.StatusCode == http.StatusForbidden {
+		if resp.StatusCode == http.StatusForbidden && !questionTest {
 			_ = s.accountRepo.SetError(ctx, account.ID, errMsg)
 		}
 		return s.sendErrorAndEnd(c, errMsg)
@@ -719,6 +733,10 @@ func (s *AccountTestService) testBedrockAccountConnection(c *gin.Context, ctx co
 		},
 		"max_tokens":  256,
 		"temperature": 1,
+	}
+	questionOptions, questionTest := iqQuestionOptionsFromContext(ctx)
+	if questionTest {
+		applyIQClaudePayload(bedrockPayload, testModelID, questionOptions, false)
 	}
 	bedrockBody, _ := json.Marshal(bedrockPayload)
 
@@ -769,12 +787,16 @@ func (s *AccountTestService) testBedrockAccountConnection(c *gin.Context, ctx co
 
 	// Bedrock non-streaming response is standard Claude JSON, extract the text
 	var result struct {
-		Content []struct {
+		StopReason string `json:"stop_reason"`
+		Content    []struct {
 			Text string `json:"text"`
 		} `json:"content"`
 	}
 	if err := json.Unmarshal(body, &result); err != nil {
 		return s.sendErrorAndEnd(c, fmt.Sprintf("Failed to parse response: %s", err.Error()))
+	}
+	if questionTest && (result.StopReason == "max_tokens" || result.StopReason == "refusal") {
+		return s.sendErrorAndEnd(c, "Upstream stopped generation: "+result.StopReason)
 	}
 
 	text := ""
@@ -885,6 +907,10 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 		upstreamTestModelID = normalizeOpenAIModelForUpstream(credentialAccount, testModelID)
 	}
 	payload := createOpenAITestPayload(upstreamTestModelID, isOAuth)
+	questionOptions, questionTest := iqQuestionOptionsFromContext(ctx)
+	if questionTest {
+		applyIQResponsesPayload(payload, upstreamTestModelID, questionOptions, isOAuth)
+	}
 	payloadBytes, _ := json.Marshal(payload)
 
 	// Send test_start event once. A task-invalid Agent Identity response may
@@ -951,7 +977,7 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	if isOAuth && s.accountRepo != nil {
+	if isOAuth && !questionTest && s.accountRepo != nil {
 		if updates, err := extractOpenAICodexProbeUpdates(resp); err == nil && len(updates) > 0 {
 			_ = s.accountRepo.UpdateExtra(ctx, account.ID, updates)
 			mergeAccountExtra(account, updates)
@@ -969,11 +995,11 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 			c.Request = c.Request.WithContext(markAgentIdentityTaskRecoveryTried(ctx))
 			return s.testOpenAIAccountConnection(c, account, modelID, prompt, mode)
 		}
-		if resp.StatusCode == http.StatusTooManyRequests {
+		if resp.StatusCode == http.StatusTooManyRequests && !questionTest {
 			s.reconcileOpenAI429State(ctx, account, resp.Header, body)
 		}
 		// 401 Unauthorized: 标记账号为永久错误
-		if resp.StatusCode == http.StatusUnauthorized && s.accountRepo != nil {
+		if resp.StatusCode == http.StatusUnauthorized && !questionTest && s.accountRepo != nil {
 			errMsg := fmt.Sprintf("Authentication failed (401): %s", string(body))
 			_ = s.accountRepo.SetError(ctx, account.ID, errMsg)
 		}
@@ -1250,6 +1276,15 @@ func (s *AccountTestService) testGrokResponsesConnection(c *gin.Context, ctx con
 	payloadBytes, err := buildGrokQuotaProbeBody(testModelID)
 	if err != nil {
 		return s.sendErrorAndEnd(c, "Failed to create Grok test payload")
+	}
+	if options, questionTest := iqQuestionOptionsFromContext(ctx); questionTest {
+		payload := createOpenAITestPayload(testModelID, false)
+		delete(payload, "instructions")
+		applyIQResponsesPayload(payload, testModelID, options, false)
+		payloadBytes, err = json.Marshal(payload)
+		if err != nil {
+			return s.sendErrorAndEnd(c, "Failed to create Grok question payload")
+		}
 	}
 
 	if !agentIdentityTaskRecoveryWasTried(ctx) {
@@ -2127,6 +2162,12 @@ func (s *AccountTestService) testOpenAIChatCompletionsConnection(
 	c.Writer.Flush()
 
 	payload := createOpenAIChatCompletionsTestPayload(testModelID, prompt)
+	questionOptions, questionTest := iqQuestionOptionsFromContext(ctx)
+	if questionTest {
+		if effort := iqOpenAIReasoningEffort(questionOptions.reasoningEffort, testModelID); effort != "" {
+			payload["reasoning_effort"] = effort
+		}
+	}
 	payloadBytes, _ := json.Marshal(payload)
 
 	s.sendEvent(c, TestEvent{Type: "test_start", Model: testModelID})
@@ -2161,10 +2202,10 @@ func (s *AccountTestService) testOpenAIChatCompletionsConnection(
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		if resp.StatusCode == http.StatusTooManyRequests {
+		if resp.StatusCode == http.StatusTooManyRequests && !questionTest {
 			s.reconcileOpenAI429State(ctx, account, resp.Header, body)
 		}
-		if resp.StatusCode == http.StatusUnauthorized && s.accountRepo != nil {
+		if resp.StatusCode == http.StatusUnauthorized && !questionTest && s.accountRepo != nil {
 			errMsg := fmt.Sprintf("Chat Completions authentication failed (401): %s", string(body))
 			_ = s.accountRepo.SetError(ctx, account.ID, errMsg)
 		}
@@ -2483,7 +2524,8 @@ func (s *AccountTestService) testAntigravityAccountConnection(c *gin.Context, ac
 	s.sendEvent(c, TestEvent{Type: "test_start", Model: testModelID})
 
 	// 调用 AntigravityGatewayService.TestConnection（复用协议转换逻辑）
-	result, err := s.antigravityGatewayService.TestConnection(ctx, account, testModelID)
+	options, _ := iqQuestionOptionsFromContext(ctx)
+	result, err := s.antigravityGatewayService.TestConnectionWithPrompt(ctx, account, testModelID, options.prompt)
 	if err != nil {
 		return s.sendErrorAndEnd(c, err.Error())
 	}
@@ -2815,11 +2857,16 @@ func createOpenAIChatCompletionsTestPayload(modelID string, prompt string) map[s
 // processClaudeStream processes the SSE stream from Claude API
 func (s *AccountTestService) processClaudeStream(c *gin.Context, body io.Reader) error {
 	reader := bufio.NewReader(body)
+	options, questionTest := iqQuestionOptionsFromContext(c.Request.Context())
+	endTurn := false
 
 	for {
 		line, err := reader.ReadString('\n')
 		if err != nil {
 			if err == io.EOF {
+				if questionTest {
+					return s.sendErrorAndEnd(c, "Stream ended before message_stop")
+				}
 				s.sendEvent(c, TestEvent{Type: "test_complete", Success: true})
 				return nil
 			}
@@ -2833,6 +2880,9 @@ func (s *AccountTestService) processClaudeStream(c *gin.Context, body io.Reader)
 
 		jsonStr := sseDataPrefix.ReplaceAllString(line, "")
 		if jsonStr == "[DONE]" {
+			if questionTest {
+				return s.sendErrorAndEnd(c, "Stream ended before message_stop")
+			}
 			s.sendEvent(c, TestEvent{Type: "test_complete", Success: true})
 			return nil
 		}
@@ -2852,8 +2902,20 @@ func (s *AccountTestService) processClaudeStream(c *gin.Context, body io.Reader)
 				}
 			}
 		case "message_stop":
+			if options.fingerprint && !endTurn {
+				return s.sendErrorAndEnd(c, "Stream ended without a completed Claude turn")
+			}
 			s.sendEvent(c, TestEvent{Type: "test_complete", Success: true})
 			return nil
+		case "message_delta":
+			if questionTest {
+				delta, _ := data["delta"].(map[string]any)
+				stopReason, _ := delta["stop_reason"].(string)
+				endTurn = endTurn || stopReason == "end_turn"
+				if stopReason == "max_tokens" || stopReason == "refusal" {
+					return s.sendErrorAndEnd(c, "Upstream stopped generation: "+stopReason)
+				}
+			}
 		case "error":
 			errorMsg := "Unknown error"
 			if errData, ok := data["error"].(map[string]any); ok {
@@ -2872,6 +2934,7 @@ func (s *AccountTestService) processOpenAIChatCompletionsStream(c *gin.Context, 
 	reader := bufio.NewReader(body)
 	seenJSON := false
 	seenFinish := false
+	options, questionTest := iqQuestionOptionsFromContext(c.Request.Context())
 
 	for {
 		line, err := reader.ReadString('\n')
@@ -2897,6 +2960,9 @@ func (s *AccountTestService) processOpenAIChatCompletionsStream(c *gin.Context, 
 
 		jsonStr := sseDataPrefix.ReplaceAllString(line, "")
 		if jsonStr == "[DONE]" {
+			if options.fingerprint && !seenFinish {
+				return s.sendErrorAndEnd(c, "Chat Completions stream ended without a completed turn")
+			}
 			s.sendEvent(c, TestEvent{Type: "status", Text: "已通过 /v1/chat/completions 验证"})
 			s.sendEvent(c, TestEvent{Type: "test_complete", Success: true})
 			return nil
@@ -2936,6 +3002,9 @@ func (s *AccountTestService) processOpenAIChatCompletionsStream(c *gin.Context, 
 				}
 			}
 			if finishReason, ok := choice["finish_reason"].(string); ok && finishReason != "" {
+				if questionTest && finishReason != "stop" {
+					return s.sendErrorAndEnd(c, "Upstream stopped generation: "+finishReason)
+				}
 				seenFinish = true
 			}
 		}
@@ -2946,6 +3015,7 @@ func (s *AccountTestService) processOpenAIChatCompletionsStream(c *gin.Context, 
 func (s *AccountTestService) processOpenAIStream(c *gin.Context, body io.Reader) error {
 	reader := bufio.NewReader(body)
 	seenCompleted := false
+	_, questionTest := iqQuestionOptionsFromContext(c.Request.Context())
 
 	for {
 		line, err := reader.ReadString('\n')
@@ -2987,7 +3057,18 @@ func (s *AccountTestService) processOpenAIStream(c *gin.Context, body io.Reader)
 			if delta, ok := data["delta"].(string); ok && delta != "" {
 				s.sendEvent(c, TestEvent{Type: "content", Text: delta})
 			}
+		case "response.incomplete", "response.refusal.delta", "response.refusal.done":
+			if questionTest {
+				return s.sendErrorAndEnd(c, "Upstream did not complete the response")
+			}
 		case "response.completed", "response.done":
+			if questionTest {
+				response, _ := data["response"].(map[string]any)
+				status, _ := response["status"].(string)
+				if status != "" && status != "completed" {
+					return s.sendErrorAndEnd(c, "Upstream did not complete the response")
+				}
+			}
 			s.sendEvent(c, TestEvent{Type: "test_complete", Success: true})
 			return nil
 		case "response.failed":
@@ -3278,6 +3359,9 @@ func (s *AccountTestService) sendEvent(c *gin.Context, event TestEvent) {
 
 // sendErrorAndEnd sends an error event and ends the stream
 func (s *AccountTestService) sendErrorAndEnd(c *gin.Context, errorMsg string) error {
+	if options, _ := iqQuestionOptionsFromContext(c.Request.Context()); options.fingerprint {
+		errorMsg = "ModelTrace upstream sample failed"
+	}
 	log.Printf("Account test error: %s", errorMsg)
 	s.sendEvent(c, TestEvent{Type: "error", Error: errorMsg})
 	return fmt.Errorf("%s", errorMsg)

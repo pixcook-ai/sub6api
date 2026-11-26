@@ -5,32 +5,65 @@ import (
 	"time"
 )
 
+type PelicanTestConfig struct {
+	QuestionKind    string `json:"question_kind,omitempty"`
+	Prompt          string `json:"prompt"`
+	ReasoningEffort string `json:"reasoning_effort"`
+	ParallelCount   int    `json:"parallel_count"`
+	ModelID         string `json:"model_id,omitempty"`
+}
+
 // ScheduledTestPlan represents a scheduled test plan domain model.
 type ScheduledTestPlan struct {
-	ID             int64      `json:"id"`
-	AccountID      int64      `json:"account_id"`
-	ModelID        string     `json:"model_id"`
-	CronExpression string     `json:"cron_expression"`
-	Enabled        bool       `json:"enabled"`
-	MaxResults     int        `json:"max_results"`
-	AutoRecover    bool       `json:"auto_recover"`
-	LastRunAt      *time.Time `json:"last_run_at"`
-	NextRunAt      *time.Time `json:"next_run_at"`
-	CreatedAt      time.Time  `json:"created_at"`
-	UpdatedAt      time.Time  `json:"updated_at"`
+	PelicanConfig  *PelicanTestConfig `json:"pelican_config,omitempty"`
+	ID             int64              `json:"id"`
+	AccountID      int64              `json:"account_id"`
+	ModelID        string             `json:"model_id"`
+	CronExpression string             `json:"cron_expression"`
+	Enabled        bool               `json:"enabled"`
+	MaxResults     int                `json:"max_results"`
+	AutoRecover    bool               `json:"auto_recover"`
+	LastRunAt      *time.Time         `json:"last_run_at"`
+	NextRunAt      *time.Time         `json:"next_run_at"`
+	CreatedAt      time.Time          `json:"created_at"`
+	UpdatedAt      time.Time          `json:"updated_at"`
 }
 
 // ScheduledTestResult represents a single test execution result.
 type ScheduledTestResult struct {
-	ID           int64     `json:"id"`
-	PlanID       int64     `json:"plan_id"`
-	Status       string    `json:"status"`
-	ResponseText string    `json:"response_text"`
-	ErrorMessage string    `json:"error_message"`
-	LatencyMs    int64     `json:"latency_ms"`
-	StartedAt    time.Time `json:"started_at"`
-	FinishedAt   time.Time `json:"finished_at"`
-	CreatedAt    time.Time `json:"created_at"`
+	PelicanConfig *PelicanTestConfig `json:"pelican_config,omitempty"`
+	ID            int64              `json:"id"`
+	PlanID        int64              `json:"plan_id"`
+	Status        string             `json:"status"`
+	ResponseText  string             `json:"response_text"`
+	ErrorMessage  string             `json:"error_message"`
+	LatencyMs     int64              `json:"latency_ms"`
+	StartedAt     time.Time          `json:"started_at"`
+	FinishedAt    time.Time          `json:"finished_at"`
+	CreatedAt     time.Time          `json:"created_at"`
+}
+
+type scheduledIQPlanRepository interface {
+	ClaimIQPlan(ctx context.Context, planID int64, updatedAt, now, leaseUntil time.Time) (bool, error)
+	FinishIQPlan(ctx context.Context, plan *ScheduledTestPlan, leaseUntil, finishedAt, nextRunAt time.Time, results []*ScheduledTestResult) (bool, error)
+}
+
+type scheduledIQResultRepository interface {
+	GetResult(ctx context.Context, planID, resultID int64) (*ScheduledTestResult, error)
+	ListResultSummaries(ctx context.Context, planID int64, limit int) ([]*ScheduledTestResult, error)
+	ListPelicanHistory(ctx context.Context, beforeID int64, limit int, accountID int64) ([]*PelicanHistoryResult, error)
+	PruneExpiredIQResults(ctx context.Context, before time.Time) error
+}
+
+type PelicanHistoryResult struct {
+	ScheduledTestResult
+	AccountID   int64  `json:"account_id"`
+	AccountName string `json:"account_name"`
+}
+
+type PelicanHistoryPage struct {
+	Items      []*PelicanHistoryResult `json:"items"`
+	NextCursor int64                   `json:"next_cursor"`
 }
 
 // ScheduledTestPlanRepository defines the data access interface for test plans.

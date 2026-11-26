@@ -42,7 +42,11 @@ func (s *AccountTestService) testOpenAIBPSAccountConnection(c *gin.Context, acco
 		path += "/compact"
 	}
 	stream := mode != "compact"
-	body := []byte(bpsJSON(map[string]any{"model": model, "input": prompt, "stream": stream, "prompt_cache_key": "bps-probe-" + uuid.NewString()}))
+	payload := map[string]any{"model": model, "input": prompt, "stream": stream, "prompt_cache_key": "bps-probe-" + uuid.NewString()}
+	if options, ok := iqQuestionOptionsFromContext(c.Request.Context()); ok && options.reasoningEffort != "" {
+		payload["reasoning_effort"] = options.reasoningEffort
+	}
+	body := []byte(bpsJSON(payload))
 	rec := httptest.NewRecorder()
 	writer := &bpsTestStreamWriter{ResponseRecorder: rec}
 	var completed map[string]any
