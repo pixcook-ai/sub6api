@@ -110,6 +110,14 @@ export default {
       },
 
       bps: {
+        usageDetails: 'View usage details',
+        credentialStatusShort: {
+          unknown: 'Expiry unknown',
+          not_expired: 'Token unexpired',
+          expired: 'Token expired',
+          revoked: 'Token revoked',
+          auth_failed: 'Token auth failed'
+        },
         toolRoundtripTest: 'Tool roundtrip test',
         toolRoundtripHint: 'Verifies text, a tool call, and continuation with its result using three requests.',
         usageSourceHint: 'Requests, tokens and costs are tracked locally. Percentages are ChatGPT/Codex quotas, not separate BPS limits.',

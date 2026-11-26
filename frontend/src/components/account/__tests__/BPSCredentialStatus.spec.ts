@@ -4,6 +4,7 @@ import { nextTick } from 'vue'
 import AccountStatusIndicator from '../AccountStatusIndicator.vue'
 import BPSCredentialStatus from '../BPSCredentialStatus.vue'
 import { bpsCredentialState, bpsExpiryMilliseconds } from '@/utils/openaiBps'
+import { formatDateTime } from '@/utils/format'
 import type { Account } from '@/types'
 
 vi.mock('vue-i18n', async () => {
@@ -59,5 +60,50 @@ describe('BPS credential visibility', () => {
     const notice = mount(BPSCredentialStatus, { props: { state: { status: 'not_expired', requires_manual_resume: true } } })
     wrappers.push(notice)
     expect(notice.text()).toContain('admin.accounts.bps.manualResume')
+  })
+  it('shows one short label in compact mode and opens full status and expiry details on click', async () => {
+    const expiresAt = '2026-10-05T08:00:00Z'
+    const wrapper = mount(BPSCredentialStatus, {
+      props: { compact: true, state: { status: 'not_expired', expires_at: expiresAt } },
+    })
+    wrappers.push(wrapper)
+
+    expect(wrapper.text()).toBe('admin.accounts.bps.credentialStatusShort.not_expired')
+    expect(wrapper.text()).not.toContain('admin.accounts.bps.credentialStatus.not_expired')
+    expect(wrapper.text()).not.toContain(formatDateTime(expiresAt))
+    expect(wrapper.findAll('p')).toHaveLength(0)
+    const label = wrapper.get('button')
+    expect(label.attributes('type')).toBe('button')
+    expect(label.attributes('title')).toContain('admin.accounts.bps.credentialStatus.not_expired')
+    expect(label.attributes('title')).toContain(formatDateTime(expiresAt))
+    await label.trigger('click')
+    await nextTick()
+    const tooltip = Array.from(document.querySelectorAll<HTMLElement>('[role="tooltip"]')).find((node) => node.style.display !== 'none')
+    expect(tooltip?.textContent).toContain(formatDateTime(expiresAt))
+  })
+  it.each(['expired', 'revoked', 'auth_failed'] as const)(
+    'keeps compact %s warnings visible in red and preserves their details in the tooltip',
+    (status) => {
+      const wrapper = mount(BPSCredentialStatus, {
+        props: { compact: true, state: { status, error_code: 'token_error', requires_manual_resume: true } },
+      })
+      wrappers.push(wrapper)
+
+      expect(wrapper.text()).toBe(`admin.accounts.bps.credentialStatusShort.${status}`)
+      const label = wrapper.get('button')
+      expect(label.classes()).toContain('badge-danger')
+      expect(label.attributes('title')).toContain(`admin.accounts.bps.credentialStatus.${status}`)
+      expect(label.attributes('title')).toContain('admin.accounts.bps.replaceToken')
+      expect(label.attributes('title')).toContain('token_error')
+      expect(label.attributes('title')).toContain('admin.accounts.bps.manualResume')
+    }
+  )
+  it('keeps unknown expiry explicit in compact mode', () => {
+    const wrapper = mount(BPSCredentialStatus, { props: { compact: true, state: { status: 'unknown' } } })
+    wrappers.push(wrapper)
+
+    expect(wrapper.text()).toBe('admin.accounts.bps.credentialStatusShort.unknown')
+    expect(wrapper.get('button').attributes('title')).toBe('admin.accounts.bps.credentialStatus.unknown')
+    expect(wrapper.find('.badge-danger').exists()).toBe(false)
   })
 })

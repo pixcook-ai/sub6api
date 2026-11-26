@@ -12,15 +12,16 @@
     </div>
   <div ref="rootRef" v-if="showUsageWindows">
     <template v-if="account.platform === 'openai_bps'">
-      <BPSCredentialStatus :state="bpsCredentialState" />
+      <div class="flex items-center gap-1">
+        <BPSCredentialStatus :state="bpsCredentialState" compact />
+        <HelpTooltip v-if="usageInfo" :content="bpsUsageHint" trigger="click">
+          <template #trigger>
+            <button type="button" :aria-label="t('admin.accounts.bps.usageDetails')" class="inline-flex h-4 w-4 items-center justify-center rounded text-[10px] text-gray-400 hover:text-gray-600 dark:hover:text-gray-200">ⓘ</button>
+          </template>
+        </HelpTooltip>
+      </div>
       <div v-if="loading && !usageInfo" class="mt-1 text-xs text-gray-400">{{ t('common.loading') }}</div>
       <div v-if="error" class="mt-1 text-xs text-red-500" role="status">{{ error }}</div>
-      <div v-else-if="usageInfo?.error_code === 'quota_unavailable'" class="mt-1 max-w-[240px] text-[10px] text-amber-600 dark:text-amber-400">
-        {{ t('admin.accounts.bps.quotaUnavailable') }}
-      </div>
-      <p v-if="usageInfo" class="mt-1 max-w-[240px] text-[10px] text-gray-500 dark:text-gray-400">
-        {{ t('admin.accounts.bps.usageSourceHint') }}
-      </p>
       <div v-if="usageInfo?.five_hour || usageInfo?.seven_day || usageInfo?.thirty_day" class="mt-1 space-y-1">
         <UsageProgressBar
           v-if="usageInfo?.five_hour"
@@ -752,6 +753,7 @@
 
 <script setup lang="ts">
 import BPSCredentialStatus from "./BPSCredentialStatus.vue"
+import HelpTooltip from '@/components/common/HelpTooltip.vue'
 import { useBPSCredentialState } from "@/composables/useBPSCredentialState"
 import { ref, computed, onMounted, onBeforeUnmount, onUnmounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -813,6 +815,10 @@ const loading = ref(false)
 const activeQueryLoading = ref(false)
 const error = ref<string | null>(null)
 const usageInfo = ref<AccountUsageInfo | null>(null)
+const bpsUsageHint = computed(() => [
+  usageInfo.value?.error_code === 'quota_unavailable' ? t('admin.accounts.bps.quotaUnavailable') : '',
+  t('admin.accounts.bps.usageSourceHint')
+].filter(Boolean).join('\n'))
 watch(usageInfo, (usage) => {
   if (usage) emit('usage-loaded', usage)
 })

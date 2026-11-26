@@ -110,6 +110,14 @@ export default {
       },
 
       bps: {
+        usageDetails: '查看用量说明',
+        credentialStatusShort: {
+          unknown: '到期未知',
+          not_expired: 'Token 未到期',
+          expired: 'Token 已过期',
+          revoked: 'Token 已撤销',
+          auth_failed: 'Token 认证失败'
+        },
         toolRoundtripTest: '工具闭环测试',
         toolRoundtripHint: '依次验证文本、工具调用和结果续接，共发送三次请求。',
         usageSourceHint: '请求、Token 和费用为本站统计；百分比为 ChatGPT/Codex 配额，不代表 BPS 独立额度。',
