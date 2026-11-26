@@ -184,11 +184,11 @@ describe('IQTestModal', () => {
     const wrapper = mountModal()
     await flushPromises()
     if (source === 'manual record') {
-      ;(wrapper.vm as any).loadRecord({
+      (wrapper.vm as any).loadRecord({
         questionKind: 'candy', prompt: 'Saved question', modelId: 'saved-model', reasoningEffort: 'high', runs: []
       })
     } else {
-      ;(wrapper.vm as any).previewScheduled({
+      (wrapper.vm as any).previewScheduled({
         id: 9, status: 'success', response_text: '21', error_message: '', started_at: new Date().toISOString(),
         pelican_config: {
           question_kind: 'candy', prompt: 'Saved question', model_id: 'saved-model', reasoning_effort: 'high', parallel_count: 1
@@ -240,7 +240,7 @@ describe('IQTestModal', () => {
     document.head.append(script)
     const wrapper = mountModal()
     try {
-      ;(wrapper.vm as any).selectQuestion('pelican')
+      (wrapper.vm as any).selectQuestion('pelican')
       await (wrapper.vm as any).startTest()
 
       const preview = wrapper.get('iframe')
