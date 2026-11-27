@@ -154,6 +154,12 @@ func (s *OpenAIGatewayService) handleOpenAIUpstreamTransportError(ctx context.Co
 		return err
 	}
 
+	// The transport cannot prove whether the request reached the provider.
+	// A leased request must not be replayed through another account/exit.
+	if _, scoped := openAIRequestProxyFromContext(ctx, account.ID); scoped {
+		return err
+	}
+
 	if classifyUpstreamTransportError(err).Persistent {
 		s.tempUnscheduleOpenAITransportError(ctx, account, safeErr)
 	}

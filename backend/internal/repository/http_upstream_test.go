@@ -24,31 +24,72 @@ import (
 )
 
 func TestHTTPUpstreamDoCanDisableRedirectsPerRequest(t *testing.T) {
-	var redirectedCalls atomic.Int64
-	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		redirectedCalls.Add(1)
-		w.WriteHeader(http.StatusOK)
-	}))
-	t.Cleanup(target.Close)
-	redirector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, target.URL, http.StatusFound)
-	}))
-	t.Cleanup(redirector.Close)
+	for _, withTLS := range []bool{false, true} {
+		name := "Do"
+		if withTLS {
+			name = "DoWithTLS"
+		}
+		t.Run(name, func(t *testing.T) {
+			var redirectedCalls atomic.Int64
+			target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				redirectedCalls.Add(1)
+				w.WriteHeader(http.StatusOK)
+			}))
+			t.Cleanup(target.Close)
+			redirector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				http.Redirect(w, r, target.URL, http.StatusFound)
+			}))
+			t.Cleanup(redirector.Close)
 
-	upstream := NewHTTPUpstream(nil)
-	req, err := http.NewRequestWithContext(
-		service.WithHTTPUpstreamRedirectsDisabled(t.Context()),
-		http.MethodGet,
-		redirector.URL,
-		nil,
-	)
-	require.NoError(t, err)
+			upstream := NewHTTPUpstream(nil)
+			endpoint := redirector.URL
+			profile := &tlsfingerprint.Profile{Name: "redirect-test"}
+			if withTLS {
+				// Exercise the HTTPS TLS-client path. Only its first hop is a fixture;
+				// an HTTP downgrade would make a real connection to the target.
+				endpoint = "https://redirector.example/test"
+				svc := upstream.(*httpUpstreamService)
+				entry, err := svc.getClientEntryWithTLS("", 1, 1, profile, service.HTTPUpstreamProfileDefault, false, false)
+				require.NoError(t, err)
+				entry.client.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+					if req.URL.Scheme == "https" {
+						return &http.Response{
+							StatusCode: http.StatusFound,
+							Header:     http.Header{"Location": []string{target.URL}},
+							Body:       http.NoBody,
+							Request:    req,
+						}, nil
+					}
+					return http.DefaultTransport.RoundTrip(req)
+				})
+			}
 
-	resp, err := upstream.Do(req, "", 1, 1)
-	require.NoError(t, err)
-	require.Equal(t, http.StatusFound, resp.StatusCode)
-	require.NoError(t, resp.Body.Close())
-	require.Zero(t, redirectedCalls.Load())
+			for _, disableRedirects := range []bool{false, true} {
+				ctx := t.Context()
+				if disableRedirects {
+					ctx = service.WithHTTPUpstreamRedirectsDisabled(ctx)
+				}
+				req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+				require.NoError(t, err)
+				before := redirectedCalls.Load()
+				var resp *http.Response
+				if withTLS {
+					resp, err = upstream.DoWithTLS(req, "", 1, 1, profile)
+				} else {
+					resp, err = upstream.Do(req, "", 1, 1)
+				}
+				require.NoError(t, err)
+				require.NoError(t, resp.Body.Close())
+				if disableRedirects {
+					require.Equal(t, http.StatusFound, resp.StatusCode)
+					require.Equal(t, before, redirectedCalls.Load(), "disabled redirect must not send an HTTP downgrade hop")
+				} else {
+					require.Equal(t, http.StatusOK, resp.StatusCode)
+					require.Equal(t, before+1, redirectedCalls.Load(), "the unguarded control must reach the redirect target")
+				}
+			}
+		})
+	}
 }
 
 func TestHTTPUpstreamDoWithTLSPlainHTTPUsesConfiguredHTTPProxy(t *testing.T) {

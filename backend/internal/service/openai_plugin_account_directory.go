@@ -138,6 +138,11 @@ func (s *OpenAIGatewayService) ResolvePluginOutboundIdentity(ctx context.Context
 	if !scope.Contains(account.Platform, account.Type) {
 		return nil, nil
 	}
+	// This standalone RPC cannot keep an outbound lease alive after returning.
+	// Refuse before token resolution, which may itself refresh credentials.
+	if account.OpenAIRequestProxyEnabled() {
+		return nil, writeOpenAIRequestProxyError(nil, "openai_proxy_unavailable", "Standalone plugin identity resolution does not support request proxy mode")
+	}
 	// Credential minting is OpenAI-specific; degrade to (nil, nil) for kinds this
 	// resolver cannot issue tokens for.
 	if account.Type != AccountTypeOAuth || !account.IsOpenAIOAuthLike() {

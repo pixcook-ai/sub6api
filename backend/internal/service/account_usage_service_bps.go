@@ -102,13 +102,22 @@ func (s *AccountUsageService) fetchOpenAIBPSUsage(ctx context.Context, account *
 	if s.openAIQuotaService == nil || s.openAIQuotaService.privacyClientFactory == nil {
 		return nil, fmt.Errorf("quota client is unavailable")
 	}
+	ctx, release, err := beginOpenAIRequestProxyWithRepository(ctx, nil, account, s.openAIUsageProxyRepository())
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+
 	token := strings.TrimSpace(account.GetCredential("access_token"))
 	accountID := strings.TrimSpace(account.GetCredential("chatgpt_account_id"))
 	if token == "" || accountID == "" || account.bpsTokenExpired() {
 		return nil, fmt.Errorf("BPS credentials are unavailable")
 	}
-	proxyURL := ""
-	if account.ProxyID != nil {
+	proxyURL, err := resolveOpenAIMaintenanceProxy(ctx, account, s.openAIUsageProxyRepository())
+	if err != nil {
+		return nil, err
+	}
+	if !account.OpenAIRequestProxyEnabled() && account.ProxyID != nil {
 		if account.Proxy != nil {
 			proxyURL = account.Proxy.URL()
 		} else if s.openAIQuotaService.proxyRepo != nil {

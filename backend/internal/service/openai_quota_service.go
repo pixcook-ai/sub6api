@@ -164,6 +164,12 @@ func NewOpenAIQuotaService(
 // OAuth account. Returns infraerrors so the handler layer can map them to
 // stable error codes / HTTP statuses.
 func (s *OpenAIQuotaService) QueryUsage(ctx context.Context, accountID int64) (*OpenAIQuotaUsage, error) {
+	ctx, release, err := s.beginQuotaRequestProxy(ctx, accountID)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+
 	accessToken, chatGPTAccountID, proxyURL, fedRAMP, err := s.prepareUpstreamCall(ctx, accountID)
 	if err != nil {
 		return nil, err
@@ -376,6 +382,12 @@ func (s *OpenAIQuotaService) resetCredit(ctx context.Context, accountID int64, c
 		}
 	}
 
+	ctx, release, err := s.beginQuotaRequestProxy(ctx, accountID)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+
 	accessToken, chatGPTAccountID, proxyURL, fedRAMP, err := s.prepareUpstreamCall(ctx, accountID)
 	if err != nil {
 		return nil, err
@@ -438,6 +450,26 @@ func (s *OpenAIQuotaService) resetCredit(ctx context.Context, accountID int64, c
 	return &payload, nil
 }
 
+// beginQuotaRequestProxy owns one exit across refresh and every upstream call
+// made by a quota or referral operation, including parent-backed shadow reads.
+func (s *OpenAIQuotaService) beginQuotaRequestProxy(ctx context.Context, accountID int64) (context.Context, func(), error) {
+	noop := func() {}
+	if s == nil || s.accountRepo == nil {
+		return ctx, noop, infraerrors.New(http.StatusInternalServerError, "OPENAI_QUOTA_NOT_CONFIGURED", "openai quota service is not configured")
+	}
+	account, err := s.accountRepo.GetByID(ctx, accountID)
+	if err != nil || account == nil {
+		return ctx, noop, infraerrors.New(http.StatusNotFound, "OPENAI_QUOTA_ACCOUNT_NOT_FOUND", "account not found")
+	}
+	if account.IsShadow() {
+		account, err = resolveCredentialAccount(ctx, s.accountRepo, account)
+		if err != nil {
+			return ctx, noop, infraerrors.New(http.StatusBadGateway, "OPENAI_QUOTA_SHADOW_RESOLVE_FAILED", "failed to resolve shadow account")
+		}
+	}
+	return beginOpenAIRequestProxyWithRepository(ctx, nil, account, s.proxyRepo)
+}
+
 // prepareUpstreamCall loads the account, validates it, obtains a fresh access
 // token via the shared TokenProvider, and resolves the chatgpt-account-id and
 // proxy URL. Centralized so QueryUsage / ResetCredit share validation.
@@ -480,6 +512,11 @@ func (s *OpenAIQuotaService) prepareUpstreamCall(ctx context.Context, accountID 
 		return "", "", "", false, infraerrors.New(http.StatusBadRequest, "OPENAI_QUOTA_MISSING_ACCOUNT_ID", "chatgpt_account_id is missing; please re-authorize this account")
 	}
 
+	proxyURL, err = resolveOpenAIMaintenanceProxy(ctx, account, s.proxyRepo)
+	if err != nil {
+		return "", "", "", false, err
+	}
+
 	if !account.IsOpenAIAgentIdentity() {
 		if s.tokenProvider == nil {
 			return "", "", "", false, infraerrors.New(http.StatusInternalServerError, "OPENAI_QUOTA_NOT_CONFIGURED", "openai quota token provider is not configured")
@@ -499,7 +536,7 @@ func (s *OpenAIQuotaService) prepareUpstreamCall(ctx context.Context, accountID 
 	// instead of round-tripping the DB again. Fall back to proxyRepo only
 	// when Proxy isn't pre-populated (defensive — e.g. callers that built
 	// the Account by hand).
-	if account.ProxyID != nil {
+	if !account.OpenAIRequestProxyEnabled() && account.ProxyID != nil {
 		switch {
 		case account.Proxy != nil:
 			proxyURL = account.Proxy.URL()

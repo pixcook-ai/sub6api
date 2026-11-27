@@ -235,6 +235,12 @@ func (api *OAuthRefreshAPI) RefreshIfNeeded(
 	if freshAccount.ID != account.ID {
 		return nil, fmt.Errorf("%w: account identity mismatch", errOAuthRefreshAccountRereadFailed)
 	}
+	if routeErr := validateOpenAIRefreshRequestProxy(ctx, freshAccount); routeErr != nil {
+		if freshAccount.IsOpenAIBPS() {
+			return nil, &openAIBPSAccountRefreshError{err: routeErr}
+		}
+		return nil, routeErr
+	}
 	_, recoverBPSError := bpsRefreshDiagnosisCleanup(freshAccount)
 	allowBPSManualRecovery := freshAccount.IsOpenAIBPS() && isOpenAIBPSManualRefresh(ctx) && recoverBPSError
 	if freshAccount.IsOpenAIBPS() && !freshAccount.IsActive() && !allowBPSManualRecovery {

@@ -618,12 +618,20 @@ func (s *OpenAIGatewayService) probeOpenAITiboHTTP(ctx context.Context, account 
 	if s == nil || s.httpUpstream == nil || account == nil || !s.openAITiboRouteApplies(account) {
 		return unknown
 	}
+	ctx, releaseProxy, proxyErr := s.beginOpenAIRequestProxy(ctx, nil, account)
+	if proxyErr != nil {
+		return unknown
+	}
+	defer releaseProxy()
 	ctx = withOpenAITiboSyntheticProbe(ctx, account.ID)
 	req, err := s.buildOpenAITiboProbeRequest(ctx, account)
 	if err != nil {
 		return unknown
 	}
 	proxyURL := openAITiboAccountProxyURL(account)
+	if route, ok := openAIRequestProxyFromContext(ctx, account.ID); ok {
+		proxyURL = route.proxy
+	}
 	if err := requireOpenAITiboProxyBinding(account, proxyURL); err != nil {
 		return unknown
 	}

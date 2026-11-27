@@ -143,10 +143,44 @@ func (s *OpenAIReauthService) reauthorize(ctx context.Context, accountID int64, 
 		fail("account_lookup_failed")
 		return
 	}
-	proxyURL := ""
-	if account.ProxyID != nil && s.batch.proxyRepo != nil {
+	if account.ID != accountID || account.Platform != platform || account.Type != AccountTypeOAuth {
+		fail("account_changed")
+		return
+	}
+	ctx, release, routeErr := beginOpenAIRequestProxyWithRepository(ctx, nil, account, s.batch.proxyRepo)
+	if routeErr != nil {
+		fail("request_proxy_unavailable")
+		return
+	}
+	defer release()
+	// The vendored runner is local and accepts exactly one explicit proxy URL
+	// for the complete login; no remote worker can replace that egress.
+	proxyURL, routeErr := resolveOpenAIMaintenanceProxy(ctx, account, s.batch.proxyRepo)
+	if routeErr != nil {
+		fail("request_proxy_unavailable")
+		return
+	}
+	if !account.OpenAIRequestProxyEnabled() && account.ProxyID != nil && s.batch.proxyRepo != nil {
 		if p, perr := s.batch.proxyRepo.GetByID(ctx, *account.ProxyID); perr == nil && p != nil {
 			proxyURL = p.URL()
+		}
+	}
+	if account.OpenAIRequestProxyEnabled() {
+		// Recheck the saved group after acquisition and before handing passwords
+		// or TOTP secrets to the subprocess. A mode change never selects single.
+		latest, lookupErr := s.admin.GetAccount(ctx, accountID)
+		if lookupErr != nil || latest == nil || latest.ID != accountID || latest.Platform != account.Platform || latest.Type != account.Type {
+			fail("account_changed")
+			return
+		}
+		if !sameOpenAIOAuthProxyGroup(account.OpenAIRequestProxyIDs(), latest.OpenAIRequestProxyIDs()) {
+			fail("request_proxy_changed")
+			return
+		}
+		proxyURL, routeErr = resolveOpenAIMaintenanceProxy(ctx, latest, s.batch.proxyRepo)
+		if routeErr != nil {
+			fail("request_proxy_unavailable")
+			return
 		}
 	}
 	entry := BatchLoginEntry{Email: rec.LoginEmail, Password: password, TOTPSecret: totp}

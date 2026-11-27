@@ -2,8 +2,11 @@ package admin
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"strconv"
 	"strings"
 	"time"
@@ -65,6 +68,8 @@ type DataAccount struct {
 	Credentials        map[string]any `json:"credentials"`
 	Extra              map[string]any `json:"extra,omitempty"`
 	ProxyKey           *string        `json:"proxy_key,omitempty"`
+	BPSProxyKeys       []string       `json:"bps_proxy_keys,omitempty"`
+	OpenAIProxyKeys    []string       `json:"openai_proxy_keys,omitempty"`
 	Concurrency        int            `json:"concurrency"`
 	Priority           int            `json:"priority"`
 	RateMultiplier     *float64       `json:"rate_multiplier,omitempty"`
@@ -95,6 +100,13 @@ type DataImportError struct {
 
 func buildProxyKey(protocol, host string, port int, username, password string) string {
 	return fmt.Sprintf("%s|%s|%d|%s|%s", strings.TrimSpace(protocol), strings.TrimSpace(host), port, strings.TrimSpace(username), strings.TrimSpace(password))
+}
+
+// Proxy groups use an exact identity independent of legacy proxy_key aliases.
+// Credentials are significant byte-for-byte, including whitespace.
+func buildBPSProxyKey(protocol, host string, port int, username, password string) string {
+	tuple, _ := json.Marshal([5]string{protocol, host, strconv.Itoa(port), username, password})
+	return fmt.Sprintf("bps-proxy-v1:%x", sha256.Sum256(tuple))
 }
 
 func (h *AccountHandler) ExportData(c *gin.Context) {
@@ -154,11 +166,13 @@ func (h *AccountHandler) ExportData(c *gin.Context) {
 	}
 
 	proxyKeyByID := make(map[int64]string, len(proxies))
+	bpsProxyKeyByID := make(map[int64]string, len(proxies))
 	dataProxies := make([]DataProxy, 0, len(proxies))
 	for i := range proxies {
 		p := proxies[i]
 		key := buildProxyKey(p.Protocol, p.Host, p.Port, p.Username, p.Password)
 		proxyKeyByID[p.ID] = key
+		bpsProxyKeyByID[p.ID] = buildBPSProxyKey(p.Protocol, p.Host, p.Port, p.Username, p.Password)
 
 		var expiresAt *int64
 		if p.ExpiresAt != nil {
@@ -188,6 +202,21 @@ func (h *AccountHandler) ExportData(c *gin.Context) {
 	dataAccounts := make([]DataAccount, 0, len(accounts))
 	for i := range accounts {
 		acc := accounts[i]
+		extra := maps.Clone(service.RedactOpenAICodexTicketExtra(acc.Extra))
+		// Database IDs are local to an instance. Restore by exact proxy identity.
+		delete(extra, service.ExcelBPSProxyIDsKey)
+		delete(extra, service.OpenAIProxyIDsKey)
+		var bpsProxyKeys []string
+		if includeProxies {
+			for _, id := range acc.OpenAIRequestProxyIDs() {
+				key, ok := bpsProxyKeyByID[id]
+				if !ok {
+					response.ErrorFrom(c, infraerrors.BadRequest("OPENAI_PROXY_NOT_FOUND", fmt.Sprintf("account %d selected proxy %d not found", acc.ID, id)))
+					return
+				}
+				bpsProxyKeys = append(bpsProxyKeys, key)
+			}
+		}
 		var proxyKey *string
 		if acc.ProxyID != nil {
 			if key, ok := proxyKeyByID[*acc.ProxyID]; ok {
@@ -205,14 +234,19 @@ func (h *AccountHandler) ExportData(c *gin.Context) {
 			Platform:           acc.Platform,
 			Type:               acc.Type,
 			Credentials:        acc.Credentials,
-			Extra:              service.RedactOpenAICodexTicketExtra(acc.Extra),
+			Extra:              extra,
 			ProxyKey:           proxyKey,
+			BPSProxyKeys:       bpsProxyKeys,
 			Concurrency:        acc.Concurrency,
 			Priority:           acc.Priority,
 			RateMultiplier:     acc.RateMultiplier,
 			ExpiresAt:          expiresAt,
 			AutoPauseOnExpired: &acc.AutoPauseOnExpired,
 		})
+		if _, explicit := acc.Extra[service.OpenAIProxyModeKey]; explicit {
+			dataAccounts[len(dataAccounts)-1].OpenAIProxyKeys = bpsProxyKeys
+			dataAccounts[len(dataAccounts)-1].BPSProxyKeys = nil
+		}
 	}
 
 	payload := DataPayload{
@@ -257,12 +291,20 @@ func (h *AccountHandler) importData(ctx context.Context, req DataImportRequest) 
 	}
 
 	proxyKeyToID := make(map[string]int64, len(existingProxies))
+	bpsProxyKeyToID := make(map[string]int64, len(existingProxies))
+	// Register only actual destination records. A legacy key collision or an
+	// untrusted payload alias must not authorize another credential identity.
+	registerBPSProxy := func(p service.Proxy) {
+		key := buildBPSProxyKey(p.Protocol, p.Host, p.Port, p.Username, p.Password)
+		bpsProxyKeyToID[key] = p.ID
+	}
 	// proxyNameToID 用于 backup_proxy_name 反查：DB 已有 + 本批次新建均会写入
 	proxyNameToID := make(map[string]int64, len(existingProxies))
 	for i := range existingProxies {
 		p := existingProxies[i]
 		key := buildProxyKey(p.Protocol, p.Host, p.Port, p.Username, p.Password)
 		proxyKeyToID[key] = p.ID
+		registerBPSProxy(p)
 		if p.Name != "" {
 			proxyNameToID[p.Name] = p.ID
 		}
@@ -374,6 +416,7 @@ func (h *AccountHandler) importData(ctx context.Context, req DataImportRequest) 
 			continue
 		}
 		proxyKeyToID[key] = created.ID
+		registerBPSProxy(*created)
 		// 把新建代理的 name 也加入反查表，供后续批内代理引用
 		if created.Name != "" {
 			proxyNameToID[created.Name] = created.ID
@@ -405,6 +448,11 @@ func (h *AccountHandler) importData(ctx context.Context, req DataImportRequest) 
 
 	for i := range dataPayload.Accounts {
 		item := dataPayload.Accounts[i]
+		if err := remapDataAccountBPSProxies(&item, bpsProxyKeyToID); err != nil {
+			result.AccountFailed++
+			result.Errors = append(result.Errors, DataImportError{Kind: "account", Name: item.Name, Message: err.Error()})
+			continue
+		}
 		if err := validateDataAccount(item); err != nil {
 			result.AccountFailed++
 			result.Errors = append(result.Errors, DataImportError{
@@ -575,24 +623,85 @@ func (h *AccountHandler) resolveExportProxies(ctx context.Context, accounts []se
 	seen := make(map[int64]struct{})
 	ids := make([]int64, 0)
 	for i := range accounts {
-		if accounts[i].ProxyID == nil {
-			continue
+		accountIDs := accounts[i].OpenAIRequestProxyIDs()
+		if accounts[i].ProxyID != nil {
+			accountIDs = append(accountIDs, *accounts[i].ProxyID)
 		}
-		id := *accounts[i].ProxyID
-		if id <= 0 {
-			continue
+		for _, id := range accountIDs {
+			if id <= 0 {
+				continue
+			}
+			if _, ok := seen[id]; ok {
+				continue
+			}
+			seen[id] = struct{}{}
+			ids = append(ids, id)
 		}
-		if _, ok := seen[id]; ok {
-			continue
-		}
-		seen[id] = struct{}{}
-		ids = append(ids, id)
 	}
 	if len(ids) == 0 {
 		return []service.Proxy{}, nil
 	}
 
 	return h.adminService.GetProxiesByIDs(ctx, ids)
+}
+
+func remapDataAccountBPSProxies(item *DataAccount, proxyKeyToID map[string]int64) error {
+	if _, explicit := item.Extra[service.OpenAIProxyModeKey]; explicit {
+		item.Extra = maps.Clone(item.Extra)
+		delete(item.Extra, service.ExcelBPSProxyIDsKey)
+		_, sourceIDs := item.Extra[service.OpenAIProxyIDsKey]
+		if sourceIDs {
+			return errors.New("openai_proxy_keys is required instead of source numeric proxy IDs")
+		}
+		if len(item.OpenAIProxyKeys) == 0 {
+			if item.Extra[service.OpenAIProxyModeKey] == service.OpenAIProxyModeRequest {
+				return errors.New("openai_proxy_keys is required for OpenAI request proxy configuration")
+			}
+			return nil
+		}
+		ids, err := remapDataProxyGroupKeys(item.OpenAIProxyKeys, proxyKeyToID, "openai_proxy_keys")
+		if err != nil {
+			return err
+		}
+		item.Extra[service.OpenAIProxyIDsKey] = ids
+		return nil
+	}
+	if _, sourceIDs := item.Extra[service.OpenAIProxyIDsKey]; sourceIDs || len(item.OpenAIProxyKeys) > 0 {
+		return errors.New("openai_proxy_keys requires an explicit OpenAI proxy mode")
+	}
+	_, hasSourceIDs := item.Extra[service.ExcelBPSProxyIDsKey]
+	if len(item.BPSProxyKeys) == 0 {
+		if hasSourceIDs || item.Extra[service.ExcelBPSProxyModeKey] == service.ExcelBPSProxyModeRequest {
+			return errors.New("bps_proxy_keys is required for BPS request proxy configuration")
+		}
+		return nil
+	}
+	ids, err := remapDataProxyGroupKeys(item.BPSProxyKeys, proxyKeyToID, "bps_proxy_keys")
+	if err != nil {
+		return err
+	}
+	item.Extra = maps.Clone(item.Extra)
+	if item.Extra == nil {
+		item.Extra = make(map[string]any)
+	}
+	item.Extra[service.ExcelBPSProxyIDsKey] = ids
+	return nil
+}
+
+func remapDataProxyGroupKeys(keys []string, proxyKeyToID map[string]int64, field string) ([]int64, error) {
+	ids := make([]int64, 0, len(keys))
+	seen := make(map[int64]bool, len(keys))
+	for _, key := range keys {
+		id, ok := proxyKeyToID[key]
+		if !ok {
+			return nil, fmt.Errorf("%s contains a proxy that was not found", field)
+		}
+		if !seen[id] {
+			ids = append(ids, id)
+			seen[id] = true
+		}
+	}
+	return ids, nil
 }
 
 func parseAccountIDs(c *gin.Context) ([]int64, error) {

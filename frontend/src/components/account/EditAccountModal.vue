@@ -1654,7 +1654,11 @@
           <label class="input-label mb-0">{{ t('admin.accounts.proxy') }}</label>
           <ProxyAdBanner />
         </div>
-        <ProxySelector v-model="form.proxy_id" :proxies="proxies" />
+        <OpenAIProxySettings v-if="openaiProxySupported"
+          v-model:mode="openaiProxyMode" v-model:single-proxy-id="form.proxy_id" v-model:proxy-ids="openaiProxyIds"
+          :proxies="proxies" :loading="proxiesLoading" :load-error="proxiesLoadError" :current-account-id="account.id"
+          :user-id="userId" @retry="emit('retry-proxies')" />
+        <ProxySelector v-else v-model="form.proxy_id" :proxies="proxies" />
       </div>
 
       <UpstreamRequestIdHeaderField
@@ -3209,6 +3213,7 @@ import Toggle from '@/components/common/Toggle.vue'
 import TiboAccountHealthPanel from '@/components/account/TiboAccountHealthPanel.vue'
 import Icon from '@/components/icons/Icon.vue'
 import ProxySelector from '@/components/common/ProxySelector.vue'
+import OpenAIProxySettings from '@/components/account/OpenAIProxySettings.vue'
 import ProxyAdBanner from '@/components/common/ProxyAdBanner.vue'
 import GroupSelector from '@/components/common/GroupSelector.vue'
 import ModelWhitelistSelector from '@/components/account/ModelWhitelistSelector.vue'
@@ -3282,12 +3287,16 @@ interface Props {
   show: boolean
   account: Account | null
   proxies: Proxy[]
+  proxiesLoading?: boolean
+  proxiesLoadError?: boolean
+  userId?: number | null
   groups: AdminGroup[]
 }
 
 const props = defineProps<Props>()
 const emit = defineEmits<{
   close: []
+  'retry-proxies': []
   test: [account: Account]
   updated: [account: Account]
   'codex-tickets': []
@@ -3311,6 +3320,30 @@ const selectableGroups = computed(() => {
 // Spark 影子账号(parent_account_id 非空):代理恒继承母账号,不可独立编辑(外审 B/P1),
 // 故隐藏代理选择器。
 const isSparkShadow = computed(() => props.account?.parent_account_id != null)
+
+const openaiProxySupported = computed(() => {
+  const account = props.account
+  if (!['openai', 'openai_bps'].includes(account?.platform ?? '') || account?.type !== 'oauth' || isSparkShadow.value) return false
+  const credentials = (account.credentials ?? {}) as Record<string, unknown>
+  const modes = [credentials.auth_mode, credentials.openai_auth_mode].map(mode => String(mode ?? '').trim().toLowerCase())
+  return !modes.some(mode => mode === 'agentidentity' || mode === 'personalaccesstoken' || mode === 'personal_access_token')
+})
+const openaiProxyMode = ref<'single' | 'request'>('single')
+const openaiProxyIds = ref<number[]>([])
+
+function savedOpenAIProxyConfig(account: Account): { mode: 'single' | 'request'; ids: number[] } {
+  const extra = account.extra ?? {}
+  const hasUnifiedMode = Object.prototype.hasOwnProperty.call(extra, 'openai_proxy_mode')
+  const useLegacy = !hasUnifiedMode && account.platform === 'openai_bps'
+  const mode = hasUnifiedMode ? extra.openai_proxy_mode : useLegacy ? extra.openai_excel_bps_proxy_mode : undefined
+  const ids = hasUnifiedMode ? extra.openai_proxy_ids : useLegacy ? extra.openai_excel_bps_proxy_ids : undefined
+  return {
+    mode: mode === 'request' ? 'request' : 'single',
+    ids: Array.isArray(ids)
+      ? [...new Set(ids.filter((id): id is number => typeof id === 'number' && Number.isSafeInteger(id) && id > 0))]
+      : []
+  }
+}
 
 const codexTurnTickets = computed(() => props.account?.codex_turn_tickets ?? [])
 
@@ -4234,6 +4267,9 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   form.name = newAccount.name
   form.notes = newAccount.notes || ''
   form.proxy_id = newAccount.proxy_id
+  const proxyConfig = savedOpenAIProxyConfig(newAccount)
+  openaiProxyMode.value = proxyConfig.mode
+  openaiProxyIds.value = proxyConfig.ids
   form.concurrency = newAccount.concurrency
   form.load_factor = newAccount.load_factor ?? null
   form.priority = newAccount.priority
@@ -5251,6 +5287,22 @@ const submitUpdateAccount = async (accountID: number, updatePayload: Record<stri
 
 const handleSubmit = async () => {
   if (!props.account) return
+  const savedProxyConfig = savedOpenAIProxyConfig(props.account)
+  const proxyRoutingChanged = openaiProxyMode.value !== savedProxyConfig.mode ||
+    openaiProxyIds.value.length !== savedProxyConfig.ids.length ||
+    openaiProxyIds.value.some(id => !savedProxyConfig.ids.includes(id))
+  if (openaiProxySupported.value && openaiProxyMode.value === 'request' && proxyRoutingChanged) {
+    if (openaiProxyIds.value.length === 0) {
+      appStore.showError(t('admin.accounts.openai.proxyRequired'))
+      return
+    }
+    const usable = props.proxies.some(proxy => openaiProxyIds.value.includes(proxy.id) && proxy.status === 'active' &&
+      (!proxy.expires_at || Date.parse(proxy.expires_at) > Date.now()))
+    if (props.proxiesLoading || props.proxiesLoadError || !usable) {
+      appStore.showError(t('admin.accounts.openai.proxyNoUsable'))
+      return
+    }
+  }
   const accountID = props.account.id
 
   if (form.status !== 'active' && form.status !== 'inactive' && form.status !== 'error') {
@@ -5916,6 +5968,14 @@ const handleSubmit = async () => {
       }
 
       updatePayload.extra = newExtra
+    }
+
+    if (openaiProxySupported.value) {
+      updatePayload.extra = {
+        ...((updatePayload.extra ?? props.account.extra ?? {}) as Record<string, unknown>),
+        openai_proxy_mode: openaiProxyMode.value,
+        openai_proxy_ids: [...openaiProxyIds.value],
+      }
     }
 
     // Compose the search override after platform extras so neither overwrites the other.

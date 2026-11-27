@@ -30,6 +30,7 @@ vi.mock('@/api/admin', () => ({
       update: updateAccountMock,
       checkMixedChannelRisk: checkMixedChannelRiskMock
     },
+    proxies: { getProxyAccounts: vi.fn().mockResolvedValue([]), testProxy: vi.fn().mockResolvedValue({ success: true, message: 'ok' }) },
     settings: {
       getWebSearchEmulationConfig: vi.fn().mockResolvedValue({ enabled: false, providers: [] }),
       getSettings: vi.fn().mockResolvedValue({})
@@ -1772,6 +1773,111 @@ describe('EditAccountModal OpenAI BPS', () => {
     await vi.waitFor(() => expect(wrapper.emitted('test')).toEqual([[account]]))
     expect(updateAccountMock.mock.calls[0][1].credentials).not.toHaveProperty('access_token')
     expect(updateAccountMock.mock.calls[0][1].credentials.chatgpt_account_id).toBe('workspace')
+    wrapper.unmount()
+  })
+})
+
+
+describe('EditAccountModal request proxy routing', () => {
+  const proxies = [
+    { id: 11, name: 'Proxy A', protocol: 'http', host: 'a.example.test', port: 8080, status: 'active', expires_at: null },
+    { id: 22, name: 'Proxy B', protocol: 'http', host: 'b.example.test', port: 8080, status: 'active', expires_at: null },
+  ]
+  beforeEach(() => {
+    updateAccountMock.mockReset().mockResolvedValue(buildOpenAIOAuthParentAccount())
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+  })
+
+  it.each(['openai', 'openai_bps'])('preserves the saved %s group, unrelated extra fields and previous single proxy', async platform => {
+    const account = { ...buildOpenAIOAuthParentAccount(), platform, proxy_id: 45,
+      extra: { openai_proxy_mode: 'request', openai_proxy_ids: [11, 22, 11], preserved_runtime_value: 'keep' } }
+    const wrapper = mountModal(account)
+    await wrapper.setProps({ proxies })
+    expect((wrapper.get('[data-testid="openai-proxy-mode-request"]').element as HTMLInputElement).checked).toBe(true)
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    expect(updateAccountMock).toHaveBeenCalledWith(account.id, expect.objectContaining({ proxy_id: 45,
+      extra: expect.objectContaining({ openai_proxy_mode: 'request', openai_proxy_ids: [11, 22], preserved_runtime_value: 'keep' }),
+    }))
+    wrapper.unmount()
+  })
+
+  it('gives explicit single mode precedence over legacy request mode and keeps the group for switching back', async () => {
+    const account = { ...buildOpenAIOAuthParentAccount(), proxy_id: 45,
+      extra: { openai_proxy_mode: 'single', openai_proxy_ids: [22], openai_excel_bps_proxy_mode: 'request', openai_excel_bps_proxy_ids: [11] } }
+    const wrapper = mountModal(account)
+    expect((wrapper.get('[data-testid="openai-proxy-mode-single"]').element as HTMLInputElement).checked).toBe(true)
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    expect(updateAccountMock).toHaveBeenCalledWith(account.id, expect.objectContaining({ proxy_id: 45,
+      extra: expect.objectContaining({ openai_proxy_mode: 'single', openai_proxy_ids: [22] }),
+    }))
+    wrapper.unmount()
+  })
+
+  it('loads legacy BPS request configuration and can return to the saved single proxy', async () => {
+    const account = { ...buildOpenAIOAuthParentAccount(), platform: 'openai_bps', proxy_id: 45,
+      extra: { openai_excel_bps_proxy_mode: 'request', openai_excel_bps_proxy_ids: [11] } }
+    const wrapper = mountModal(account)
+    expect((wrapper.get('[data-testid="openai-proxy-mode-request"]').element as HTMLInputElement).checked).toBe(true)
+    await wrapper.get('[data-testid="openai-proxy-mode-single"]').setValue()
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    expect(updateAccountMock).toHaveBeenCalledWith(account.id, expect.objectContaining({ proxy_id: 45,
+      extra: expect.objectContaining({ openai_proxy_mode: 'single', openai_proxy_ids: [11] }),
+    }))
+    wrapper.unmount()
+  })
+
+  it('does not activate legacy BPS routing on an ordinary OpenAI account during unrelated edits', async () => {
+    const account = { ...buildOpenAIOAuthParentAccount(), proxy_id: 45,
+      extra: { openai_excel_bps_proxy_mode: 'request', openai_excel_bps_proxy_ids: [11] } }
+    const wrapper = mountModal(account)
+    expect((wrapper.get('[data-testid="openai-proxy-mode-single"]').element as HTMLInputElement).checked).toBe(true)
+    await wrapper.get('textarea').setValue('Updated note')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    expect(updateAccountMock).toHaveBeenCalledWith(account.id, expect.objectContaining({ proxy_id: 45, notes: 'Updated note',
+      extra: expect.objectContaining({ openai_proxy_mode: 'single', openai_proxy_ids: [], openai_excel_bps_proxy_mode: 'request' }),
+    }))
+    wrapper.unmount()
+  })
+
+  it.each(['inactive', 'expired', 'catalog-error', 'catalog-loading'])('allows notes and status edits while an unchanged request group is %s', async reason => {
+    const account = { ...buildOpenAIOAuthParentAccount(), extra: { openai_proxy_mode: 'request', openai_proxy_ids: [11] } }
+    const wrapper = mountModal(account)
+    await wrapper.setProps({
+      proxies: [{ ...proxies[0], status: reason === 'inactive' ? 'inactive' : 'active', expires_at: reason === 'expired' ? '2000-01-01T00:00:00Z' : null }],
+      proxiesLoadError: reason === 'catalog-error',
+      proxiesLoading: reason === 'catalog-loading',
+    })
+    await wrapper.get('textarea').setValue('Preserve routing')
+    const statusSelect = wrapper.findAll('select').find(select => select.find('option[value="inactive"]').exists())!
+    await statusSelect.setValue('inactive')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    expect(updateAccountMock).toHaveBeenCalledWith(account.id, expect.objectContaining({ notes: 'Preserve routing', status: 'inactive',
+      extra: expect.objectContaining({ openai_proxy_mode: 'request', openai_proxy_ids: [11] }),
+    }))
+    wrapper.unmount()
+  })
+
+  it('blocks a changed request group when all selected proxies become unavailable and allows catalog retry', async () => {
+    const account = { ...buildOpenAIOAuthParentAccount(), extra: { openai_proxy_mode: 'request', openai_proxy_ids: [11] } }
+    const wrapper = mountModal(account)
+    await wrapper.setProps({ proxies })
+    await wrapper.get('[data-testid="bps-proxy-trigger"]').trigger('click')
+    await wrapper.get('[data-testid="bps-proxy-22"]').setValue(true)
+    await wrapper.setProps({ proxies: proxies.map(proxy => ({ ...proxy, status: 'inactive' })) })
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    expect(updateAccountMock).not.toHaveBeenCalled()
+    await wrapper.setProps({ proxiesLoadError: true })
+    await wrapper.get('[data-testid="bps-proxy-catalog-retry"]').trigger('click')
+    expect(wrapper.emitted('retry-proxies')).toHaveLength(1)
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    expect(updateAccountMock).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it.each(['personalAccessToken', 'agentIdentity'])('keeps multiple proxies unavailable for %s credentials', async auth_mode => {
+    const account = { ...buildOpenAIOAuthParentAccount(), credentials: { auth_mode, access_token: 'at' } }
+    const wrapper = mountModal(account)
+    expect(wrapper.find('[data-testid="openai-proxy-settings"]').exists()).toBe(false)
     wrapper.unmount()
   })
 })

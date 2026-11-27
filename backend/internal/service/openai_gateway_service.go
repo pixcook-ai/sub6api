@@ -472,6 +472,7 @@ type OpenAIGatewayService struct {
 	openaiTiboContext      context.Context
 	openaiTiboDone         chan struct{}
 	openaiTiboStopped      bool
+	proxyRepo              ProxyRepository
 	accountRepo            AccountRepository
 	usageLogRepo           UsageLogRepository
 	usageBillingRepo       UsageBillingRepository

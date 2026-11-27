@@ -34,6 +34,13 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	promptCacheKey string,
 	defaultMappedModel string,
 ) (*OpenAIForwardResult, error) {
+	proxyCtx, releaseProxy, proxyErr := s.beginOpenAIRequestProxy(ctx, c, account)
+	if proxyErr != nil {
+		return nil, proxyErr
+	}
+	defer releaseProxy()
+	ctx = proxyCtx
+
 	ctx = withOpenAITiboQualityAdmission(ctx, body)
 	if err := s.checkOpenAITiboQualitySnapshotAdmission(ctx, account, body); err != nil {
 		return nil, err

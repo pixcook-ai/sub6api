@@ -52,6 +52,9 @@ type OAuthSession struct {
 	CodeVerifier string    `json:"code_verifier"`
 	ClientID     string    `json:"client_id,omitempty"`
 	ProxyURL     string    `json:"proxy_url,omitempty"`
+	RequestProxy bool      `json:"request_proxy,omitempty"`
+	ProxyID      int64     `json:"proxy_id,omitempty"`
+	ProxyIDs     []int64   `json:"proxy_ids,omitempty"`
 	RedirectURI  string    `json:"redirect_uri"`
 	CreatedAt    time.Time `json:"created_at"`
 }

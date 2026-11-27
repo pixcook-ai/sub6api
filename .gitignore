@@ -143,6 +143,7 @@ docs/*
 !docs/BATCH_IMAGE_MVP.md
 !docs/COMPOSITE_GROUPS.md
 !docs/openai-bps.md
+!docs/openai-account-multi-proxy.md
 !docs/tibo-quality-probing.md
 !docs/tibo-port-20261126.md
 !docs/openai-bps-sources.md

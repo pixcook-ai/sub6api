@@ -445,6 +445,16 @@ func appendOpsUpstreamError(c *gin.Context, ev OpsUpstreamErrorEvent) {
 		ev.AtUnixMs = time.Now().UnixMilli()
 	}
 	ev.Platform = strings.TrimSpace(ev.Platform)
+	// Attribute the actual leased member without exposing proxy URL credentials.
+	if value, ok := c.Get(openAIRequestProxyOpsKey); ok {
+		if route, ok := value.(*openAIRequestProxyRoute); ok && route != nil && route.accountID == ev.AccountID {
+			setUnknownOpsUpstreamProxy(&ev)
+			if route.proxyID > 0 {
+				id := route.proxyID
+				ev.ProxyID, ev.ProxyName = &id, route.proxyName
+			}
+		}
+	}
 	normalizeOpsUpstreamProxyAttribution(&ev)
 	ev.UpstreamRequestID = strings.TrimSpace(ev.UpstreamRequestID)
 	ev.UpstreamResponseBody = strings.TrimSpace(ev.UpstreamResponseBody)

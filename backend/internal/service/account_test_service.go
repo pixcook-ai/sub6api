@@ -819,7 +819,11 @@ func (s *AccountTestService) testBedrockAccountConnection(c *gin.Context, ctx co
 
 // testOpenAIAccountConnection tests an OpenAI account's connection
 func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account *Account, modelID string, prompt string, mode string) error {
-	ctx := c.Request.Context()
+	ctx, releaseProxy, proxyErr := s.beginAccountTestRequestProxy(c, account)
+	if proxyErr != nil {
+		return s.sendErrorAndEnd(c, proxyErr.Error())
+	}
+	defer releaseProxy()
 	mode = normalizeAccountTestMode(mode)
 
 	// Default to openai.DefaultTestModel for OpenAI testing

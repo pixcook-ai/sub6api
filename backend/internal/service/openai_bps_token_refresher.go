@@ -45,8 +45,16 @@ func (r *OpenAIBPSTokenRefresher) Refresh(ctx context.Context, account *Account)
 	if r.oauth == nil || r.oauth.oauthClient == nil {
 		return nil, fmt.Errorf("BPS OAuth client is not configured")
 	}
-	var proxyURL string
-	if account.ProxyID != nil {
+	ctx, release, err := beginOpenAIRequestProxyWithRepository(ctx, nil, account, r.oauth.proxyRepo)
+	if err != nil {
+		return nil, &openAIBPSAccountRefreshError{err: err}
+	}
+	defer release()
+	proxyURL, err := resolveOpenAIMaintenanceProxy(ctx, account, r.oauth.proxyRepo)
+	if err != nil {
+		return nil, &openAIBPSAccountRefreshError{err: err}
+	}
+	if !account.OpenAIRequestProxyEnabled() && account.ProxyID != nil {
 		if r.oauth.proxyRepo == nil {
 			return nil, bpsRefreshProxyUnavailable("BPS refresh proxy repository is not configured")
 		}

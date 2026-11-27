@@ -19,6 +19,13 @@ import (
 
 // Forward forwards request to OpenAI API
 func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, account *Account, body []byte) (*OpenAIForwardResult, error) {
+	proxyCtx, releaseProxy, proxyErr := s.beginOpenAIRequestProxy(ctx, c, account)
+	if proxyErr != nil {
+		return nil, proxyErr
+	}
+	defer releaseProxy()
+	ctx = proxyCtx
+
 	if err := s.checkOpenAITiboQualitySnapshotAdmission(ctx, account, body); err != nil {
 		return nil, err
 	}
@@ -138,6 +145,9 @@ func (s *OpenAIGatewayService) forwardWithoutHostedWebSearch(ctx context.Context
 		}
 	}
 	wsDecision := s.getOpenAIWSProtocolResolver().Resolve(account)
+	if account.OpenAIRequestProxyEnabled() {
+		wsDecision = openAIWSHTTPDecision("request_proxy_http")
+	}
 	// Only OpenAI OAuth accounts opt HTTP clients into the account-controlled WS bridge.
 	// Custom API-key relays keep their HTTP upstream contract.
 	if GetOpenAIClientTransport(c) == OpenAIClientTransportHTTP &&

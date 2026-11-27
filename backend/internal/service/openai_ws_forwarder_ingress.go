@@ -83,6 +83,9 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	if account == nil {
 		return errors.New("account is nil")
 	}
+	if account.OpenAIRequestProxyEnabled() {
+		return NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "request proxy routing requires HTTP/SSE", errOpenAIRequestProxyUnavailable)
+	}
 	if err := s.checkOpenAITiboQualitySnapshotAdmission(ctx, account, firstClientMessage); err != nil {
 		return NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "account is isolated by Tibo quality monitoring", err)
 	}

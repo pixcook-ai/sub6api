@@ -76,6 +76,11 @@ func (s *OpenAIGatewayService) FetchOpenAIBPSModelIDs(ctx context.Context, accou
 	}
 	ctx, cancel := context.WithTimeout(WithHTTPUpstreamRedirectsDisabled(ctx), 5*time.Second)
 	defer cancel()
+	ctx, releaseProxy, err := s.beginOpenAIRequestProxy(ctx, nil, account)
+	if err != nil {
+		return nil, err
+	}
+	defer releaseProxy()
 	req, err := buildOpenAIBPSRequest(ctx, account, nil)
 	if err != nil {
 		return nil, err
@@ -92,6 +97,9 @@ func (s *OpenAIGatewayService) FetchOpenAIBPSModelIDs(ctx context.Context, accou
 	if account.ProxyID != nil && account.Proxy != nil {
 		proxyURL = account.Proxy.URL()
 	}
+	if route, ok := openAIRequestProxyFromContext(ctx, account.ID); ok {
+		proxyURL = route.proxy
+	}
 	token := strings.TrimPrefix(req.Header.Get("Authorization"), "Bearer ")
 	key := "bps_models:" + bpsDigest(token+"\x00"+req.Header.Get("chatgpt-account-id")+"\x00"+proxyURL)
 	if cached, state := s.openAIModelsCache.get(key, time.Now()); state == openAIModelsCacheFresh && cached != nil {
@@ -100,7 +108,17 @@ func (s *OpenAIGatewayService) FetchOpenAIBPSModelIDs(ctx context.Context, accou
 			return ids, nil
 		}
 	}
+	route, scoped := openAIRequestProxyFromContext(ctx, account.ID)
+	if scoped {
+		req, err = route.bind(req)
+		if err != nil {
+			return nil, err
+		}
+	}
 	resp, err := s.httpUpstream.Do(req, proxyURL, account.ID, account.Concurrency)
+	if scoped {
+		route.track(resp)
+	}
 	if err != nil {
 		if resp != nil && resp.Body != nil {
 			_ = resp.Body.Close()

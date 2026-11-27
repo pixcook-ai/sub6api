@@ -49,6 +49,11 @@ func bpsTestUsageText(result *OpenAIForwardResult) string {
 // A fresh scope ensures tests never attach to a real client's conversation.
 // Regular tests stream the output piece by piece; compact stays unary.
 func (s *AccountTestService) testOpenAIBPSAccountConnection(c *gin.Context, account *Account, model, prompt, mode string) error {
+	_, releaseProxy, proxyErr := s.beginAccountTestRequestProxy(c, account)
+	if proxyErr != nil {
+		return s.sendErrorAndEnd(c, proxyErr.Error())
+	}
+	defer releaseProxy()
 	if s.openaiGatewayService == nil {
 		return s.sendErrorAndEnd(c, "BPS gateway is unavailable")
 	}

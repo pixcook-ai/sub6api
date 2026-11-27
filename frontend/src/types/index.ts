@@ -1699,6 +1699,8 @@ export interface AdminDataAccount {
   credentials: Record<string, unknown>
   extra?: Record<string, unknown>
   proxy_key?: string | null
+  openai_proxy_keys?: string[]
+  bps_proxy_keys?: string[]
   concurrency: number
   priority: number
   rate_multiplier?: number | null

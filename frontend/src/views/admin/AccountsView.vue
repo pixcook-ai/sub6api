@@ -464,8 +464,8 @@
       </template>
       <template #pagination><Pagination v-if="pagination.total > 0" :page="pagination.page" :total="pagination.total" :page-size="pagination.page_size" @update:page="handlePageChange" @update:pageSize="handlePageSizeChange" /></template>
     </TablePageLayout>
-    <CreateAccountModal :show="showCreate" :proxies="proxies" :groups="groups" @close="showCreate = false" @created="reload" @test="handleTest" />
-    <EditAccountModal :show="showEdit" :account="edAcc" :proxies="proxies" :groups="groups" @close="showEdit = false" @updated="handleAccountUpdated" @codex-tickets="openEditCodexTickets" @test="handleTest" />
+    <CreateAccountModal :show="showCreate" :proxies="proxies" :proxies-loading="proxiesLoading" :proxies-load-error="proxiesLoadError" :user-id="authStore.user?.id" :groups="groups" @retry-proxies="loadProxyCatalog" @close="showCreate = false" @created="reload" @test="handleTest" />
+    <EditAccountModal :show="showEdit" :account="edAcc" :proxies="proxies" :proxies-loading="proxiesLoading" :proxies-load-error="proxiesLoadError" :user-id="authStore.user?.id" :groups="groups" @retry-proxies="loadProxyCatalog" @close="showEdit = false" @updated="handleAccountUpdated" @codex-tickets="openEditCodexTickets" @test="handleTest" />
     <ReAuthAccountModal :show="showReAuth" :account="reAuthAcc" @close="closeReAuthModal" @reauthorized="handleAccountUpdated" />
     <AccountTestModal :show="showTest" :account="testingAcc" @close="closeTestModal" @completed="handleAccountTestCompleted" />
     <AccountStatsModal :show="showStats" :account="statsAcc" @close="closeStatsModal" />
@@ -560,6 +560,27 @@ const appStore = useAppStore()
 const authStore = useAuthStore()
 
 const proxies = ref<AccountProxy[]>([])
+let accountViewDisposed = false
+const proxiesLoading = ref(true)
+const proxiesLoadError = ref(false)
+let proxyCatalogPending = false
+const loadProxyCatalog = async () => {
+  if (proxyCatalogPending || accountViewDisposed) return
+  proxyCatalogPending = true
+  proxiesLoading.value = true
+  proxiesLoadError.value = false
+  try {
+    const result = await adminAPI.proxies.getAll()
+    if (!accountViewDisposed) proxies.value = result
+  } catch (error) {
+    if (!accountViewDisposed) proxiesLoadError.value = true
+    console.error('Failed to load proxies:', error)
+  } finally {
+    proxyCatalogPending = false
+    if (!accountViewDisposed) proxiesLoading.value = false
+  }
+}
+
 const groups = ref<AdminGroup[]>([])
 const groupsByID = computed(() => new Map(groups.value.map(group => [group.id, group])))
 const accountGroupsForRow = (account: Pick<AccountListItem, 'group_ids'>): AdminGroup[] => {
@@ -2619,15 +2640,11 @@ onMounted(async () => {
   load()
   loadUpstreamBillingProbeGlobalState()
   void loadCodexTicketGlobalState()
-  const [proxiesResult, groupsResult] = await Promise.allSettled([
-    adminAPI.proxies.getAll(),
+  const [, groupsResult] = await Promise.allSettled([
+    loadProxyCatalog(),
     adminAPI.groups.getAll()
   ])
-  if (proxiesResult.status === 'fulfilled') {
-    proxies.value = proxiesResult.value
-  } else {
-    console.error('Failed to load proxies:', proxiesResult.reason)
-  }
+  if (accountViewDisposed) return
   if (groupsResult.status === 'fulfilled') {
     groups.value = groupsResult.value
   } else {
@@ -2646,6 +2663,7 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  accountViewDisposed = true
   codexTicketSettingsRequestId += 1
   upstreamBillingRateAbortController?.abort()
   if (usageBatchFlushTimer !== null) {

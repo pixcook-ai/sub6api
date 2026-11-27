@@ -836,10 +836,33 @@ func (s *AccountUsageService) shouldProbeOpenAICodexSnapshot(accountID int64, no
 	return true
 }
 
+// Usage probes share the proxy catalog already injected into the quota
+// service. The token-provider fallback keeps small independently wired callers
+// on the same catalog without adding another constructor dependency.
+func (s *AccountUsageService) openAIUsageProxyRepository() ProxyRepository {
+	if s == nil || s.openAIQuotaService == nil {
+		return nil
+	}
+	if s.openAIQuotaService.proxyRepo != nil {
+		return s.openAIQuotaService.proxyRepo
+	}
+	provider := s.openAIQuotaService.tokenProvider
+	if provider != nil && provider.openAIOAuthService != nil {
+		return provider.openAIOAuthService.proxyRepo
+	}
+	return nil
+}
+
 func (s *AccountUsageService) probeOpenAICodexSnapshot(ctx context.Context, account *Account) (map[string]any, error) {
 	if account == nil || !account.IsOAuth() {
 		return nil, nil
 	}
+	ctx, release, err := beginOpenAIRequestProxyWithRepository(ctx, nil, account, s.openAIUsageProxyRepository())
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+
 	accessToken := ""
 	if !account.IsOpenAIAgentIdentity() {
 		accessToken = account.GetOpenAIAccessToken()
@@ -892,8 +915,11 @@ func (s *AccountUsageService) probeOpenAICodexSnapshot(ctx context.Context, acco
 	enforceCodexIdentityHeadersWithUA(req.Header, account.GetOpenAIUserAgent())
 	setOpenAIChatGPTAccountHeaders(req.Header, account)
 
-	proxyURL := ""
-	if account.ProxyID != nil && account.Proxy != nil {
+	proxyURL, err := resolveOpenAIMaintenanceProxy(ctx, account, s.openAIUsageProxyRepository())
+	if err != nil {
+		return nil, err
+	}
+	if !account.OpenAIRequestProxyEnabled() && account.ProxyID != nil && account.Proxy != nil {
 		proxyURL = account.Proxy.URL()
 	}
 	client, err := httppool.GetClient(httppool.Options{

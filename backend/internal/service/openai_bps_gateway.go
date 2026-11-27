@@ -294,6 +294,19 @@ func (s *OpenAIGatewayService) forwardOpenAIBPS(ctx context.Context, c *gin.Cont
 		}
 		ctx = c.Request.Context()
 	}
+	// A direct BPS call (including account tests) owns the same request scope
+	// as ordinary OpenAI forwarding. Acquire before refreshing credentials.
+	var releaseProxy func()
+	ctx, releaseProxy, err = s.beginOpenAIRequestProxy(ctx, nil, account)
+	if err != nil {
+		return nil, &bpsError{503, "openai_proxy_unavailable", "No selected proxy is ready; direct fallback is disabled"}
+	}
+	defer releaseProxy()
+	// BPS owns its protocol error writer, so acquisition above does not write
+	// through Gin. Still expose the actual selected exit for operational logs.
+	if route, ok := openAIRequestProxyFromContext(ctx, account.ID); ok {
+		c.Set(openAIRequestProxyOpsKey, route)
+	}
 	if !bpsBoundAccountAllowed(ctx, account) {
 		return nil, &bpsError{409, "bps_account_unavailable", "The account bound to this BPS conversation is unavailable"}
 	}
@@ -311,12 +324,33 @@ func (s *OpenAIGatewayService) forwardOpenAIBPS(ctx context.Context, c *gin.Cont
 	if account.ProxyID != nil && account.Proxy != nil {
 		proxyURL = account.Proxy.URL()
 	}
+	if route, ok := openAIRequestProxyFromContext(ctx, account.ID); ok {
+		proxyURL = route.proxy
+	}
 	SetActualOpenAIUpstreamEndpoint(c, "/basispoints/api/responses")
 	snapshot := OpenAIBPSCredentialSnapshot{AccessToken: strings.TrimPrefix(req.Header.Get("Authorization"), "Bearer "), AccountID: req.Header.Get("chatgpt-account-id")}
 	ctx = context.WithValue(ctx, bpsCredentialSnapshotContextKey{}, snapshot)
 	req = req.WithContext(ctx)
+	route, scoped := openAIRequestProxyFromContext(ctx, account.ID)
+	if scoped {
+		req, err = route.bind(req)
+		if err != nil {
+			return nil, err
+		}
+	}
 	resp, err := s.httpUpstream.Do(req, proxyURL, account.ID, account.Concurrency)
+	if scoped {
+		route.track(resp)
+	}
 	if err != nil {
+		// An attempted request cannot be replayed through a different exit:
+		// the provider may have accepted it before transport failure.
+		if scoped {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			return nil, &bpsError{502, "bps_upstream_error", "BPS upstream request failed"}
+		}
 		if !bpsHasBinding(ctx) && ctx.Err() == nil {
 			return nil, &UpstreamFailoverError{StatusCode: 502, ClientMessage: "BPS upstream is temporarily unavailable"}
 		}
