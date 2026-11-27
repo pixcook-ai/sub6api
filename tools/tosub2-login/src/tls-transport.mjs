@@ -361,6 +361,9 @@ export class TlsFingerprintTransport {
     });
     this.child.stdout.setEncoding("utf8");
     this.child.stderr.setEncoding("utf8");
+    this.child.stdout.on("error", (error) => this.close(error));
+    this.child.stdout.on("end", () => this.close(new Error("TLS worker output ended unexpectedly")));
+    this.child.stderr.on("error", (error) => this.close(error));
     this.child.stdout.on("data", (chunk) => this.consumeStdout(chunk));
     this.child.stderr.on("data", (chunk) => {
       this.stderrBuffer = `${this.stderrBuffer}${chunk}`.slice(-4_000);

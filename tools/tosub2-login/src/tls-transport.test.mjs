@@ -202,3 +202,53 @@ test("ordinary TLS request failures preserve the selected proxy for the next req
   assert.deepEqual(messages.filter(message => message.operation === "configure").map(message => message.proxy), [proxy]);
   assert.equal(messages.filter(message => message.operation === "request").length, 2);
 });
+
+for (const failure of [
+  { name: "stdout end", trigger: worker => worker.stdout.end() },
+  { name: "stdout error", trigger: worker => worker.stdout.emit("error", new Error("stdout failure")) },
+  { name: "stderr error", trigger: worker => worker.stderr.emit("error", new Error("stderr failure")) },
+  { name: "invalid stdout JSON", trigger: worker => worker.stdout.write("invalid-json\n") },
+]) {
+  test(`TLS worker ${failure.name} rejects every active request and prevents later writes`, async (context) => {
+    const { workers, messages } = mockTlsWorkers(context);
+    const transport = new TlsFingerprintTransport({ isolateProxyEnvironment: true });
+    context.after(() => transport.close());
+    await transport.configure("http://proxy.invalid:3128");
+    workers[0].respond = false;
+    const rejected = Promise.all([
+      assert.rejects(transport.fetch("https://auth.openai.com/first", { timeoutMs: 100 })),
+      assert.rejects(transport.fetch("https://auth.openai.com/second", { timeoutMs: 100 })),
+    ]);
+    await new Promise(resolve => setImmediate(resolve));
+    const messageCount = messages.length;
+    failure.trigger(workers[0]);
+    await new Promise(resolve => setImmediate(resolve));
+
+    assert.equal(transport.closed, true);
+    await rejected;
+    await assert.rejects(transport.fetch("https://auth.openai.com/after-failure"));
+    assert.equal(workers.length, 1);
+    assert.equal(messages.length, messageCount);
+  });
+}
+
+test("TLS worker write callback errors reject every active request and prevent later writes", async (context) => {
+  const { workers, messages } = mockTlsWorkers(context);
+  const transport = new TlsFingerprintTransport({ isolateProxyEnvironment: true });
+  context.after(() => transport.close());
+  await transport.configure("http://proxy.invalid:3128");
+  workers[0].respond = false;
+  const firstRejected = assert.rejects(transport.fetch("https://auth.openai.com/first", { timeoutMs: 100 }), /write failure/);
+  await new Promise(resolve => setImmediate(resolve));
+  workers[0].stdin.write = (_line, callback) => {
+    queueMicrotask(() => callback(new Error("write failure")));
+    return true;
+  };
+  const secondRejected = assert.rejects(transport.fetch("https://auth.openai.com/second", { timeoutMs: 100 }), /write failure/);
+  await Promise.all([firstRejected, secondRejected]);
+  const messageCount = messages.length;
+
+  await assert.rejects(transport.fetch("https://auth.openai.com/after-failure"));
+  assert.equal(workers.length, 1);
+  assert.equal(messages.length, messageCount);
+});
