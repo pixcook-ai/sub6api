@@ -37,7 +37,8 @@ func TestTiboBPSRuntimeRecoveryUsesRealHTTPAndPersistsHistory(t *testing.T) {
 	tc.account.Platform = PlatformOpenAIBPS
 	tc.account.Schedulable = false
 	tc.account.Extra[OpenAITiboQualityIsolatedExtraKey] = true
-	repo := tc.svc.accountRepo.(*tiboAccountRepo)
+	repo, ok := tc.svc.accountRepo.(*tiboAccountRepo)
+	require.True(t, ok)
 	repo.setAccount(func(a *Account) { *a = *cloneTiboAccount(tc.account) })
 	cache := &bpsMemoryStore{data: map[string][]byte{"business-session": []byte("unchanged")}}
 	tc.svc.cache = cache
@@ -148,7 +149,8 @@ func TestTiboBPSRuntimeEnrollmentFailureDoesNotPruneEitherPlatform(t *testing.T)
 func TestTiboBPSRuntimeDisabledAccountIsRecheckedBeforeSend(t *testing.T) {
 	tc := newTiboRouteCase(t, false, false)
 	tc.account.Platform = PlatformOpenAIBPS
-	repo := tc.svc.accountRepo.(*tiboAccountRepo)
+	repo, ok := tc.svc.accountRepo.(*tiboAccountRepo)
+	require.True(t, ok)
 	repo.setAccount(func(a *Account) { a.Platform, a.Status = PlatformOpenAIBPS, StatusDisabled })
 	state := tc.svc.openAITiboAccountState(tc.account.ID)
 	tc.svc.runOpenAITiboProbe(context.Background(), state, openAITiboRouteHTTP, nil, false)
