@@ -136,7 +136,7 @@ func testClaudeOAuthMimicStream(t *testing.T, cliVersion, encoding string, compr
 			t.Errorf("initialize %s fixture: %v", encoding, err)
 			return
 		}
-		defer compressed.Close()
+		defer func(writer io.Closer) { _ = writer.Close() }(compressed)
 		_, _ = io.WriteString(compressed, "event: message_start\n"+
 			`data: {"type":"message_start","message":{"id":"msg_mimic","type":"message","role":"assistant","model":"`+claudeMimicFixtureModel+`","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":9,"output_tokens":1}}}`+"\n\n")
 		if err := compressed.Flush(); err != nil {
@@ -189,7 +189,7 @@ func testClaudeOAuthMimicStream(t *testing.T, cliVersion, encoding string, compr
 	req.Header.Set("X-Api-Key", "synthetic-client-api-key")
 	resp, err := downstream.Client().Do(req)
 	require.NoError(t, err, "gateway must deliver the first SSE frame before the upstream finishes")
-	defer resp.Body.Close()
+	defer func(body io.ReadCloser) { _ = body.Close() }(resp.Body)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	require.Equal(t, "text/event-stream", resp.Header.Get("Content-Type"))
 	require.Equal(t, "req_mimic_loopback", resp.Header.Get("Request-Id"))

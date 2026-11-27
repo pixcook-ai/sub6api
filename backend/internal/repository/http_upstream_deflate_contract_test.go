@@ -43,7 +43,8 @@ func TestHTTPUpstreamDeflateSSEContract(t *testing.T) {
 				_, _ = w.Write(encoded)
 			}))
 			defer server.Close()
-			upstream := NewHTTPUpstream(nil).(*httpUpstreamService)
+			upstream, ok := NewHTTPUpstream(nil).(*httpUpstreamService)
+			require.True(t, ok)
 			t.Cleanup(func() {
 				upstream.mu.RLock()
 				defer upstream.mu.RUnlock()
@@ -99,7 +100,8 @@ func TestHTTPUpstreamDeflateReturnsBeforeFirstFrame(t *testing.T) {
 			request, err := http.NewRequestWithContext(ctx, http.MethodPost, server.URL, nil)
 			require.NoError(t, err)
 			request.Header.Set("Accept-Encoding", "deflate")
-			upstream := NewHTTPUpstream(nil).(*httpUpstreamService)
+			upstream, ok := NewHTTPUpstream(nil).(*httpUpstreamService)
+			require.True(t, ok)
 			result := make(chan *http.Response, 1)
 			go func() {
 				response, requestErr := upstream.Do(request, "", 1, 1)

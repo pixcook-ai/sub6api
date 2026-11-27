@@ -79,7 +79,10 @@ func TestClaudeTLSUpstreamContract(t *testing.T) {
 				negotiated <- negotiatedTLS{state: *r.TLS, proto: r.Proto}
 				w.Header().Set("Content-Type", "text/event-stream")
 				_, _ = io.WriteString(w, first)
-				w.(http.Flusher).Flush()
+				if err := http.NewResponseController(w).Flush(); err != nil {
+					t.Errorf("flush initial TLS fixture frame: %v", err)
+					return
+				}
 				select {
 				case <-releaseFinal:
 					_, _ = io.WriteString(w, final)

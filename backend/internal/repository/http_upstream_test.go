@@ -48,7 +48,8 @@ func TestHTTPUpstreamDoCanDisableRedirectsPerRequest(t *testing.T) {
 				// Exercise the HTTPS TLS-client path. Only its first hop is a fixture;
 				// an HTTP downgrade would make a real connection to the target.
 				endpoint = "https://redirector.example/test"
-				svc := upstream.(*httpUpstreamService)
+				svc, ok := upstream.(*httpUpstreamService)
+				require.True(t, ok)
 				entry, err := svc.getClientEntryWithTLS("", 1, 1, profile, service.HTTPUpstreamProfileDefault, false, false)
 				require.NoError(t, err)
 				entry.client.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {

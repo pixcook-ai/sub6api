@@ -50,7 +50,7 @@ func TestHTTPUpstreamUsesChangedTLSProfile(t *testing.T) {
 		profile := &tlsfingerprint.Profile{Name: "test template", CipherSuites: []uint16{cipherSuite}}
 		response, err := upstream.DoWithTLS(req, "", 1, 1, profile)
 		require.NoError(t, err)
-		defer response.Body.Close()
+		defer func(body io.ReadCloser) { _ = body.Close() }(response.Body)
 		body, err := io.ReadAll(response.Body)
 		require.NoError(t, err)
 		var observed connection
