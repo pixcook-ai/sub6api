@@ -55,7 +55,9 @@ func TestTiboBPSForwardRouteDegradedTriStatePreservesWireAndBinding(t *testing.T
 			scope := svc.bpsScope(c, body)
 			require.NoError(t, svc.bpsBind(c.Request.Context(), scope, account))
 			require.NoError(t, svc.PrepareOpenAIBPSRouting(c, body))
-			before := append([]byte(nil), svc.cache.(*bpsMemoryStore).data[scope+":session"]...)
+			store, ok := svc.cache.(*bpsMemoryStore)
+			require.True(t, ok)
+			before := append([]byte(nil), store.data[scope+":session"]...)
 			result, err := svc.Forward(c.Request.Context(), c, account, body)
 			require.NoError(t, err)
 			require.NotNil(t, result)
@@ -66,7 +68,7 @@ func TestTiboBPSForwardRouteDegradedTriStatePreservesWireAndBinding(t *testing.T
 			require.Equal(t, "workspace-1", upstream.request.Header.Get("chatgpt-account-id"))
 			require.Empty(t, upstream.request.Header.Get("originator"))
 			require.Equal(t, "gpt-6-astra", gjson.GetBytes(upstream.requestBody, "model").String())
-			require.Equal(t, before, svc.cache.(*bpsMemoryStore).data[scope+":session"])
+			require.Equal(t, before, store.data[scope+":session"])
 			if tt.want != nil {
 				require.Equal(t, openAITiboRouteHTTP, svc.loadOpenAITiboPin(account.ID, scope, time.Now()), "quality bookkeeping uses the tenant-scoped BPS conversation")
 			}

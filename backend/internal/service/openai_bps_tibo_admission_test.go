@@ -47,7 +47,9 @@ func TestOpenAIBPSTiboFinalAdmissionReadsDurableIsolationWhenMonitorDisabled(t *
 				require.NoError(t, svc.bpsBind(c.Request.Context(), svc.bpsScope(c, body), account))
 				require.NoError(t, svc.PrepareOpenAIBPSRouting(c, body))
 			}
-			before := append([]byte(nil), svc.cache.(*bpsMemoryStore).data[svc.bpsScope(c, body)+":session"]...)
+			store, ok := svc.cache.(*bpsMemoryStore)
+			require.True(t, ok)
+			before := append([]byte(nil), store.data[svc.bpsScope(c, body)+":session"]...)
 			result, err := svc.Forward(c.Request.Context(), c, account, body)
 			require.Nil(t, result)
 			var failover *UpstreamFailoverError
@@ -59,7 +61,7 @@ func TestOpenAIBPSTiboFinalAdmissionReadsDurableIsolationWhenMonitorDisabled(t *
 			require.Empty(t, rec.Body.String(), "leave the failover response to the handler")
 			require.Equal(t, 1, repo.qualityReads)
 			require.Zero(t, repo.fullReads)
-			require.Equal(t, before, svc.cache.(*bpsMemoryStore).data[svc.bpsScope(c, body)+":session"], "quality rejection must preserve the existing conversation binding")
+			require.Equal(t, before, store.data[svc.bpsScope(c, body)+":session"], "quality rejection must preserve the existing conversation binding")
 		})
 	}
 }

@@ -62,7 +62,7 @@ func (h *AccountHandler) ClearTiboQualityIsolation(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
-	if account == nil || (!account.IsOpenAI() && !(account.IsOpenAIBPS() && account.Type == service.AccountTypeOAuth)) {
+	if account == nil || (!account.IsOpenAI() && (!account.IsOpenAIBPS() || account.Type != service.AccountTypeOAuth)) {
 		response.BadRequest(c, "Tibo quality isolation applies to OpenAI or BPS OAuth accounts")
 		return
 	}
