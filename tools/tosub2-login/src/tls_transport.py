@@ -254,7 +254,7 @@ class Worker:
 
     def request(self, message):
         if self.session is None:
-            self.configure(message.get("proxy"), message.get("impersonate"))
+            raise RuntimeError("TLS session must be configured before sending requests")
 
         method = str(message.get("method") or "GET").upper()
         url = str(message.get("url") or "")

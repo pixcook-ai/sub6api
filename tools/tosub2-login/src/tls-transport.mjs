@@ -83,6 +83,7 @@ export class TlsFingerprintTransport {
   }
 
   async configure(proxy, { force = false } = {}) {
+    if (this.closed) throw new Error("TLS transport is closed");
     if (!this.enabled) return;
     if (!force && this.configuredProxy === (proxy || null) && this.configuredProfile === this.profile) return;
     const result = await this.send({
@@ -184,6 +185,7 @@ export class TlsFingerprintTransport {
   }
 
   async request(method, url, options = {}) {
+    if (this.closed) throw new Error("TLS transport is closed");
     if (!this.enabled) {
       const response = await fetch(url, options);
       return response;
@@ -237,6 +239,7 @@ export class TlsFingerprintTransport {
             console.log(`[cloudflare] 安全校验未通过（HTTP ${Number(solved?.status) || 0}），继续执行代理兜底流程。`);
           }
         } catch (error) {
+          if (this.closed) throw error;
           console.log(`[cloudflare] 安全校验处理失败：${safeCloudflareError(error)}，继续执行代理兜底流程。`);
         }
       }
@@ -318,6 +321,8 @@ export class TlsFingerprintTransport {
   async send(message) {
     if (this.closed) throw new Error("TLS transport is closed");
     await this.ensureChild();
+    if (this.closed || !this.child) throw new Error("TLS transport is closed");
+    const child = this.child;
     const id = String(this.nextId++);
     const payload = { id, ...message };
     return new Promise((resolve, reject) => {
@@ -326,11 +331,18 @@ export class TlsFingerprintTransport {
         reject(new Error(`TLS transport timed out after ${message.timeoutMs || DEFAULT_TIMEOUT_MS}ms`));
       }, Number(message.timeoutMs || DEFAULT_TIMEOUT_MS) + 5_000);
       this.pending.set(id, { resolve, reject, timer });
-      this.child.stdin.write(`${JSON.stringify(payload)}\n`);
+      try {
+        child.stdin.write(`${JSON.stringify(payload)}\n`, (error) => {
+          if (error) this.close(error);
+        });
+      } catch (error) {
+        this.close(error);
+      }
     });
   }
 
   async ensureChild() {
+    if (this.closed) throw new Error("TLS transport is closed");
     if (this.child) return;
     const python = findPythonCommand();
     if (!python) {
@@ -354,13 +366,11 @@ export class TlsFingerprintTransport {
       this.stderrBuffer = `${this.stderrBuffer}${chunk}`.slice(-4_000);
       if (this.verbose) process.stderr.write(`[tls] ${chunk}`);
     });
-    this.child.on("error", (error) => this.failPending(error));
+    this.child.stdin.on("error", (error) => this.close(error));
+    this.child.on("error", (error) => this.close(error));
     this.child.on("close", (code, signal) => {
-      this.child = null;
-      this.configuredProxy = UNCONFIGURED;
-      this.configuredProfile = null;
-      this.identityProfile = this.profile;
-      if (!this.closed) this.failPending(new Error(`TLS worker exited unexpectedly with ${signal || code}`));
+      // A restarted worker would lose its proxy, cookies and authentication session.
+      this.close(new Error(`TLS worker exited unexpectedly with ${signal || code}`));
     });
   }
 
@@ -375,8 +385,8 @@ export class TlsFingerprintTransport {
       try {
         message = JSON.parse(line);
       } catch (error) {
-        this.failPending(new Error(`TLS worker returned invalid JSON: ${error.message}`));
-        continue;
+        this.close(new Error(`TLS worker returned invalid JSON: ${error.message}`));
+        return;
       }
       const pending = this.pending.get(String(message.id));
       if (!pending) continue;
@@ -395,13 +405,13 @@ export class TlsFingerprintTransport {
     this.pending.clear();
   }
 
-  async close() {
+  async close(error = new Error("TLS transport closed")) {
     if (this.closed) return;
     this.closed = true;
-    if (!this.child) return;
-    this.child.kill();
+    const child = this.child;
     this.child = null;
-    this.failPending(new Error("TLS transport closed"));
+    this.failPending(error);
+    child?.kill();
   }
 }
 
