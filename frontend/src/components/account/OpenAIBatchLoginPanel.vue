@@ -133,7 +133,7 @@ const emit = defineEmits<{ created: []; busy: [value: boolean] }>()
 const { t } = useI18n()
 const POLL_INTERVAL_MS = 1000
 const PROGRESS_STAGES = new Set([
-  'proxy_check', 'authorize', 'email', 'password', 'totp', 'workspace', 'token_exchange', 'create_account'
+  'proxy_check', 'timezone_check', 'authorize', 'email', 'password', 'totp', 'workspace', 'token_exchange', 'create_account'
 ])
 
 const text = ref('')

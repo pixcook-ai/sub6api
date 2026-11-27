@@ -104,6 +104,29 @@ class WorkerSessionTests(unittest.TestCase):
         self.assertEqual(len(self.sessions), 1)
         self.assertEqual(len(self.worker.session.calls), 2)
 
+    def test_proxy_timezone_detection_uses_the_configured_session(self):
+        self.worker.configure("http://proxy.example.invalid:3128", "chrome146")
+        response = SimpleNamespace(
+            status_code=200,
+            content=b'{"success":true,"timezone":{"id":"America/Los_Angeles"}}',
+        )
+        self.worker.session.get = lambda url, **options: response
+
+        result = self.worker.detect_proxy_timezone()
+
+        self.assertEqual(result, {"timezoneId": "America/Los_Angeles"})
+        self.assertEqual(self.worker.timezone_id, "America/Los_Angeles")
+
+    def test_proxy_timezone_detection_fails_closed_for_invalid_timezone(self):
+        self.worker.configure("http://proxy.example.invalid:3128", "chrome146")
+        response = SimpleNamespace(
+            status_code=200,
+            content=b'{"success":true,"timezone":{"id":"Mars/Olympus_Mons"}}',
+        )
+        self.worker.session.get = lambda url, **options: response
+
+        with self.assertRaisesRegex(RuntimeError, "PROXY_TIMEZONE_DETECTION_FAILED"):
+            self.worker.detect_proxy_timezone()
 
 if __name__ == "__main__":
     unittest.main()

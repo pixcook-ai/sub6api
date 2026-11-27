@@ -10,6 +10,7 @@ import re
 import sys
 from typing import get_args
 from urllib.parse import urljoin, urlparse
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 try:
     from curl_cffi import requests
@@ -23,6 +24,8 @@ except Exception as error:  # pragma: no cover - exercised on missing local depe
 
 SOLVER_PATH = Path(__file__).resolve().parent / "cloudflare-ctf" / "cloudflare_solver.py"
 SENTINEL_DIR = Path(__file__).resolve().parent / "cloudflare-ctf"
+PROXY_TIMEZONE_URL = "https://ipwho.is/"
+PROXY_TIMEZONE_TIMEOUT_SECONDS = 15
 if str(SENTINEL_DIR) not in sys.path:
     sys.path.insert(0, str(SENTINEL_DIR))
 from sentinel_client import SentinelClient
@@ -43,6 +46,7 @@ class Worker:
     def __init__(self):
         self.session = None
         self.proxy = None
+        self.timezone_id = None
         self.impersonate = "chrome146"
         self.verify_tls = True
         self.sentinel_client = None
@@ -58,7 +62,10 @@ class Worker:
         if self.session is not None:
             self.session.close()
             self.session = None
-        self.proxy = proxy or None
+        next_proxy = proxy or None
+        if next_proxy != self.proxy:
+            self.timezone_id = None
+        self.proxy = next_proxy
         self.verify_tls = bool(verify_tls)
         requested_profile = impersonate or "chrome146"
         profiles = [requested_profile]
@@ -290,6 +297,39 @@ class Worker:
             "cookies": cookies,
         }
 
+    def detect_proxy_timezone(self):
+        if self.session is None:
+            raise RuntimeError("TLS session must be configured before detecting proxy timezone")
+
+        try:
+            response = self.session.get(
+                PROXY_TIMEZONE_URL,
+                timeout=PROXY_TIMEZONE_TIMEOUT_SECONDS,
+                allow_redirects=False,
+            )
+        except Exception as error:
+            raise RuntimeError("PROXY_TIMEZONE_DETECTION_FAILED: request failed") from error
+
+        if int(response.status_code) != 200:
+            raise RuntimeError(
+                f"PROXY_TIMEZONE_DETECTION_FAILED: HTTP {int(response.status_code)}"
+            )
+
+        try:
+            location = json.loads(bytes(response.content or b"").decode("utf-8", errors="strict"))
+            timezone_id = str(location["timezone"]["id"]).strip()
+        except (UnicodeDecodeError, json.JSONDecodeError, KeyError, TypeError):
+            raise RuntimeError("PROXY_TIMEZONE_DETECTION_FAILED: invalid timezone response") from None
+        if location.get("success") is not True or not timezone_id or len(timezone_id) > 128:
+            raise RuntimeError("PROXY_TIMEZONE_DETECTION_FAILED: invalid timezone response")
+        try:
+            ZoneInfo(timezone_id)
+        except (ValueError, ZoneInfoNotFoundError):
+            raise RuntimeError("PROXY_TIMEZONE_DETECTION_FAILED: invalid IANA timezone") from None
+
+        self.timezone_id = timezone_id
+        return {"timezoneId": timezone_id}
+
     def solve_cloudflare(self, message):
         if self.session is None:
             raise RuntimeError("TLS session must be configured before solving Cloudflare")
@@ -300,13 +340,16 @@ class Worker:
         challenge_url = str(message.get("url") or "")
         parsed = urlparse(challenge_url)
         verification_url = f"{parsed.scheme}://{parsed.netloc}/"
+        identity = dict(message.get("browserIdentity") or {})
+        if self.timezone_id:
+            identity["timezoneId"] = self.timezone_id
         return CLOUDFLARE_SOLVER.solve_challenge(
             self.session,
             challenge_url=challenge_url,
             challenge_html=challenge_html,
             challenge_size=len(challenge_html.encode("utf-8")),
             user_agent=str(message.get("userAgent") or "Mozilla/5.0"),
-            browser_identity=message.get("browserIdentity") or {},
+            browser_identity=identity,
             verification_url=verification_url,
             node_command=str(message.get("nodeCommand") or "node"),
             timeout_seconds=max(10, int(message.get("solverTimeoutMs") or 70000) // 1000),
@@ -316,6 +359,9 @@ class Worker:
         if self.session is None:
             raise RuntimeError("TLS session must be configured before generating Sentinel tokens")
         identity = message.get("browserIdentity") or {}
+        identity = dict(identity)
+        if self.timezone_id:
+            identity["timezoneId"] = self.timezone_id
         user_agent = str(message.get("userAgent") or identity.get("userAgent") or "Mozilla/5.0")
         page_url = str(message.get("pageUrl") or "https://auth.openai.com/create-account/password")
         device_id = str(message.get("deviceID") or "") or None
@@ -377,6 +423,8 @@ def main():
                 result = worker.solve_cloudflare(message)
             elif operation == "generate_sentinel_tokens":
                 result = worker.generate_sentinel_tokens(message)
+            elif operation == "detect_proxy_timezone":
+                result = worker.detect_proxy_timezone()
             elif operation == "close":
                 worker.close_sentinel()
                 write_message({"id": request_id, "ok": True, "result": {"closed": True}})

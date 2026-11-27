@@ -20,6 +20,7 @@ func TestBatchLoginProgressWriterFiltersAndFramesEvents(t *testing.T) {
 	chunks := []string{
 		"private provider message\n{\"type\":\"progress\",\"sta",
 		"ge\":\"password\"}\n{\"type\":\"progress\",\"stage\":\"private-token\"}\n",
+		"{\"type\":\"progress\",\"stage\":\"timezone_check\"}\n",
 		"{\"type\":\"oauth_tokens\",\"stage\":\"totp\"}\n",
 		strings.Repeat("x", 300),
 		"{\"type\":\"progress\",\"stage\":\"email\"}\n",
@@ -31,7 +32,7 @@ func TestBatchLoginProgressWriterFiltersAndFramesEvents(t *testing.T) {
 			t.Fatalf("write returned %d, %v", n, err)
 		}
 	}
-	if !reflect.DeepEqual(stages, []string{"password", "totp"}) {
+	if !reflect.DeepEqual(stages, []string{"password", "timezone_check", "totp"}) {
 		t.Fatalf("unexpected progress %v", stages)
 	}
 }
@@ -165,11 +166,19 @@ func TestBatchLoginTerminalProgressPreservesOnlyFailedStage(t *testing.T) {
 }
 
 func TestBatchLoginFailedSnapshotPreservesHTTPCodeAndStage(t *testing.T) {
-	for _, code := range []string{"codex_oauth_risk_control_http_403", "codex_oauth_http_429", "codex_token_exchange_http_503"} {
-		t.Run(code, func(t *testing.T) {
+	for _, scenario := range []struct {
+		code  string
+		stage string
+	}{
+		{code: "codex_oauth_risk_control_http_403", stage: "password"},
+		{code: "codex_oauth_http_429", stage: "password"},
+		{code: "codex_token_exchange_http_503", stage: "password"},
+		{code: "proxy_timezone_detection_failed", stage: "timezone_check"},
+	} {
+		t.Run(scenario.code, func(t *testing.T) {
 			runner := func(ctx context.Context, provider string, entry BatchLoginEntry, proxy string, onProgress func(string)) (*batchLoginRecord, string) {
-				onProgress("password")
-				return parseBatchLoginOutput([]byte(`{"ok":false,"code":"`+code+`"}`), nil)
+				onProgress(scenario.stage)
+				return parseBatchLoginOutput([]byte(`{"ok":false,"code":"`+scenario.code+`"}`), nil)
 			}
 			svc := newBatchLoginTestService(t, &fakeBatchAdmin{}, runner, 1)
 			job, err := svc.Start(context.Background(), &BatchLoginInput{Entries: entries("fixture@example.invalid"), Targets: []string{"codex"}})
@@ -177,7 +186,7 @@ func TestBatchLoginFailedSnapshotPreservesHTTPCodeAndStage(t *testing.T) {
 				t.Fatal(err)
 			}
 			item := waitBatchLoginJob(t, svc, job.ID).Items[0]
-			if item.Status != BatchLoginItemFailed || item.Stage != "password" || item.Code != code {
+			if item.Status != BatchLoginItemFailed || item.Stage != scenario.stage || item.Code != scenario.code {
 				t.Fatalf("unexpected failed snapshot %+v", item)
 			}
 		})

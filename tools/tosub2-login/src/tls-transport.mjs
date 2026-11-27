@@ -13,6 +13,7 @@ const PROFILE_PROBE_CONCURRENCY = 4;
 const DEFAULT_SAME_PROXY_RISK_RETRIES = 3;
 const DEFAULT_SAME_PROXY_RISK_RETRY_DELAY_MS = 1_000;
 const DEFAULT_CLOUDFLARE_SOLVER_TIMEOUT_MS = 70_000;
+const DEFAULT_PROXY_TIMEZONE_TIMEOUT_MS = 20_000;
 const UNCONFIGURED = Symbol("unconfigured");
 
 export function browserIdentityForTlsProfile(profile = DEFAULT_PROFILE) {
@@ -59,6 +60,7 @@ export class TlsFingerprintTransport {
     this.enabled = Boolean(enabled);
     this.profile = profile || DEFAULT_PROFILE;
     this.identityProfile = this.profile;
+    this.timezoneId = null;
     this.verbose = Boolean(verbose);
     this.child = null;
     this.stdoutBuffer = "";
@@ -184,6 +186,37 @@ export class TlsFingerprintTransport {
     );
   }
 
+  async detectProxyTimezone() {
+    if (!this.enabled) {
+      throw new Error("PROXY_TIMEZONE_DETECTION_FAILED: TLS transport is unavailable");
+    }
+    const result = await this.send({
+      operation: "detect_proxy_timezone",
+      timeoutMs: DEFAULT_PROXY_TIMEZONE_TIMEOUT_MS,
+    });
+    const timezoneId = String(result?.timezoneId || "").trim();
+    try {
+      new Intl.DateTimeFormat("en-US", { timeZone: timezoneId }).format();
+    } catch {
+      throw new Error("PROXY_TIMEZONE_DETECTION_FAILED: invalid IANA timezone");
+    }
+    const canonicalTimezone = new Intl.DateTimeFormat("en-US", { timeZone: timezoneId })
+      .resolvedOptions().timeZone;
+    process.env.TZ = canonicalTimezone;
+    const runtimeTimezone = new Intl.DateTimeFormat().resolvedOptions().timeZone;
+    if (runtimeTimezone !== canonicalTimezone) {
+      throw new Error("PROXY_TIMEZONE_DETECTION_FAILED: Node runtime rejected timezone");
+    }
+    this.timezoneId = canonicalTimezone;
+    return canonicalTimezone;
+  }
+
+  browserIdentity() {
+    const identity = browserIdentityForTlsProfile(this.identityProfile || this.profile);
+    if (this.timezoneId) identity.timezoneId = this.timezoneId;
+    return identity;
+  }
+
   async request(method, url, options = {}) {
     if (this.closed) throw new Error("TLS transport is closed");
     if (!this.enabled) {
@@ -289,7 +322,7 @@ export class TlsFingerprintTransport {
       url,
       challengeBody: result.body || "",
       userAgent: String(userAgent),
-      browserIdentity: browserIdentityForTlsProfile(this.identityProfile || this.profile),
+      browserIdentity: this.browserIdentity(),
       nodeCommand: process.execPath,
       solverTimeoutMs: this.cloudflareSolverTimeoutMs,
       timeoutMs: this.cloudflareSolverTimeoutMs,
@@ -300,7 +333,7 @@ export class TlsFingerprintTransport {
     if (!this.enabled) {
       throw new Error("动态 Sentinel 令牌需要启用 Python TLS 传输层");
     }
-    const identity = browserIdentityForTlsProfile(this.identityProfile || this.profile);
+    const identity = this.browserIdentity();
     return this.send({
       operation: "generate_sentinel_tokens",
       flow: String(flow || "default"),

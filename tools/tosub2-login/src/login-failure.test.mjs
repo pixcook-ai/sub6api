@@ -16,6 +16,13 @@ test("keeps proxy connection failures tied to their login stage", () => {
   assert.equal(stageLoginFailure("codex_chatgpt_preflight", category), "codex_chatgpt_preflight_proxy_error");
 });
 
+test("reports proxy timezone detection failures with a stable code", () => {
+  const category = classifyLoginFailure("PROXY_TIMEZONE_DETECTION_FAILED: invalid IANA timezone");
+
+  assert.equal(category, "proxy_timezone_detection_failed");
+  assert.equal(stageLoginFailure("codex_oauth", category), "proxy_timezone_detection_failed");
+});
+
 test("does not add a stage to authentication failures", () => {
   assert.equal(stageLoginFailure("codex_oauth", "password_rejected"), "password_rejected");
 });

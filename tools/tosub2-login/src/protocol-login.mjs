@@ -63,6 +63,7 @@ function userAgentForTransport(transport) {
 }
 
 function browserIdentityForTransport(transport) {
+  if (typeof transport?.browserIdentity === "function") return transport.browserIdentity();
   return browserIdentityForTlsProfile(transport?.identityProfile || transport?.profile || "chrome146");
 }
 
@@ -359,6 +360,17 @@ async function run() {
           throw new Error((args.oauthProvider === "codex" ? "codex" : "bps") + "_login_failed");
         }
         throw error;
+      }
+    }
+    if (args.oauthProvider) {
+      reportLoginProgress(args.oauthProfileRef, "timezone_check");
+      try {
+        const timezoneId = await transport.detectProxyTimezone();
+        console.log(`[proxy] 代理出口时区检测通过：${timezoneId}`);
+      } catch (error) {
+        const category = classifyLoginFailure(String(error && error.message || error));
+        process.stderr.write("[reason] " + (category || "proxy_timezone_detection_failed"));
+        throw new Error((args.oauthProvider === "codex" ? "codex" : "bps") + "_login_failed");
       }
     }
     if (args.oauthProvider) {

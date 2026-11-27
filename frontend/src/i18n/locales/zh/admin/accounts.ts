@@ -130,7 +130,6 @@ export default {
         riskConfirmButton: "我已了解风险，继续添加",
         replaceToken: "请更换 Access Token 后重新测试。",
         errorCode: "错误码",
-        manualResume: "调度开关仍为暂停；如需使用，请手动开启。",
         newTokenPending: "当前显示的是已保存凭证的状态，新 Token 保存后更新。",
         requestingUpstream: "正在请求 BPS 上游，等待模型响应…",
         upstreamResponse: "已收到 BPS 上游响应",
@@ -1704,6 +1703,7 @@ export default {
           },
           batchLoginProgress: {
             proxy_check: '检测代理…',
+            timezone_check: '检测代理时区…',
             authorize: '开始授权…',
             email: '提交邮箱…',
             password: '验证密码…',
@@ -1725,6 +1725,7 @@ export default {
             already_exists: '账号已存在',
             login_failed: '登录失败',
             proxy_error: '代理连接失败',
+            proxy_timezone_detection_failed: '无法检测代理出口时区，已停止自动授权',
             tls_error: 'TLS 握手失败',
             risk_control: '命中安全校验',
             email_otp_required: '自动登录停在邮箱验证码步骤，授权尚未完成',

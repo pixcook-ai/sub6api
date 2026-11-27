@@ -19,6 +19,7 @@ export function classifyLoginFailure(raw) {
 }
 
 function classifyFailureCategory(text) {
+  if (/PROXY_TIMEZONE_DETECTION_FAILED/.test(text)) return "proxy_timezone_detection_failed";
   if (/EMAIL_OTP_REQUIRED/.test(text)) return "email_otp_required";
   if (/EXCEL_ADDITIONAL_VERIFICATION_REQUIRED/.test(text)) return "additional_verification_required";
   if (/EXCEL_CALLBACK_STATE_MISMATCH/.test(text)) return "callback_state_mismatch";

@@ -121,7 +121,7 @@ func (w *batchLoginProgressWriter) report() {
 
 func isBatchLoginStage(stage string) bool {
 	switch stage {
-	case "proxy_check", "authorize", "email", "password", "totp", "workspace", "token_exchange", "create_account":
+	case "proxy_check", "timezone_check", "authorize", "email", "password", "totp", "workspace", "token_exchange", "create_account":
 		return true
 	default:
 		return false

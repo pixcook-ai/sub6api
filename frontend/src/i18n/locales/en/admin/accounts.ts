@@ -130,7 +130,6 @@ export default {
         riskConfirmButton: "I understand the risk. Add account",
         replaceToken: "Replace the access token and test the connection again.",
         errorCode: "Error code",
-        manualResume: "Scheduling remains paused. Enable it manually if you want to use this account.",
         newTokenPending: "This is the saved credential status. It will update after the new token is saved.",
         requestingUpstream: "Requesting the BPS upstream and waiting for the model response…",
         upstreamResponse: "BPS upstream response received",
@@ -1608,6 +1607,7 @@ export default {
           },
           batchLoginProgress: {
             proxy_check: 'Checking proxy…',
+            timezone_check: 'Detecting proxy time zone…',
             authorize: 'Starting authorization…',
             email: 'Submitting email…',
             password: 'Verifying password…',
@@ -1629,6 +1629,7 @@ export default {
             already_exists: 'Account already exists',
             login_failed: 'Login failed',
             proxy_error: 'Proxy connection failed',
+            proxy_timezone_detection_failed: 'Could not detect the proxy exit time zone. Authorization was stopped.',
             tls_error: 'TLS handshake failed',
             risk_control: 'Security check was triggered',
             email_otp_required: 'Automated login stopped at email verification. Authorization is incomplete.',

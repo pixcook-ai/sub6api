@@ -19,6 +19,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from runtime_timezone import node_environment_for_timezone
+
 from curl_cffi import requests
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -206,6 +208,7 @@ def start_runtime(
         stderr=None,
         text=True,
         bufsize=1,
+        env=node_environment_for_timezone(identity.get("timezoneId")),
     )
     return process, input_file
 

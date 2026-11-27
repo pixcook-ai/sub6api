@@ -36,6 +36,43 @@ test("proxy rotation keeps credentials without a session marker unchanged", () =
   assert.equal(rotateProxySession(proxy), proxy);
 });
 
+test("detected proxy timezone is applied to the isolated OAuth runtime", async (context) => {
+  const { workers, messages } = mockTlsWorkers(context);
+  const originalTimezone = process.env.TZ;
+  const transport = new TlsFingerprintTransport({ isolateProxyEnvironment: true });
+  context.after(async () => {
+    if (originalTimezone === undefined) delete process.env.TZ;
+    else process.env.TZ = originalTimezone;
+    await transport.close();
+  });
+  await transport.configure("http://proxy.invalid:3128");
+  workers[0].stdin.write = (line) => {
+    const message = JSON.parse(line);
+    messages.push(message);
+    const result = message.operation === "configure"
+      ? { profile: "chrome146", identityProfile: "chrome146" }
+      : message.operation === "detect_proxy_timezone"
+        ? { timezoneId: "America/Los_Angeles" }
+        : { status: 200, headers: [], body: "" };
+    queueMicrotask(() => workers[0].stdout.write(JSON.stringify({
+      id: message.id,
+      ok: true,
+      result,
+    }) + "\n"));
+    return true;
+  };
+
+  const detected = await transport.detectProxyTimezone();
+  const localDate = new Date("2020-01-01T12:00:00Z").toString();
+  const runtimeTimezone = new Intl.DateTimeFormat().resolvedOptions().timeZone;
+
+  assert.equal(detected, "America/Los_Angeles");
+  assert.equal(process.env.TZ, "America/Los_Angeles");
+  assert.match(localDate, /GMT-0800/);
+  assert.equal(runtimeTimezone, "America/Los_Angeles");
+  assert.equal(transport.browserIdentity().timezoneId, "America/Los_Angeles");
+});
+
 test("first proxy preparation rotates its session and preserves the remaining credentials", async () => {
   const proxy = new URL("http://proxy.invalid:8080");
   proxy.username = encodeURIComponent("user%2F-sid-FIXED-country-US");

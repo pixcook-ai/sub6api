@@ -1,5 +1,5 @@
 const STAGES = new Set([
-  "proxy_check", "authorize", "email", "password", "totp", "workspace", "token_exchange",
+  "proxy_check", "timezone_check", "authorize", "email", "password", "totp", "workspace", "token_exchange",
 ]);
 
 export function isLoginProgressStage(stage) {

@@ -16,6 +16,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from runtime_timezone import node_environment_for_timezone
+
 
 BASE_DIR = Path(__file__).resolve().parent
 PARENT_RUNTIME = BASE_DIR / "cf_runtime.cjs"
@@ -117,6 +119,9 @@ def start_runtime(
         stderr=subprocess.PIPE,
         text=True,
         bufsize=1,
+        env=node_environment_for_timezone(
+            (runtime_input.get("browserIdentity") or {}).get("timezoneId")
+        ),
     )
     return process, input_file
 
