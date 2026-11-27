@@ -225,6 +225,47 @@ describe('AccountTestModal', () => {
     })
   })
 
+  it.each(['openai', 'openai_bps'])('%s 非图片模型在所有测试模式下隐藏生图提示词', async platform => {
+    getAvailableModels.mockResolvedValue([{ id: 'gpt-5.6-luna', display_name: 'GPT-5.6 Luna' }])
+    const wrapper = mountModal({ id: 42, name: 'OAuth', platform, type: 'oauth', status: 'active' })
+    await wrapper.setProps({ show: true })
+    await flushPromises()
+
+    const mode = wrapper.findAll('select')[1]
+    const modes = platform === 'openai_bps' ? ['default', 'compact', 'bps_tools'] : ['default', 'compact']
+    for (const value of modes) {
+      await mode.setValue(value)
+      expect(wrapper.find('textarea.textarea-stub').exists()).toBe(false)
+    }
+    wrapper.unmount()
+  })
+
+  it('普通 OAuth 切换图片与文本模型时同步显示提示词且不发送隐藏的旧提示词', async () => {
+    getAvailableModels.mockResolvedValue([
+      { id: 'gpt-5.6-luna', display_name: 'GPT-5.6 Luna' },
+      { id: 'gpt-image-1', display_name: 'GPT Image 1' }
+    ])
+    const wrapper = mountModal({ id: 42, name: 'OAuth', platform: 'openai', type: 'oauth', status: 'active' })
+    await wrapper.setProps({ show: true })
+    await flushPromises()
+
+    const model = wrapper.find('select')
+    expect(wrapper.find('textarea.textarea-stub').exists()).toBe(false)
+    await model.setValue('gpt-image-1')
+    await flushPromises()
+    expect(wrapper.find('textarea.textarea-stub').exists()).toBe(true)
+    await wrapper.find('textarea.textarea-stub').setValue('draw a cat')
+    await model.setValue('gpt-5.6-luna')
+    expect(wrapper.find('textarea.textarea-stub').exists()).toBe(false)
+    const start = wrapper.findAll('button').find(button => button.text().includes('admin.accounts.startTest'))
+    await start!.trigger('click')
+    await flushPromises()
+
+    const [, request] = (global.fetch as any).mock.calls[0]
+    expect(JSON.parse(request.body)).toEqual({ model_id: 'gpt-5.6-luna', prompt: '', mode: 'default' })
+    wrapper.unmount()
+  })
+
   it('BPS OAuth 的真实管理弹窗显示工具闭环并提交 bps_tools，保留 completed 事件', async () => {
     getAvailableModels.mockResolvedValue([{ id: 'gpt-6-astra', display_name: 'GPT-6 Astra' }])
     global.fetch = vi.fn().mockResolvedValue(createStreamResponse([

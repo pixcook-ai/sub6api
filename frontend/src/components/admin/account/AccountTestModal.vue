@@ -506,7 +506,6 @@ const modelOptionsForMode = computed(() => {
 })
 
 const supportsPromptInput = computed(() => {
-  if (props.account?.platform === 'openai_bps') return true
   if (!isGrokAccount.value) {
     return supportsImageTest.value
   }
