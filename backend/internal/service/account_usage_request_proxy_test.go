@@ -21,7 +21,10 @@ func TestAccountUsageBPSRequestProxyNeverUsesSingleExit(t *testing.T) {
 		_, _ = w.Write([]byte(`{"rate_limit":{"primary_window":{"used_percent":12,"limit_window_seconds":18000,"reset_after_seconds":3600}}}`))
 	}))
 	defer selected.Close()
-	outside := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { outsideHits.Add(1); http.Error(w, "outside", 502) }))
+	outside := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		outsideHits.Add(1)
+		http.Error(w, "outside", http.StatusBadGateway)
+	}))
 	defer outside.Close()
 	chosen := quotaMaintenanceProxy(t, 4101, selected.URL)
 	old := quotaMaintenanceProxy(t, 4102, outside.URL)
@@ -77,7 +80,10 @@ func TestAccountUsageRequestProxyUnavailableDoesNotSend(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			var outsideHits atomic.Int32
-			outside := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { outsideHits.Add(1); http.Error(w, "outside", 502) }))
+			outside := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				outsideHits.Add(1)
+				http.Error(w, "outside", http.StatusBadGateway)
+			}))
 			defer outside.Close()
 			old := quotaMaintenanceProxy(t, 4302, outside.URL)
 			account := &Account{ID: 4300, Platform: PlatformOpenAI, Type: AccountTypeOAuth,

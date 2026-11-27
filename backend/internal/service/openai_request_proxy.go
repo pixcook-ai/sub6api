@@ -87,26 +87,6 @@ func (r *openAIRequestProxyRoute) finish() {
 	})
 }
 
-// Account tests return before their caller consumes the stream. Keep the
-// request scope alive until that final body ends, closes, or is canceled.
-type openAIRequestProxyOwnedBody struct {
-	io.ReadCloser
-	finish func()
-}
-
-func (b *openAIRequestProxyOwnedBody) Read(p []byte) (int, error) {
-	n, err := b.ReadCloser.Read(p)
-	if err != nil {
-		b.finish()
-	}
-	return n, err
-}
-func (b *openAIRequestProxyOwnedBody) Close() error {
-	err := b.ReadCloser.Close()
-	b.finish()
-	return err
-}
-
 // One logical HTTP turn owns its exit across payload repairs and continuations.
 // The scope ends only after Forward finishes consuming its final response.
 // SetOpenAIRequestProxyRepository supplies the same proxy catalog used by account administration.
