@@ -158,9 +158,18 @@ func (f *fakeConcurrencyCache) CleanupStaleProcessSlots(context.Context, string)
 
 func newTestGatewayHandler(t *testing.T, group *service.Group, accounts []*service.Account) (*GatewayHandler, func()) {
 	t.Helper()
+	return newTestGatewayHandlerWithUpstream(t, group, accounts, nil, nil)
+}
+
+func newTestGatewayHandlerWithUpstream(t *testing.T, group *service.Group, accounts []*service.Account, gatewayConfig *config.Config, upstream service.HTTPUpstream) (*GatewayHandler, func()) {
+	t.Helper()
 
 	schedulerCache := &fakeSchedulerCache{accounts: accounts}
 	schedulerSnapshot := service.NewSchedulerSnapshotService(schedulerCache, nil, nil, nil, nil)
+	var rateLimitService *service.RateLimitService
+	if upstream != nil {
+		rateLimitService = &service.RateLimitService{}
+	}
 
 	gwSvc := service.NewGatewayService(
 		nil, // accountRepo (not used: scheduler snapshot hit)
@@ -171,14 +180,14 @@ func newTestGatewayHandler(t *testing.T, group *service.Group, accounts []*servi
 		nil, // userSubRepo
 		nil, // userGroupRateRepo
 		nil, // cache (disable sticky)
-		nil, // cfg
+		gatewayConfig,
 		schedulerSnapshot,
 		nil, // concurrencyService (disable load-aware; tryAcquire always acquired)
 		nil, // billingService
-		nil, // rateLimitService
+		rateLimitService,
 		nil, // billingCacheService
 		nil, // identityService
-		nil, // httpUpstream
+		upstream,
 		nil, // deferredService
 		nil, // claudeTokenProvider
 		nil, // sessionLimitCache
@@ -207,6 +216,7 @@ func newTestGatewayHandler(t *testing.T, group *service.Group, accounts []*servi
 		// 这些字段对本测试不敏感，保持较小即可
 		maxAccountSwitches:       1,
 		maxAccountSwitchesGemini: 1,
+		cfg:                      gatewayConfig,
 	}
 
 	cleanup := func() {

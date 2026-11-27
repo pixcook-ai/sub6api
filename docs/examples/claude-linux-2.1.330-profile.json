@@ -1,0 +1,28 @@
+{
+  "lang": "js",
+  "package_version": "0.128.0",
+  "os": "Linux",
+  "arch": "x64",
+  "runtime": "node",
+  "runtime_version": "v26.12.1",
+  "entrypoint": "sdk-cli",
+  "model_betas": {
+    "claude-sonnet-4-5-20250929": [
+      "claude-code-20250219",
+      "oauth-2025-04-20",
+      "interleaved-thinking-2025-05-14",
+      "context-management-2025-06-27",
+      "thinking-token-count-2026-05-13",
+      "extended-cache-ttl-2025-04-11"
+    ]
+  },
+  "count_tokens_model_betas": {
+    "claude-sonnet-4-5-20250929": [
+      "claude-code-20250219",
+      "oauth-2025-04-20",
+      "interleaved-thinking-2025-05-14",
+      "context-management-2025-06-27",
+      "token-counting-2024-11-01"
+    ]
+  }
+}

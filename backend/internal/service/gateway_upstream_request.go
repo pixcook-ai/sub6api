@@ -103,15 +103,17 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 	//
 	// 顺序约束：
 	//   1) 算 finalBeta（纯函数，不依赖 req.Header；mimicry 路径仅保留明确支持的
-	//      客户端兼容性 beta，其余使用固定列表）
+	//      客户端兼容性 beta，其余使用模型配置或默认列表）
 	//   2) 按 finalBeta 做能力维度 body sanitize（如 context-management beta 缺失 →
 	//      strip body.context_management，与 Bedrock 路径对称）
 	//   3) CCH 签名（必须使用 strip 后的 body，否则 hash 与最终 body 不一致 →
 	//      被 Anthropic 判 third-party）
 	//   4) NewRequest（body 至此最终敲定）
 	//   5) 透传白名单 / fingerprint / mimic header / 写入 finalBeta
-	policyFilterSet := s.getBetaPolicyFilterSet(ctx, c, account, modelID)
-	effectiveDropSet := mergeDropSets(policyFilterSet)
+	effectiveDropSet, err := s.anthropicBetaDropSetForRequest(ctx, c, account, tokenType, mimicClaudeCode, modelID, false)
+	if err != nil {
+		return nil, nil, err
+	}
 	finalBetaHeader, finalBetaShouldSet := s.computeFinalAnthropicBeta(
 		tokenType, mimicClaudeCode, modelID, clientHeaders, body, effectiveDropSet,
 	)
@@ -564,14 +566,11 @@ func (s *GatewayService) computeFinalAnthropicBeta(
 
 	if tokenType == "oauth" {
 		if mimicClaudeCode {
-			// Keep the default beta set, with a narrow opt-in for legacy structured
-			// output requests. Unknown client betas remain excluded and policy drops
-			// still take precedence over this compatibility token.
-			incomingBeta := ""
-			if containsBetaToken(clientBeta, claude.BetaStructuredOutputs) {
-				incomingBeta = claude.BetaStructuredOutputs
+			requiredBetas, configured := claude.DefaultCompatibilityProfile().MimicBetas(modelID, false)
+			if !configured {
+				requiredBetas = claude.FullClaudeCodeMimicryBetas()
 			}
-			return mergeAnthropicBetaDropping(claude.FullClaudeCodeMimicryBetas(), incomingBeta, effectiveDropSet), true
+			return mergeAnthropicBetaDropping(requiredBetas, claudeMimicIncomingBeta(clientBeta, false), effectiveDropSet), true
 		}
 		// 真 Claude Code 客户端透传路径
 		return stripBetaTokensWithSet(s.getBetaHeader(modelID, clientBeta), effectiveDropSet), true
@@ -595,7 +594,8 @@ func (s *GatewayService) computeFinalAnthropicBeta(
 // 计算纯函数。语义与 computeFinalAnthropicBeta 对齐，但备份了 count_tokens 独有的
 // 两条特殊规则：
 //
-//   - OAuth mimic：requiredBetas 为 FullClaudeCodeMimicryBetas + BetaTokenCounting；
+//   - OAuth mimic：默认 requiredBetas 为 FullClaudeCodeMimicryBetas + BetaTokenCounting；
+//     显式模型配置使用 count_tokens 自己的列表。
 //     count_tokens 另外保留客户端 beta，而 messages mimic 仅保留明确支持的兼容性 token。
 //   - OAuth 透传 + 客户端未传 anthropic-beta：补齐 CountTokensBetaHeader
 //   - OAuth 透传 + 客户端传了：补齐 BetaTokenCounting（如果未含）
@@ -621,8 +621,11 @@ func (s *GatewayService) computeFinalCountTokensAnthropicBeta(
 			// 分支上**不**会跳过白名单透传（与 messages mimic 路径不同），所以
 			// incomingBeta = req.Header[anthropic-beta] = 客户端透传过来的 client beta。
 			// 重构后直接从 clientHeaders 拿同一个值，保持行为一致。
-			requiredBetas := append(claude.FullClaudeCodeMimicryBetas(), claude.BetaTokenCounting)
-			return mergeAnthropicBetaDropping(requiredBetas, clientBeta, effectiveDropSet), true
+			requiredBetas, configured := claude.DefaultCompatibilityProfile().MimicBetas(modelID, true)
+			if !configured {
+				requiredBetas = append(claude.FullClaudeCodeMimicryBetas(), claude.BetaTokenCounting)
+			}
+			return mergeAnthropicBetaDropping(requiredBetas, claudeMimicIncomingBeta(clientBeta, true), effectiveDropSet), true
 		}
 		if clientBeta == "" {
 			return claude.CountTokensBetaHeader, true
@@ -646,6 +649,18 @@ func (s *GatewayService) computeFinalCountTokensAnthropicBeta(
 		}
 	}
 	return "", false
+}
+
+// Messages preserves only the structured outputs compatibility token.
+// Count tokens keeps its existing inbound beta list.
+func claudeMimicIncomingBeta(clientBeta string, countTokens bool) string {
+	if countTokens {
+		return clientBeta
+	}
+	if containsBetaToken(clientBeta, claude.BetaStructuredOutputs) {
+		return claude.BetaStructuredOutputs
+	}
+	return ""
 }
 
 // stripBetaTokens removes the given beta tokens from a comma-separated header value.
@@ -762,6 +777,36 @@ func (s *GatewayService) getBetaPolicyFilterSet(ctx context.Context, c *gin.Cont
 		}
 	}
 	return s.evaluateBetaPolicy(ctx, "", account, model).filterSet
+}
+
+func (s *GatewayService) anthropicBetaDropSetForRequest(ctx context.Context, c *gin.Context, account *Account, tokenType string, mimicClaudeCode bool, modelID string, countTokens bool) (map[string]struct{}, error) {
+	if tokenType == "oauth" && mimicClaudeCode {
+		if configured, ok := claude.DefaultCompatibilityProfile().MimicBetas(modelID, countTokens); ok {
+			clientBeta := ""
+			if c != nil && c.Request != nil {
+				clientBeta = getHeaderRaw(c.Request.Header, "anthropic-beta")
+			}
+			betaHeader := mergeAnthropicBeta(configured, claudeMimicIncomingBeta(clientBeta, countTokens))
+			// The cached policy uses the inbound model. Evaluate outbound candidates
+			// against the final model before filtering.
+			policy := s.evaluateBetaPolicy(ctx, betaHeader, account, modelID)
+			if policy.blockErr != nil {
+				return nil, policy.blockErr
+			}
+			// Keep filters that matched the inbound model alias.
+			var inboundFilters []string
+			if c != nil {
+				cached, _ := c.Get(betaPolicyFilterSetKey)
+				filters, _ := cached.(map[string]struct{})
+				inboundFilters = make([]string, 0, len(filters))
+				for token := range filters {
+					inboundFilters = append(inboundFilters, token)
+				}
+			}
+			return mergeDropSets(policy.filterSet, inboundFilters...), nil
+		}
+	}
+	return mergeDropSets(s.getBetaPolicyFilterSet(ctx, c, account, modelID)), nil
 }
 
 // betaPolicyScopeMatches checks whether a rule's scope matches the current account type.
@@ -942,7 +987,12 @@ func applyClaudeCodeMimicHeaders(req *http.Request, isStream bool, mimicUserAgen
 	}
 	// Real Claude CLI uses Accept: application/json (even for streaming).
 	setHeaderRaw(req.Header, "Accept", "application/json")
-	if isStream {
+	if claude.DefaultCompatibilityProfile().Entrypoint == "sdk-cli" {
+		// The Linux headless CLI advertises all four supported encodings and
+		// streams through create(stream=true) without the SDK helper header.
+		setHeaderRaw(req.Header, "Accept-Encoding", "gzip, deflate, br, zstd")
+		deleteHeaderAllForms(req.Header, "x-stainless-helper-method")
+	} else if isStream {
 		setHeaderRaw(req.Header, "x-stainless-helper-method", "stream")
 	}
 	// Real Claude CLI 每个请求都会生成一个新的 UUID 放在 x-client-request-id。

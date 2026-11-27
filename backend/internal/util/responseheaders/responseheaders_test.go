@@ -10,22 +10,30 @@ import (
 func TestFilterHeadersDisabledUsesDefaultAllowlist(t *testing.T) {
 	src := http.Header{}
 	src.Add("Content-Type", "application/json")
+	src.Add("Request-Id", "req_123")
 	src.Add("X-Request-Id", "req-123")
+	src.Add("X-Should-Retry", "false")
 	src.Add("X-Test", "ok")
 	src.Add("Connection", "keep-alive")
 	src.Add("Content-Length", "123")
 
 	cfg := config.ResponseHeaderConfig{
 		Enabled:     false,
-		ForceRemove: []string{"x-request-id"},
+		ForceRemove: []string{"request-id", "x-request-id", "x-should-retry"},
 	}
 
 	filtered := FilterHeaders(src, CompileHeaderFilter(cfg))
 	if filtered.Get("Content-Type") != "application/json" {
 		t.Fatalf("expected Content-Type passthrough, got %q", filtered.Get("Content-Type"))
 	}
+	if got := filtered.Get("Request-Id"); got != "req_123" {
+		t.Fatalf("expected Request-Id allowed, got %q", got)
+	}
 	if filtered.Get("X-Request-Id") != "req-123" {
 		t.Fatalf("expected X-Request-Id allowed, got %q", filtered.Get("X-Request-Id"))
+	}
+	if got := filtered.Get("X-Should-Retry"); got != "false" {
+		t.Fatalf("expected X-Should-Retry allowed, got %q", got)
 	}
 	if filtered.Get("X-Test") != "" {
 		t.Fatalf("expected X-Test removed, got %q", filtered.Get("X-Test"))
@@ -64,6 +72,8 @@ func TestFilterHeadersForceRemoveOverridesReasoningIncluded(t *testing.T) {
 func TestFilterHeadersEnabledUsesAllowlist(t *testing.T) {
 	src := http.Header{}
 	src.Add("Content-Type", "application/json")
+	src.Add("Request-Id", "req_123")
+	src.Add("X-Should-Retry", "false")
 	src.Add("X-Extra", "ok")
 	src.Add("X-Remove", "nope")
 	src.Add("X-Blocked", "nope")
@@ -71,12 +81,18 @@ func TestFilterHeadersEnabledUsesAllowlist(t *testing.T) {
 	cfg := config.ResponseHeaderConfig{
 		Enabled:           true,
 		AdditionalAllowed: []string{"x-extra"},
-		ForceRemove:       []string{"x-remove"},
+		ForceRemove:       []string{"request-id", "x-should-retry", "x-remove"},
 	}
 
 	filtered := FilterHeaders(src, CompileHeaderFilter(cfg))
 	if filtered.Get("Content-Type") != "application/json" {
 		t.Fatalf("expected Content-Type allowed, got %q", filtered.Get("Content-Type"))
+	}
+	if got := filtered.Get("Request-Id"); got != "" {
+		t.Fatalf("expected Request-Id removed, got %q", got)
+	}
+	if got := filtered.Get("X-Should-Retry"); got != "" {
+		t.Fatalf("expected X-Should-Retry removed, got %q", got)
 	}
 	if filtered.Get("X-Extra") != "ok" {
 		t.Fatalf("expected X-Extra allowed, got %q", filtered.Get("X-Extra"))

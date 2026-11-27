@@ -708,11 +708,8 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 					return ""
 				}(),
 			})
-			return nil, &UpstreamFailoverError{
-				StatusCode:             resp.StatusCode,
-				ResponseBody:           respBody,
-				RetryableOnSameAccount: account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode),
-			}
+			retryableOnSameAccount := account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode)
+			return nil, s.upstreamHTTPFailoverError(c, account, resp, respBody, retryableOnSameAccount)
 		}
 		return s.handleRetryExhaustedError(ctx, resp, c, account)
 	}
@@ -744,11 +741,8 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 				return ""
 			}(),
 		})
-		return nil, &UpstreamFailoverError{
-			StatusCode:             resp.StatusCode,
-			ResponseBody:           respBody,
-			RetryableOnSameAccount: account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode),
-		}
+		retryableOnSameAccount := account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode)
+		return nil, s.upstreamHTTPFailoverError(c, account, resp, respBody, retryableOnSameAccount)
 	}
 	if resp.StatusCode >= 400 {
 		// 可选：对部分 400 触发 failover（默认关闭以保持语义）
@@ -795,7 +789,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 					logger.LegacyPrintf("service.gateway", "Account %d: 400 error, attempting failover", account.ID)
 				}
 				s.handleFailoverSideEffects(ctx, resp, account, reqModel)
-				return nil, &UpstreamFailoverError{StatusCode: resp.StatusCode, ResponseBody: respBody}
+				return nil, s.upstreamHTTPFailoverError(c, account, resp, respBody, false)
 			}
 		}
 		return s.handleErrorResponse(ctx, resp, c, account, reqModel)

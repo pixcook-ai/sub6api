@@ -5,7 +5,9 @@ import (
 	"bytes"
 	"compress/flate"
 	"compress/gzip"
+	"compress/zlib"
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"encoding/json"
 	"errors"
@@ -641,10 +643,14 @@ func (s *httpUpstreamService) getClientEntryWithTLS(proxyURL string, accountID i
 	if err != nil {
 		return nil, err
 	}
+	profileJSON, err := json.Marshal(profile)
+	if err != nil {
+		return nil, fmt.Errorf("encode upstream TLS profile: %w", err)
+	}
 	settings := s.resolvePoolSettings(isolation, accountConcurrency)
 	settings = s.applyProfilePoolSettings(settings, upstreamProfile)
-	// TLS 指纹客户端使用独立的缓存键，加 "tls:" 前缀
-	cacheKey := "tls:" + buildCacheKey(isolation, proxyKey, accountID, upstreamProtocolModeDefault)
+	// Match TLS clients by profile contents so edits to an existing profile take effect.
+	cacheKey := fmt.Sprintf("tls:%s|profile:%x", buildCacheKey(isolation, proxyKey, accountID, upstreamProtocolModeDefault), sha256.Sum256(profileJSON))
 	poolKey := buildPoolKey(settings, upstreamProtocolModeDefault) + ":tls"
 
 	now := time.Now()
@@ -696,7 +702,13 @@ func (s *httpUpstreamService) getClientEntryWithTLS(proxyURL string, accountID i
 
 	// 创建带 TLS 指纹的 Transport
 	slog.Debug("tls_fingerprint_creating_new_client", "account_id", accountID, "cache_key", cacheKey, "proxy", proxyKey)
-	transport, err := buildUpstreamTransportWithTLSFingerprint(settings, parsedProxy, profile)
+	// Keep the dialer independent of the caller's profile and its shared slices.
+	var profileSnapshot *tlsfingerprint.Profile
+	if err := json.Unmarshal(profileJSON, &profileSnapshot); err != nil {
+		s.mu.Unlock()
+		return nil, fmt.Errorf("decode upstream TLS profile: %w", err)
+	}
+	transport, err := buildUpstreamTransportWithTLSFingerprint(settings, parsedProxy, profileSnapshot)
 	if err != nil {
 		s.mu.Unlock()
 		return nil, fmt.Errorf("build TLS fingerprint transport: %w", err)
@@ -1651,6 +1663,7 @@ func decompressResponseBody(resp *http.Response) {
 
 	originalBody := resp.Body
 	var reader io.Reader
+	var decodedBody io.ReadCloser
 	switch ce {
 	case "gzip":
 		gr, err := gzip.NewReader(resp.Body)
@@ -1661,7 +1674,7 @@ func decompressResponseBody(resp *http.Response) {
 	case "br":
 		reader = brotli.NewReader(resp.Body)
 	case "deflate":
-		reader = flate.NewReader(resp.Body)
+		decodedBody = &deflateResponseBody{body: originalBody}
 	case "zstd":
 		bufferedBody := bufio.NewReader(resp.Body)
 		resp.Body = &decompressedBody{reader: bufferedBody, closer: originalBody}
@@ -1683,10 +1696,64 @@ func decompressResponseBody(resp *http.Response) {
 		return
 	}
 
-	resp.Body = &decompressedBody{reader: reader, closer: originalBody}
+	if decodedBody == nil {
+		decodedBody = &decompressedBody{reader: reader, closer: originalBody}
+	}
+	resp.Body = decodedBody
 	resp.Header.Del("Content-Encoding")
 	resp.Header.Del("Content-Length") // 解压后长度不确定
 	resp.ContentLength = -1
+}
+
+// Select the deflate decoder on the first Read so Do can return flushed headers
+// before the upstream sends its first SSE frame. Standard zlib headers take
+// precedence over ambiguous raw DEFLATE prefixes; common raw streams remain
+// compatible, but zlib errors are never hidden by retrying a different decoder.
+type deflateResponseBody struct {
+	body      io.ReadCloser
+	readMu    sync.Mutex
+	decoder   io.ReadCloser
+	initErr   error
+	closed    atomic.Bool
+	closeOnce sync.Once
+	closeErr  error
+}
+
+func (b *deflateResponseBody) Read(p []byte) (int, error) {
+	b.readMu.Lock()
+	defer b.readMu.Unlock()
+	if b.closed.Load() {
+		return 0, io.ErrClosedPipe
+	}
+	if b.decoder == nil && b.initErr == nil {
+		buffered := bufio.NewReader(b.body)
+		header, _ := buffered.Peek(2)
+		isZlib := len(header) == 2 && header[0]&0x0f == 8 && header[0]>>4 <= 7 &&
+			(uint16(header[0])<<8|uint16(header[1]))%31 == 0
+		if isZlib {
+			b.decoder, b.initErr = zlib.NewReader(buffered)
+		} else {
+			b.decoder = flate.NewReader(buffered)
+		}
+	}
+	if b.initErr != nil {
+		return 0, b.initErr
+	}
+	return b.decoder.Read(p)
+}
+
+func (b *deflateResponseBody) Close() error {
+	b.closeOnce.Do(func() {
+		b.closed.Store(true)
+		// Close the network body first to unblock a pending Peek or Read.
+		b.closeErr = b.body.Close()
+		b.readMu.Lock()
+		defer b.readMu.Unlock()
+		if b.decoder != nil {
+			_ = b.decoder.Close()
+		}
+	})
+	return b.closeErr
 }
 
 type zstdResponseReader struct {
