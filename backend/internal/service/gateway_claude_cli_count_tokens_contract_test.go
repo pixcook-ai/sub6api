@@ -115,6 +115,7 @@ func TestClaudeCLIConsumesGatewayCountTokens(t *testing.T) {
 				w.WriteHeader(http.StatusBadGateway)
 			}))
 			defer rejectProxy.Close()
+			// #nosec G702 -- CLAUDE_CLI_TEST_BINARY explicitly selects the trusted CLI fixture for this local contract.
 			cmd := exec.CommandContext(ctx, binary,
 				"--bare", "--setting-sources", "", "--strict-mcp-config", "--mcp-config", `{"mcpServers":{}}`,
 				"--tools", "", "--allowedTools", "", "--permission-mode", "dontAsk", "--no-session-persistence",

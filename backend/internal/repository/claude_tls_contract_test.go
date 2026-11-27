@@ -90,7 +90,7 @@ func TestClaudeTLSUpstreamContract(t *testing.T) {
 			require.NoError(t, err)
 			resp, err := client.DoWithTLS(req, "", 1, 1, mode.profile)
 			require.NoError(t, err)
-			defer resp.Body.Close()
+			defer func(body io.ReadCloser) { _ = body.Close() }(resp.Body)
 			require.Equal(t, http.StatusOK, resp.StatusCode)
 			require.Equal(t, "text/event-stream", resp.Header.Get("Content-Type"))
 			firstFrame := make([]byte, len(first))

@@ -135,7 +135,7 @@ func validateModelBetas(raw map[string][]string) (map[string][]string, error) {
 			seen[token] = true
 		}
 		if !seen[BetaClaudeCode] || !seen[BetaOAuth] {
-			return nil, fmt.Errorf("Claude Code and OAuth beta tokens are required")
+			return nil, fmt.Errorf("required beta tokens for Claude Code and OAuth are missing")
 		}
 		normalized[model] = append([]string(nil), tokens...)
 	}

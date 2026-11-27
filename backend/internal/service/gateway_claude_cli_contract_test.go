@@ -248,6 +248,7 @@ func runClaudeCLIGatewayStreamContract(t *testing.T, binary string, scenario str
 	if !oauth {
 		args = append([]string{"--bare"}, args...)
 	}
+	// #nosec G702 -- CLAUDE_CLI_TEST_BINARY explicitly selects the trusted CLI fixture for this local contract.
 	cmd := exec.CommandContext(ctx, binary, args...)
 	cmd.Dir = workingDir
 	cmd.WaitDelay = 2 * time.Second
@@ -343,7 +344,7 @@ func writeClaudeCLIReference(path string, encoded []byte) error {
 	if err != nil {
 		return err
 	}
-	defer os.Remove(file.Name())
+	defer func() { _ = os.Remove(file.Name()) }()
 	if _, err := file.Write(encoded); err != nil {
 		_ = file.Close()
 		return err

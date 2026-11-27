@@ -58,7 +58,7 @@ func TestHTTPUpstreamDeflateSSEContract(t *testing.T) {
 			request.Header.Set("Accept-Encoding", "gzip, deflate, br, zstd")
 			response, err := upstream.Do(request, "", 1, 1)
 			require.NoError(t, err)
-			defer response.Body.Close()
+			defer func() { _ = response.Body.Close() }()
 			body, err := io.ReadAll(response.Body)
 			require.NoError(t, err, "HTTP deflate must decode before SSE parsing")
 			require.Equal(t, payload, string(body))
@@ -119,7 +119,7 @@ func TestHTTPUpstreamDeflateReturnsBeforeFirstFrame(t *testing.T) {
 				}
 				t.Fatal("Do waited for a deflate body before returning flushed headers")
 			}
-			defer response.Body.Close()
+			defer func() { _ = response.Body.Close() }()
 			if mode == "read_after_headers" {
 				// Only send the first frame once the caller owns the response.
 				allowBody <- struct{}{}
