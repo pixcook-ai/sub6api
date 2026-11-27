@@ -52,14 +52,15 @@ describe('BPS credential visibility', () => {
     expect(bpsCredentialState(account({ credentials: { expires_at: 'invalid' } }), Date.now())?.status).toBe('unknown')
     expect(bpsCredentialState(account({ platform: 'openai' }), Date.now())).toBeNull()
   })
-  it('clears the visible error after a replacement, retaining manual resume guidance', async () => {
+    it('clears the visible error after a replacement and keeps the paused status', async () => {
     const wrapper = render(account({ bps_credential_state: { status: 'revoked' } }))
     await wrapper.setProps({ account: account({ schedulable: false, bps_credential_state: { status: 'not_expired', expires_at: '2026-10-05T08:00:00Z', requires_manual_resume: true } }) })
     expect(wrapper.text()).not.toContain('credentialStatus.revoked')
     expect(wrapper.text()).toContain('admin.accounts.status.paused')
+      expect(wrapper.text()).not.toContain('manualResume')
     const notice = mount(BPSCredentialStatus, { props: { state: { status: 'not_expired', requires_manual_resume: true } } })
     wrappers.push(notice)
-    expect(notice.text()).toContain('admin.accounts.bps.manualResume')
+      expect(notice.text()).toBe('admin.accounts.bps.credentialStatus.not_expired')
   })
   it('shows one short label in compact mode and opens full status and expiry details on click', async () => {
     const expiresAt = '2026-10-05T08:00:00Z'
@@ -95,7 +96,6 @@ describe('BPS credential visibility', () => {
       expect(label.attributes('title')).toContain(`admin.accounts.bps.credentialStatus.${status}`)
       expect(label.attributes('title')).toContain('admin.accounts.bps.replaceToken')
       expect(label.attributes('title')).toContain('token_error')
-      expect(label.attributes('title')).toContain('admin.accounts.bps.manualResume')
     }
   )
   it('keeps unknown expiry explicit in compact mode', () => {

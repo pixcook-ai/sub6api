@@ -48,7 +48,6 @@
       </span>
     </template>
 
-    <p v-if="bpsCredentialState?.requires_manual_resume && !bpsCredentialFailed" class="max-w-[180px] text-xs text-amber-600 dark:text-amber-400">{{ t('admin.accounts.bps.manualResume') }}</p>
     <!-- Error Info Indicator -->
     <div v-if="hasError && account.error_message" class="group/error relative">
       <svg

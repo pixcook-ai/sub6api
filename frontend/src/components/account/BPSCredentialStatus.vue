@@ -25,7 +25,6 @@
       </p>
       <p v-if="failed" class="font-medium text-red-600 dark:text-red-400">{{ t('admin.accounts.bps.replaceToken') }}</p>
       <p v-if="state.error_code" class="text-gray-500 dark:text-gray-400">{{ t('admin.accounts.bps.errorCode') }}: {{ state.error_code }}</p>
-      <p v-if="state.requires_manual_resume" class="text-amber-600 dark:text-amber-400">{{ t('admin.accounts.bps.manualResume') }}</p>
     </template>
   </div>
 </template>
@@ -49,7 +48,6 @@ const details = computed(() => {
   if (props.showExpiry && state.expires_at) lines.push(`${t('admin.accounts.bps.expiresAt')}: ${formatDateTime(state.expires_at)}`)
   if (failed.value) lines.push(t('admin.accounts.bps.replaceToken'))
   if (state.error_code) lines.push(`${t('admin.accounts.bps.errorCode')}: ${state.error_code}`)
-  if (state.requires_manual_resume) lines.push(t('admin.accounts.bps.manualResume'))
   return lines.join('\n')
 })
 </script>
