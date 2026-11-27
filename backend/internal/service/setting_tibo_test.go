@@ -135,3 +135,72 @@ func TestOpenAITiboSettingsUpdateFailureKeepsPreviousCache(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, original, current)
 }
+
+func TestOpenAITiboSettingsBPSGroupingUsesItsOwnPlatform(t *testing.T) {
+	for _, withOpenAI := range []bool{false, true} {
+		t.Run(map[bool]string{false: "BPS only", true: "both platforms"}[withOpenAI], func(t *testing.T) {
+			repository := &tiboSettingRepository{data: map[string]string{}}
+			service := NewSettingService(repository, nil)
+			service.SetDefaultSubscriptionGroupReader(&tiboSettingsGroupReader{groups: map[int64]*Group{
+				17: {ID: 17, Platform: PlatformOpenAI, Status: StatusActive},
+				29: {ID: 29, Platform: PlatformOpenAI, Status: StatusActive},
+				31: {ID: 31, Platform: PlatformOpenAIBPS, Status: StatusActive},
+				43: {ID: 43, Platform: PlatformOpenAIBPS, Status: StatusActive},
+			}})
+			settings := TiboAutomationSettings{Enabled: true, AutoGroupEnabled: true, BPSHealthyGroupID: 31, BPSDegradedGroupID: 43}
+			if withOpenAI {
+				settings.HealthyGroupID, settings.DegradedGroupID = 17, 29
+			}
+			require.NoError(t, service.UpdateOpenAITiboSettings(context.Background(), settings))
+			got, err := service.GetOpenAITiboSettings(context.Background())
+			require.NoError(t, err)
+			require.Equal(t, settings, got)
+			decoded, err := DecodeOpenAITiboSettings(repository.data[SettingKeyOpenAITiboSettings])
+			require.NoError(t, err)
+			require.Equal(t, settings, decoded)
+		})
+	}
+}
+
+func TestOpenAITiboSettingsRejectInvalidBPSGroups(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		healthy, degraded int64
+		group             *Group
+	}{
+		{name: "negative", healthy: -1, degraded: 43},
+		{name: "half pair", healthy: 31},
+		{name: "same group", healthy: 31, degraded: 31},
+		{name: "missing", healthy: 31, degraded: 43},
+		{name: "OpenAI group", healthy: 31, degraded: 43, group: &Group{ID: 43, Platform: PlatformOpenAI, Status: StatusActive}},
+		{name: "disabled", healthy: 31, degraded: 43, group: &Group{ID: 43, Platform: PlatformOpenAIBPS, Status: StatusDisabled}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repository := &tiboSettingRepository{data: map[string]string{}}
+			service := NewSettingService(repository, nil)
+			groups := map[int64]*Group{
+				17: {ID: 17, Platform: PlatformOpenAI, Status: StatusActive},
+				29: {ID: 29, Platform: PlatformOpenAI, Status: StatusActive},
+				31: {ID: 31, Platform: PlatformOpenAIBPS, Status: StatusActive},
+			}
+			if tc.group != nil {
+				groups[43] = tc.group
+			}
+			service.SetDefaultSubscriptionGroupReader(&tiboSettingsGroupReader{groups: groups})
+			err := service.UpdateOpenAITiboSettings(context.Background(), TiboAutomationSettings{
+				AutoGroupEnabled: true, HealthyGroupID: 17, DegradedGroupID: 29,
+				BPSHealthyGroupID: tc.healthy, BPSDegradedGroupID: tc.degraded,
+			})
+			require.Error(t, err, "a valid OpenAI pair must not admit an invalid BPS pair")
+			require.Empty(t, repository.data)
+		})
+	}
+}
+
+func TestOpenAITiboSettingsDecodeLegacyGroups(t *testing.T) {
+	settings, err := DecodeOpenAITiboSettings(`{"enabled":true,"auto_group_enabled":true,"healthy_group_id":17,"degraded_group_id":29}`)
+	require.NoError(t, err)
+	require.Equal(t, int64(17), settings.HealthyGroupID)
+	require.Zero(t, settings.BPSHealthyGroupID)
+	require.Zero(t, settings.BPSDegradedGroupID)
+}

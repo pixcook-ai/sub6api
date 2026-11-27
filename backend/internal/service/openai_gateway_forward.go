@@ -51,6 +51,16 @@ func (s *OpenAIGatewayService) forwardWithoutHostedWebSearch(ctx context.Context
 	defer func() { s.finishOpenAITiboRun(tiboRun, result, err) }()
 	resetOpenAIRouteRecord(c)
 	if account.IsOpenAIBPS() {
+		if !isOpenAIResponsesCompactPath(c) && !HasCompactionTriggerInInput(body) && s.openAITiboRouteApplies(account) {
+			// BPS keeps its own conversation identity and transport, while its
+			// business result participates in the shared quality observations.
+			scope := s.bpsScope(c, body)
+			if routing, ok := ctx.Value(bpsRoutingContextKey{}).(bpsRoutingContext); ok && routing.Scope != "" {
+				scope = routing.Scope
+			}
+			tiboRun = s.newOpenAITiboRun(ctx, c, account, body, scope)
+			tiboRun.commit(c, openAITiboRouteHTTP)
+		}
 		return s.forwardOpenAIBPS(ctx, c, account, body)
 	}
 	beginUpstreamResponseModelObservation(c)

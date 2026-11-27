@@ -43,3 +43,25 @@ func TestOpenAITiboProbeIdentityChangesWithUpstreamBinding(t *testing.T) {
 	malformed := &Account{Credentials: map[string]any{"invalid": make(chan struct{})}}
 	require.Equal(t, "invalid", OpenAITiboProbeIdentity(malformed), "a malformed map cannot opt out of production identity fencing")
 }
+
+func TestOpenAITiboProbeIdentityBPSBindsTokenWorkspaceAndProxy(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(*Account)
+	}{
+		{"token", func(a *Account) { a.Credentials["access_token"] = "new-fixture-token" }},
+		{"workspace", func(a *Account) { a.Credentials["chatgpt_account_id"] = "new-fixture-workspace" }},
+		{"proxy", func(a *Account) { id := int64(72); a.ProxyID = &id }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			account := &Account{Platform: PlatformOpenAIBPS, Type: AccountTypeOAuth, Credentials: map[string]any{
+				"access_token": "fixture-token", "chatgpt_account_id": "fixture-workspace",
+			}}
+			before := OpenAITiboProbeIdentity(account)
+			account.Extra = map[string]any{OpenAITiboQualityIsolatedExtraKey: true}
+			require.Equal(t, before, OpenAITiboProbeIdentity(account), "quality state does not change the probe identity")
+			tc.mutate(account)
+			require.NotEqual(t, before, OpenAITiboProbeIdentity(account))
+		})
+	}
+}

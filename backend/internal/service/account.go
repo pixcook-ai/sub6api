@@ -182,7 +182,7 @@ func (a *Account) EffectiveLoadFactor() int {
 
 // IsOpenAITiboQualityIsolated is independent of the administrator scheduling switch.
 func (a *Account) IsOpenAITiboQualityIsolated() bool {
-	return a != nil && a.IsOpenAI() && a.getExtraBool("openai_tibo_quality_isolated")
+	return a != nil && (a.IsOpenAI() || a.IsOpenAIBPS()) && a.getExtraBool("openai_tibo_quality_isolated")
 }
 
 func (a *Account) IsSchedulable() bool {

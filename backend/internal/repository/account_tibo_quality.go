@@ -33,9 +33,9 @@ func (r *accountRepository) GetOpenAITiboQualityIsolation(ctx context.Context, i
 }
 
 const openAITiboQualityIsolationSQL = `SELECT
- COALESCE(a.platform = 'openai' AND (
+ COALESCE((a.platform = 'openai' OR (a.platform = 'openai_bps' AND a.type = 'oauth')) AND (
   COALESCE(a.extra ->> 'openai_tibo_quality_isolated', 'false') = 'true'
-  OR (p.platform = 'openai' AND COALESCE(p.extra ->> 'openai_tibo_quality_isolated', 'false') = 'true')
+  OR (a.platform = 'openai' AND p.platform = 'openai' AND COALESCE(p.extra ->> 'openai_tibo_quality_isolated', 'false') = 'true')
  ), false) AS isolated,
  a.parent_account_id IS NOT NULL AND p.id IS NULL AS missing_parent
 FROM accounts a

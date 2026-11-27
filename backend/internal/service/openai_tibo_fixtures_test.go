@@ -68,10 +68,10 @@ func (r *tiboAccountRepo) GetByID(_ context.Context, id int64) (*Account, error)
 	return cloneTiboAccount(r.account), nil
 }
 
-func (r *tiboAccountRepo) ListByPlatform(_ context.Context, _ string) ([]Account, error) {
+func (r *tiboAccountRepo) ListByPlatform(_ context.Context, platform string) ([]Account, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.account == nil {
+	if r.account == nil || r.account.Platform != platform {
 		return nil, nil
 	}
 	return []Account{*cloneTiboAccount(r.account)}, nil

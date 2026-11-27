@@ -72,7 +72,7 @@ func (r *accountRepository) persistTiboProbeResult(ctx context.Context, id int64
 	if err != nil {
 		return err
 	}
-	groupsAvailable := false
+	var groupsAvailable map[string]bool
 	if settings.Enabled && settings.AutoGroupEnabled {
 		groupsAvailable, err = lockTiboAutomationGroups(ctx, client, settings)
 		if err != nil {
@@ -135,8 +135,9 @@ func (r *accountRepository) persistTiboProbeResult(ctx context.Context, id int64
 	changed := false
 	var fromID, toID int64
 	reason := "ineligible_account"
-	if settings.Enabled && settings.AutoGroupEnabled && groupsAvailable && eligible && credentialType == service.AccountTypeOAuth {
-		fromID, toID, changed, reason, err = moveTiboAccountGroup(ctx, client, id, sample.Verdict, settings)
+	if settings.Enabled && settings.AutoGroupEnabled && groupsAvailable[platform] && eligible && credentialType == service.AccountTypeOAuth {
+		healthy, degraded := settings.GroupIDsForPlatform(platform)
+		fromID, toID, changed, reason, err = moveTiboAccountGroup(ctx, client, id, sample.Verdict, healthy, degraded)
 		if err != nil {
 			return err
 		}
@@ -185,8 +186,8 @@ func (r *accountRepository) persistTiboProbeResult(ctx context.Context, id int64
 	return nil
 }
 
-func moveTiboAccountGroup(ctx context.Context, client *dbent.Client, id int64, verdict string, settings service.TiboAutomationSettings) (from, to int64, changed bool, reason string, err error) {
-	from, to = settings.HealthyGroupID, settings.DegradedGroupID
+func moveTiboAccountGroup(ctx context.Context, client *dbent.Client, id int64, verdict string, healthy, degraded int64) (from, to int64, changed bool, reason string, err error) {
+	from, to = healthy, degraded
 	if verdict == "healthy" {
 		from, to = to, from
 	}
@@ -265,23 +266,28 @@ func readTiboAutomationSettings(ctx context.Context, client *dbent.Client) (serv
 
 // Group rows are locked before the account row, matching group lifecycle writes.
 // Missing/deactivated groups skip only grouping; isolation remains independent.
-func lockTiboAutomationGroups(ctx context.Context, client *dbent.Client, settings service.TiboAutomationSettings) (bool, error) {
-	rows, err := client.QueryContext(ctx, `SELECT id FROM groups
-  WHERE id IN ($1,$2) AND platform='openai' AND status='active' AND deleted_at IS NULL
-  ORDER BY id FOR SHARE`, settings.HealthyGroupID, settings.DegradedGroupID)
+func lockTiboAutomationGroups(ctx context.Context, client *dbent.Client, settings service.TiboAutomationSettings) (map[string]bool, error) {
+	// Lock both platforms in one ID order before reading the account. A concurrent
+	// platform edit cannot select an unlocked pair or move to another platform.
+	rows, err := client.QueryContext(ctx, `SELECT id, platform FROM groups
+  WHERE ((id IN ($1,$2) AND platform='openai') OR (id IN ($3,$4) AND platform='openai_bps'))
+    AND status='active' AND deleted_at IS NULL
+  ORDER BY id FOR SHARE`, settings.HealthyGroupID, settings.DegradedGroupID, settings.BPSHealthyGroupID, settings.BPSDegradedGroupID)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 	defer func() { _ = rows.Close() }()
-	count := 0
+	counts := make(map[string]int, 2)
 	for rows.Next() {
 		var id int64
-		if err := rows.Scan(&id); err != nil {
-			return false, err
+		var platform string
+		if err := rows.Scan(&id, &platform); err != nil {
+			return nil, err
 		}
-		count++
+		counts[platform]++
 	}
-	return count == 2, rows.Err()
+	return map[string]bool{service.PlatformOpenAI: counts[service.PlatformOpenAI] == 2,
+		service.PlatformOpenAIBPS: counts[service.PlatformOpenAIBPS] == 2}, rows.Err()
 }
 
 // ClearOpenAITiboQualityIsolation clears only the automation-owned marker. A
@@ -295,7 +301,8 @@ func (r *accountRepository) ClearOpenAITiboQualityIsolation(ctx context.Context,
 	client := tx.Client()
 	var raw []byte
 	if err := scanSingleRow(ctx, client, `SELECT extra FROM accounts
-  WHERE id=$1 AND platform='openai' AND deleted_at IS NULL FOR NO KEY UPDATE`, []any{id}, &raw); err != nil {
+  WHERE id=$1 AND (platform='openai' OR (platform='openai_bps' AND type='oauth'))
+    AND deleted_at IS NULL FOR NO KEY UPDATE`, []any{id}, &raw); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return service.ErrAccountNotFound
 		}

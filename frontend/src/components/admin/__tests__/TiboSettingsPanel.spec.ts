@@ -16,7 +16,8 @@ vi.mock('vue-i18n', async importOriginal => ({ ...(await importOriginal<typeof i
 
 const settings = () => ({
   enabled: false, auto_group_enabled: false, healthy_group_id: 0,
-  degraded_group_id: 0, pause_on_degraded: true, auto_resume_on_healthy: false
+  degraded_group_id: 0, bps_healthy_group_id: 0, bps_degraded_group_id: 0,
+  pause_on_degraded: true, auto_resume_on_healthy: false
 })
 
 beforeEach(() => {
@@ -27,7 +28,10 @@ beforeEach(() => {
     { id: 14, name: 'Renamed healthy', platform: 'openai', status: 'active' },
     { id: 27, name: 'Custom fallback', platform: 'openai', status: 'active' },
     { id: 33, name: 'Inactive', platform: 'openai', status: 'inactive' },
-    { id: 44, name: 'Other platform', platform: 'anthropic', status: 'active' }
+    { id: 44, name: 'Other platform', platform: 'anthropic', status: 'active' },
+    { id: 51, name: 'BPS healthy', platform: 'openai_bps', status: 'active' },
+    { id: 52, name: 'BPS degraded', platform: 'openai_bps', status: 'active' },
+    { id: 53, name: 'BPS inactive', platform: 'openai_bps', status: 'inactive' }
   ])
 })
 
@@ -42,6 +46,53 @@ describe('Tibo settings', () => {
     expect(updateSettings).toHaveBeenCalledWith({ ...settings(), enabled: true })
     expect(wrapper.find('[role="status"]').text()).toBe('admin.settings.tibo.saved')
     expect(getGroups).toHaveBeenCalledWith('openai')
+    expect(getGroups).toHaveBeenCalledWith('openai_bps')
+    wrapper.unmount()
+  })
+
+  it('saves a BPS-only group pair and keeps platform options separate', async () => {
+    const wrapper = mount(TiboSettingsPanel)
+    await flushPromises()
+    await wrapper.get('[data-testid="tibo-auto-group"]').trigger('click')
+    const healthy = wrapper.get('[data-testid="bps_healthy_group_id"]')
+    const degraded = wrapper.get('[data-testid="bps_degraded_group_id"]')
+    const openai = wrapper.get('[data-testid="healthy_group_id"]')
+    expect(healthy.text()).toContain('BPS healthy')
+    expect(healthy.text()).not.toContain('Renamed healthy')
+    expect(healthy.text()).not.toContain('BPS inactive')
+    expect(openai.text()).not.toContain('BPS healthy')
+    await healthy.setValue('51')
+    expect(wrapper.get<HTMLButtonElement>('[data-testid="tibo-save"]').element.disabled).toBe(true)
+    await degraded.setValue('51')
+    expect(wrapper.get<HTMLButtonElement>('[data-testid="tibo-save"]').element.disabled).toBe(true)
+    await degraded.setValue('52')
+    expect(wrapper.get<HTMLButtonElement>('[data-testid="tibo-save"]').element.disabled).toBe(false)
+    await wrapper.get('[data-testid="tibo-save"]').trigger('click')
+    await flushPromises()
+    expect(updateSettings).toHaveBeenCalledWith({ ...settings(), auto_group_enabled: true, bps_healthy_group_id: 51, bps_degraded_group_id: 52 })
+    wrapper.unmount()
+  })
+
+  it('requires every configured platform pair to be complete', async () => {
+    getSettings.mockResolvedValue({ ...settings(), auto_group_enabled: true, healthy_group_id: 14, degraded_group_id: 27 })
+    const wrapper = mount(TiboSettingsPanel)
+    await flushPromises()
+    expect(wrapper.get<HTMLButtonElement>('[data-testid="tibo-save"]').element.disabled).toBe(false)
+    await wrapper.get('[data-testid="bps_healthy_group_id"]').setValue('51')
+    expect(wrapper.get<HTMLButtonElement>('[data-testid="tibo-save"]').element.disabled).toBe(true)
+    await wrapper.get('[data-testid="bps_degraded_group_id"]').setValue('52')
+    expect(wrapper.get<HTMLButtonElement>('[data-testid="tibo-save"]').element.disabled).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('loads legacy OpenAI settings with empty BPS targets', async () => {
+    getSettings.mockResolvedValue({ enabled: true, auto_group_enabled: true, healthy_group_id: 14, degraded_group_id: 27, pause_on_degraded: true, auto_resume_on_healthy: false })
+    const wrapper = mount(TiboSettingsPanel)
+    await flushPromises()
+    expect(wrapper.get<HTMLSelectElement>('[data-testid="bps_healthy_group_id"]').element.value).toBe('0')
+    await wrapper.get('[data-testid="tibo-save"]').trigger('click')
+    await flushPromises()
+    expect(updateSettings).toHaveBeenCalledWith({ ...settings(), enabled: true, auto_group_enabled: true, healthy_group_id: 14, degraded_group_id: 27 })
     wrapper.unmount()
   })
 

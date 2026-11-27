@@ -1763,6 +1763,19 @@ describe('EditAccountModal OpenAI 自动使用重置卡', () => {
 })
 
 describe('EditAccountModal OpenAI BPS', () => {
+  it('shows BPS Tibo health without Codex turn-ticket controls', () => {
+    const account = { ...buildAccount(), platform: 'openai_bps', type: 'oauth',
+      codex_turn_tickets: [{ model: 'gpt-6-astra', ready: true, length: 128 }],
+      tibo_account_statuses: [{ model: 'gpt-6-astra', tibo_routes: [{ route: 'http', verdict: 'healthy', probes_hour: 1, flips_hour: 0, recent_samples: [{ verdict: 'healthy' }] }] }]
+    }
+    const wrapper = mountModal(account)
+    expect(wrapper.find('[aria-labelledby="tibo-account-title"]').exists()).toBe(true)
+    expect(wrapper.findAll('[data-testid="tibo-dot"]')).toHaveLength(24)
+    expect(wrapper.text()).not.toContain('admin.accounts.openai.codexTicketHistory')
+    expect(wrapper.text()).not.toContain('admin.accounts.openai.codexTicketAccountPolicyDesc')
+    wrapper.unmount()
+  })
+
   it('keeps an empty token out of the update and tests the saved account', async () => {
     const account = { ...buildAccount(), platform: 'openai_bps', type: 'oauth', credentials: { chatgpt_account_id: 'workspace', model_mapping: { 'gpt-6-astra': 'gpt-6-astra' } } }
     updateAccountMock.mockReset().mockResolvedValue(account)

@@ -551,10 +551,15 @@ func (s *OpenAIGatewayService) enrollOpenAITiboAccounts(ctx context.Context) {
 		return
 	}
 	defer func() { _ = recover() }()
-	accounts, err := s.accountRepo.ListByPlatform(ctx, PlatformOpenAI)
-	if err != nil {
-		s.openaiTiboEnrolledAt.Store(last)
-		return
+	var accounts []Account
+	for _, platform := range []string{PlatformOpenAI, PlatformOpenAIBPS} {
+		listed, err := s.accountRepo.ListByPlatform(ctx, platform)
+		if err != nil {
+			// Never prune the other platform on a partial enrollment read.
+			s.openaiTiboEnrolledAt.Store(last)
+			return
+		}
+		accounts = append(accounts, listed...)
 	}
 	cfg := s.openAITiboRouteConfig()
 	enrolled, held := 0, 0
@@ -828,7 +833,7 @@ func (s *OpenAIGatewayService) openAITiboRouteStatuses(account *Account, now tim
 			item.VoteWindows, item.VoteConfirmed, item.VoteRejected = r.voteWindows, r.voteConfirmed, r.voteRejected
 			state.mu.Unlock()
 		}
-		if account.IsOpenAIOAuth() || len(item.RecentSamples) == 0 {
+		if account.IsOpenAIOAuth() || account.IsOpenAIBPS() || len(item.RecentSamples) == 0 {
 			// OAuth permissions and dots use the same committed observations.
 			// A failed write must not advertise a policy that routing cannot see.
 			item.RecentSamples = nil

@@ -331,6 +331,11 @@ func (s *OpenAIGatewayService) forwardOpenAIBPS(ctx context.Context, c *gin.Cont
 	snapshot := OpenAIBPSCredentialSnapshot{AccessToken: strings.TrimPrefix(req.Header.Get("Authorization"), "Bearer "), AccountID: req.Header.Get("chatgpt-account-id")}
 	ctx = context.WithValue(ctx, bpsCredentialSnapshotContextKey{}, snapshot)
 	req = req.WithContext(ctx)
+	// BPS has its own transport, so it must enforce the same durable quality
+	// gate here rather than relying on the ordinary OpenAI HTTP sender.
+	if err = s.checkOpenAITiboQualityAdmission(ctx, account, body); err != nil {
+		return nil, err
+	}
 	route, scoped := openAIRequestProxyFromContext(ctx, account.ID)
 	if scoped {
 		req, err = route.bind(req)

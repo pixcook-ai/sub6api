@@ -1,6 +1,6 @@
 <template>
   <div class="flex items-center gap-2">
-    <div v-if="account.platform === 'openai' && account.extra?.openai_tibo_quality_isolated === true" class="flex flex-col items-center gap-1" data-testid="tibo-quality-isolated">
+    <div v-if="(account.platform === 'openai' || (account.platform === 'openai_bps' && account.type === 'oauth')) && account.extra?.openai_tibo_quality_isolated === true" class="flex flex-col items-center gap-1" data-testid="tibo-quality-isolated">
       <span class="badge text-xs badge-danger">{{ t('admin.accounts.openai.tiboQualityIsolated') }}</span>
       <span v-if="!account.schedulable" class="text-[11px] text-gray-500 dark:text-gray-400">{{ t('admin.accounts.openai.tiboManualPauseRetained') }}</span>
     </div>

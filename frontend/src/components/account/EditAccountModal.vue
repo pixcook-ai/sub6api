@@ -2401,7 +2401,7 @@
       </div>
 
       <TiboAccountHealthPanel
-        v-if="account?.platform === 'openai'"
+        v-if="account?.platform === 'openai' || (account?.platform === 'openai_bps' && account?.type === 'oauth')"
         :account="account"
         @updated="emit('updated', $event)"
       />

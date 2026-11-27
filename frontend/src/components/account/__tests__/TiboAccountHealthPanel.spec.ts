@@ -21,9 +21,9 @@ const account = (overrides: Partial<Account> = {}): Account => ({
 beforeEach(() => vi.resetAllMocks())
 
 describe('account Tibo health', () => {
-  it('reads back the account after clearing isolation and preserves a manual scheduling pause', async () => {
-    const current = account({ extra: { openai_tibo_quality_isolated: true } })
-    const refreshed = account({ extra: { openai_tibo_quality_isolated: false } })
+  it.each(['openai', 'openai_bps'] as const)('reads back %s after clearing isolation and preserves a manual scheduling pause', async (platform) => {
+    const current = account({ platform, extra: { openai_tibo_quality_isolated: true } })
+    const refreshed = account({ platform, extra: { openai_tibo_quality_isolated: false } })
     clearIsolation.mockResolvedValue(refreshed)
     const wrapper = mount(TiboAccountHealthPanel, { props: { account: current } })
     expect(wrapper.text()).toContain('admin.accounts.openai.tiboManualPauseRetained')
@@ -32,6 +32,18 @@ describe('account Tibo health', () => {
     expect(clearIsolation).toHaveBeenCalledWith(17)
     expect(wrapper.emitted('updated')?.[0]).toEqual([refreshed])
     expect(refreshed.schedulable).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('shows the BPS transport description and independent probe history', () => {
+    const wrapper = mount(TiboAccountHealthPanel, { props: { account: account({
+      platform: 'openai_bps',
+      tibo_account_statuses: [{ model: 'gpt-6-astra', tibo_routes: [{ route: 'http', verdict: 'healthy', probes_hour: 1, flips_hour: 0, recent_samples: [{ verdict: 'healthy' }] }] }]
+    }) } })
+    expect(wrapper.text()).toContain('admin.accounts.openai.bpsTiboRouteDesc')
+    expect(wrapper.text()).not.toContain('admin.accounts.openai.codexTiboRouteDesc')
+    expect(wrapper.findAll('[data-testid="tibo-dot"]')).toHaveLength(24)
+    expect(wrapper.findAll('[data-verdict="healthy"]')).toHaveLength(1)
     wrapper.unmount()
   })
 

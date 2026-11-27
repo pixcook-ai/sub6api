@@ -91,3 +91,27 @@ func TestTiboClearIsolationRejectsInvalidAccount(t *testing.T) {
 		})
 	}
 }
+
+func TestTiboSettingsLegacyPUTPreservesBPSGroupsAndExplicitZeroClears(t *testing.T) {
+	repo := &tiboSettingsMemoryRepo{value: `{"enabled":true,"bps_healthy_group_id":71,"bps_degraded_group_id":72}`}
+	h := &SettingHandler{settingService: service.NewSettingService(repo, nil)}
+	router := gin.New()
+	router.PUT("/settings", h.UpdateOpenAITiboSettings)
+	for _, tc := range []struct {
+		body              string
+		healthy, degraded int64
+	}{
+		{`{"enabled":true,"pause_on_degraded":true}`, 71, 72},
+		{`{"enabled":true,"bps_healthy_group_id":0,"bps_degraded_group_id":0}`, 0, 0},
+	} {
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPut, "/settings", bytes.NewBufferString(tc.body))
+		req.Header.Set("Content-Type", "application/json")
+		router.ServeHTTP(w, req)
+		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+		var saved service.TiboAutomationSettings
+		require.NoError(t, json.Unmarshal([]byte(repo.value), &saved))
+		require.Equal(t, tc.healthy, saved.BPSHealthyGroupID)
+		require.Equal(t, tc.degraded, saved.BPSDegradedGroupID)
+	}
+}

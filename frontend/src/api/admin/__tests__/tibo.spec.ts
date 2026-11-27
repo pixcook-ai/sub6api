@@ -17,6 +17,16 @@ describe('Tibo admin API', () => {
     expect(put).toHaveBeenCalledWith('/admin/tibo/settings', settings)
     expect(settings.healthy_group_id).toBe(0)
     expect(settings.degraded_group_id).toBe(0)
+    expect(settings.bps_healthy_group_id).toBe(0)
+    expect(settings.bps_degraded_group_id).toBe(0)
+  })
+
+  it('sends independent BPS group targets without changing the OpenAI targets', async () => {
+    const settings = { ...defaultTiboSettings(), enabled: true, auto_group_enabled: true,
+      healthy_group_id: 11, degraded_group_id: 12, bps_healthy_group_id: 21, bps_degraded_group_id: 22 }
+    put.mockResolvedValue({ data: settings })
+    expect(await updateTiboSettings(settings)).toEqual(settings)
+    expect(put).toHaveBeenCalledWith('/admin/tibo/settings', settings)
   })
 
   it('clears only quality isolation and reads fresh account state without toggling scheduling', async () => {

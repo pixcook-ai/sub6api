@@ -29,7 +29,7 @@ type openAITiboQualityIsolationReader interface {
 // checkOpenAITiboQualitySnapshotAdmission is the cheap entry gate. Authoritative
 // state is checked again at the final HTTP or WS send boundary, after any waits.
 func (s *OpenAIGatewayService) checkOpenAITiboQualitySnapshotAdmission(ctx context.Context, account *Account, body []byte) error {
-	if account == nil || !account.IsOpenAI() || isOpenAITiboSyntheticProbe(ctx, account) {
+	if account == nil || (!account.IsOpenAI() && !account.IsOpenAIBPS()) || isOpenAITiboSyntheticProbe(ctx, account) {
 		return nil
 	}
 	return openAITiboQualityAdmissionError(ctx, account.IsOpenAITiboQualityIsolated(), gjson.GetBytes(body, "previous_response_id").String())
@@ -43,7 +43,7 @@ func (s *OpenAIGatewayService) checkOpenAITiboQualityAdmission(ctx context.Conte
 }
 
 func (s *OpenAIGatewayService) checkOpenAITiboQualityAdmissionForPrevious(ctx context.Context, account *Account, previousResponseID string) error {
-	if account == nil || !account.IsOpenAI() || isOpenAITiboSyntheticProbe(ctx, account) {
+	if account == nil || (!account.IsOpenAI() && !account.IsOpenAIBPS()) || isOpenAITiboSyntheticProbe(ctx, account) {
 		return nil
 	}
 	isolated := account.IsOpenAITiboQualityIsolated()
@@ -67,9 +67,10 @@ func openAITiboQualityAdmissionError(ctx context.Context, isolated bool, previou
 		previousResponseID, _ = ctx.Value(openAITiboPreviousResponseKey{}).(string)
 	}
 	action := NextAccountRetry
-	if strings.TrimSpace(previousResponseID) != "" {
+	if strings.TrimSpace(previousResponseID) != "" || (ctx != nil && bpsHasBinding(ctx)) {
 		// Upstream response state belongs to this account. Never send an unsafe
-		// continuation to a different account merely to escape isolation.
+		// continuation (including a bound BPS session) to a different account
+		// merely to escape isolation.
 		action = NextAccountStop
 	}
 	return &UpstreamFailoverError{

@@ -24,8 +24,23 @@ type TiboAutomationSettings struct {
 	AutoGroupEnabled    bool  `json:"auto_group_enabled"`
 	HealthyGroupID      int64 `json:"healthy_group_id"`
 	DegradedGroupID     int64 `json:"degraded_group_id"`
+	BPSHealthyGroupID   int64 `json:"bps_healthy_group_id"`
+	BPSDegradedGroupID  int64 `json:"bps_degraded_group_id"`
 	PauseOnDegraded     bool  `json:"pause_on_degraded"`
 	AutoResumeOnHealthy bool  `json:"auto_resume_on_healthy"`
+}
+
+// GroupIDsForPlatform keeps automatic membership changes within the account's
+// own platform. The original group fields remain the OpenAI configuration.
+func (settings TiboAutomationSettings) GroupIDsForPlatform(platform string) (healthy, degraded int64) {
+	switch platform {
+	case PlatformOpenAI:
+		return settings.HealthyGroupID, settings.DegradedGroupID
+	case PlatformOpenAIBPS:
+		return settings.BPSHealthyGroupID, settings.BPSDegradedGroupID
+	default:
+		return 0, 0
+	}
 }
 
 type cachedOpenAITiboSettings struct {
@@ -57,11 +72,21 @@ func DecodeOpenAITiboSettings(value string) (TiboAutomationSettings, error) {
 }
 
 func validateOpenAITiboSettings(settings TiboAutomationSettings) error {
-	if settings.HealthyGroupID < 0 || settings.DegradedGroupID < 0 {
-		return infraerrors.BadRequest("TIBO_GROUP_INVALID", "Tibo group IDs must not be negative")
+	configured := false
+	for _, platform := range []string{PlatformOpenAI, PlatformOpenAIBPS} {
+		healthy, degraded := settings.GroupIDsForPlatform(platform)
+		if healthy < 0 || degraded < 0 {
+			return infraerrors.BadRequest("TIBO_GROUP_INVALID", "Tibo group IDs must not be negative")
+		}
+		if settings.AutoGroupEnabled && (healthy != 0 || degraded != 0) {
+			if healthy == 0 || degraded == 0 || healthy == degraded {
+				return infraerrors.BadRequest("TIBO_GROUP_INVALID", "choose two different groups for each configured Tibo platform")
+			}
+			configured = true
+		}
 	}
-	if settings.AutoGroupEnabled && (settings.HealthyGroupID <= 0 || settings.DegradedGroupID <= 0 || settings.HealthyGroupID == settings.DegradedGroupID) {
-		return infraerrors.BadRequest("TIBO_GROUP_INVALID", "choose two different OpenAI groups before enabling Tibo automatic grouping")
+	if settings.AutoGroupEnabled && !configured {
+		return infraerrors.BadRequest("TIBO_GROUP_INVALID", "choose an OpenAI or OpenAI BPS group pair before enabling Tibo automatic grouping")
 	}
 	return nil
 }
@@ -101,13 +126,19 @@ func (s *SettingService) UpdateOpenAITiboSettings(ctx context.Context, settings 
 		if s.defaultSubGroupReader == nil {
 			return fmt.Errorf("tibo group validation is unavailable")
 		}
-		for _, id := range []int64{settings.HealthyGroupID, settings.DegradedGroupID} {
-			group, err := s.defaultSubGroupReader.GetByID(ctx, id)
-			if err != nil || group == nil || group.Platform != PlatformOpenAI || group.Status != StatusActive {
-				if err != nil && !errors.Is(err, ErrGroupNotFound) {
-					return fmt.Errorf("validate Tibo group %d: %w", id, err)
+		for _, platform := range []string{PlatformOpenAI, PlatformOpenAIBPS} {
+			healthy, degraded := settings.GroupIDsForPlatform(platform)
+			if healthy == 0 && degraded == 0 {
+				continue
+			}
+			for _, id := range []int64{healthy, degraded} {
+				group, err := s.defaultSubGroupReader.GetByID(ctx, id)
+				if err != nil || group == nil || group.Platform != platform || group.Status != StatusActive {
+					if err != nil && !errors.Is(err, ErrGroupNotFound) {
+						return fmt.Errorf("validate Tibo group %d: %w", id, err)
+					}
+					return infraerrors.BadRequest("TIBO_GROUP_INVALID", "Tibo groups must exist, be active and belong to their configured platform")
 				}
-				return infraerrors.BadRequest("TIBO_GROUP_INVALID", "Tibo groups must exist, be active and belong to OpenAI")
 			}
 		}
 	}

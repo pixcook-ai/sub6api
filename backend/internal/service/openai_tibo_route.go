@@ -351,8 +351,11 @@ func openAITiboAccountHold(ctx context.Context, account *Account, now time.Time)
 		(account.AutoPauseOnExpired && account.ExpiresAt != nil && !now.Before(*account.ExpiresAt)) {
 		return openAITiboHold{parked: true}
 	}
+	if account.IsOpenAIBPS() && !openAITiboBPSAccountReady(account, now) {
+		return openAITiboHold{parked: true}
+	}
 	if !account.Schedulable {
-		if !account.IsOpenAIOAuth() {
+		if !account.IsOpenAIOAuth() && !account.IsOpenAIBPS() {
 			return openAITiboHold{parked: true}
 		}
 		if paused, _ := shouldAutoPauseOpenAIAccountByQuota(ctx, account); paused {
@@ -636,7 +639,13 @@ func (s *OpenAIGatewayService) probeOpenAITiboHTTP(ctx context.Context, account 
 		return unknown
 	}
 	// Use the target gateway transport and plugins with a private synthetic context.
-	resp, err := s.doOpenAIUpstream(req, proxyURL, account)
+	var resp *http.Response
+	if account.IsOpenAIBPS() {
+		// Keep Excel OAuth credentials on the production BPS transport.
+		resp, err = s.httpUpstream.Do(req, proxyURL, account.ID, account.Concurrency)
+	} else {
+		resp, err = s.doOpenAIUpstream(req, proxyURL, account)
+	}
 	if resp != nil && resp.Body != nil {
 		defer func() { _ = resp.Body.Close() }()
 	}
@@ -655,6 +664,9 @@ func (s *OpenAIGatewayService) probeOpenAITiboHTTP(ctx context.Context, account 
 	if err != nil || ctx.Err() != nil {
 		return unknown
 	}
+	if account.IsOpenAIBPS() {
+		return openAITiboSampleFromObservation(resp.StatusCode, observeOpenAITiboBPSProbe(data, resp.Header.Get("Content-Type")))
+	}
 	return openAITiboSampleFromObservation(resp.StatusCode, observeOpenAITiboHTTPProbe(data))
 }
 
@@ -662,6 +674,9 @@ func (s *OpenAIGatewayService) probeOpenAITiboHTTP(ctx context.Context, account 
 // OAuth transformation and wire encoding instead of importing the source fork's
 // unrelated request synthesis. API-key probes retain their own Responses URL.
 func (s *OpenAIGatewayService) buildOpenAITiboProbeRequest(ctx context.Context, account *Account) (*http.Request, error) {
+	if account.IsOpenAIBPS() {
+		return s.buildOpenAITiboBPSProbeRequest(ctx, account)
+	}
 	if account.IsOpenAIOAuthLike() {
 		return s.buildOpenAITiboOAuthProbeRequest(ctx, account)
 	}

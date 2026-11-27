@@ -1016,6 +1016,7 @@ export default {
         tiboLatestSample: "最新样本：{sample}",
         tiboUnknownHint: "灰点表示尚无明确样本；Tibo 结果是启发式信号。",
         codexTiboRoutes: '线路',
+        bpsTiboRouteDesc: '使用此 BPS OAuth 账号自身的凭据、工作区和代理，向 BPS Responses 发送 Tibo 探测（astra / xhigh）。不使用 Codex 票据。手动暂停的账号在额度等可用条件满足时仍会定期探测，并保持暂停。',
         codexTiboRouteDesc: 'Astra 的 HTTP 线路由 Tibo 探测（astra / xhigh）。OAuth / Setup Token 打 chatgpt.com；API Key 打账号自己的 Responses 地址。手动暂停的 OAuth 账号在额度等可用条件满足时仍会定期探测，并保持暂停。',
         codexTiboRouteSummary: '线路 {route}：{verdict}',
         codexTiboRouteVerdict: {

@@ -1,7 +1,7 @@
 <template>
   <section class="space-y-3 border-t border-gray-200 pt-4 dark:border-dark-600" aria-labelledby="tibo-account-title">
     <h3 id="tibo-account-title" class="input-label mb-0">{{ t('admin.accounts.openai.codexTiboRoutes') }}</h3>
-    <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.accounts.openai.codexTiboRouteDesc') }}</p>
+    <p class="text-xs text-gray-500 dark:text-gray-400">{{ t(account.platform === 'openai_bps' ? 'admin.accounts.openai.bpsTiboRouteDesc' : 'admin.accounts.openai.codexTiboRouteDesc') }}</p>
     <div v-if="account.extra?.openai_tibo_quality_isolated === true" class="space-y-2 rounded-lg border border-red-200 bg-red-50 p-3 dark:border-red-900 dark:bg-red-900/20" data-testid="tibo-isolation-panel">
       <p class="text-sm font-medium text-red-700 dark:text-red-300">{{ t('admin.accounts.openai.tiboQualityIsolated') }}</p>
       <p class="text-xs text-red-700 dark:text-red-300">{{ t('admin.accounts.openai.tiboIsolationHint') }}</p>

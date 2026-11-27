@@ -44,20 +44,23 @@
               </div>
               <Toggle v-model="form.auto_group_enabled" aria-labelledby="tibo-group-label" aria-describedby="tibo-group-hint" data-testid="tibo-auto-group" />
             </div>
-            <div v-if="form.auto_group_enabled" class="grid gap-4 sm:grid-cols-2">
-              <div v-for="field in groupFields" :key="field" class="min-w-0">
-                <label :for="'tibo-' + field" class="input-label">{{ t('admin.settings.tibo.' + field) }}</label>
-                <select :id="'tibo-' + field" v-model.number="form[field]" class="input w-full" :aria-invalid="!validGroups" :data-testid="field">
-                  <option :value="0">{{ t('admin.settings.tibo.chooseGroup') }}</option>
-                  <option v-if="form[field] > 0 && !groups.some(group => group.id === form[field])" :value="form[field]" disabled>
-                    {{ t('admin.settings.tibo.unavailableGroup', { id: form[field] }) }}
-                  </option>
-                  <option v-for="group in groups" :key="group.id" :value="group.id">{{ group.name }} (#{{ group.id }})</option>
-                </select>
-              </div>
-              <p v-if="groupError" role="alert" class="text-sm text-red-600 dark:text-red-400 sm:col-span-2">{{ groupError }}</p>
-              <p v-if="!validGroups" class="text-sm text-amber-700 dark:text-amber-300 sm:col-span-2">{{ t('admin.settings.tibo.groupValidation') }}</p>
-              <button v-if="groupError" type="button" class="btn btn-secondary btn-sm justify-self-start" @click="loadGroups">{{ t('admin.settings.tibo.retryGroups') }}</button>
+            <div v-if="form.auto_group_enabled" class="space-y-4">
+              <fieldset v-for="pair in groupPairs" :key="pair.platform" class="grid gap-4 sm:grid-cols-2">
+                <legend class="mb-2 text-sm font-medium text-gray-900 dark:text-white">{{ t('admin.settings.tibo.' + pair.platform) }}</legend>
+                <div v-for="field in pair.fields" :key="field" class="min-w-0">
+                  <label :for="'tibo-' + field" class="input-label">{{ t('admin.settings.tibo.' + field) }}</label>
+                  <select :id="'tibo-' + field" v-model.number="form[field]" class="input w-full" :aria-invalid="!emptyGroupPair(pair) && !validGroupPair(pair)" :data-testid="field">
+                    <option :value="0">{{ t('admin.settings.tibo.chooseGroup') }}</option>
+                    <option v-if="form[field] > 0 && !platformGroups(pair.platform).some(group => group.id === form[field])" :value="form[field]" disabled>
+                      {{ t('admin.settings.tibo.unavailableGroup', { id: form[field] }) }}
+                    </option>
+                    <option v-for="group in platformGroups(pair.platform)" :key="group.id" :value="group.id">{{ group.name }} (#{{ group.id }})</option>
+                  </select>
+                </div>
+              </fieldset>
+              <p v-if="groupError" role="alert" class="text-sm text-red-600 dark:text-red-400">{{ groupError }}</p>
+              <p v-if="!validGroups" class="text-sm text-amber-700 dark:text-amber-300">{{ t('admin.settings.tibo.groupValidation') }}</p>
+              <button v-if="groupError" type="button" class="btn btn-secondary btn-sm" @click="loadGroups">{{ t('admin.settings.tibo.retryGroups') }}</button>
             </div>
           </div>
 
@@ -91,21 +94,30 @@ const saved = ref(false)
 const error = ref('')
 const groupError = ref('')
 const groups = ref<AdminGroup[]>([])
-const groupFields = ['healthy_group_id', 'degraded_group_id'] as const
+const groupPairs = [
+  { platform: 'openai', fields: ['healthy_group_id', 'degraded_group_id'] },
+  { platform: 'openai_bps', fields: ['bps_healthy_group_id', 'bps_degraded_group_id'] }
+] as const
+type GroupPair = typeof groupPairs[number]
+const platformGroups = (platform: GroupPair['platform']) => groups.value.filter(group => group.platform === platform)
+const emptyGroupPair = (pair: GroupPair) => pair.fields.every(field => form[field] === 0)
+const validGroupPair = (pair: GroupPair) => (
+  form[pair.fields[0]] !== form[pair.fields[1]] &&
+  pair.fields.every(field => platformGroups(pair.platform).some(group => group.id === form[field]))
+)
 const validGroups = computed(() => (
-  form.healthy_group_id !== form.degraded_group_id &&
-  groupFields.every(field => groups.value.some(group => group.id === form[field]))
+  groupPairs.some(validGroupPair) && groupPairs.every(pair => emptyGroupPair(pair) || validGroupPair(pair))
 ))
 const canSave = computed(() => loaded.value && (!form.auto_group_enabled || validGroups.value))
 
 async function loadGroups() {
   groupError.value = ''
-  try {
-    groups.value = (await getGroups('openai')).filter(group => group.platform === 'openai' && group.status === 'active')
-  } catch (err) {
-    groups.value = []
-    groupError.value = extractApiErrorMessage(err, t('admin.settings.tibo.groupsLoadFailed'))
-  }
+  const results = await Promise.allSettled(groupPairs.map(pair => getGroups(pair.platform)))
+  groups.value = results.flatMap((result, index) => result.status === 'fulfilled'
+    ? result.value.filter(group => group.platform === groupPairs[index]!.platform && group.status === 'active')
+    : [])
+  const failed = results.find(result => result.status === 'rejected')
+  if (failed?.status === 'rejected') groupError.value = extractApiErrorMessage(failed.reason, t('admin.settings.tibo.groupsLoadFailed'))
 }
 
 async function load() {

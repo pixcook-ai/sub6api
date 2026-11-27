@@ -902,7 +902,7 @@ const geminiUsageAvailable = computed(() => {
 })
 
 const tiboRoutes = computed(() => {
-  if (props.account.platform !== 'openai') return []
+  if (props.account.platform !== 'openai' && !(props.account.platform === 'openai_bps' && props.account.type === 'oauth')) return []
   return (props.account.tibo_account_statuses ?? []).flatMap(status =>
     (status.tibo_routes ?? []).map(route => ({ ...route, model: status.model }))
   )

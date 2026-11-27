@@ -27,11 +27,15 @@ type tiboGroupFixture struct {
 }
 
 func newTiboGroupFixture(t *testing.T) *tiboGroupFixture {
+	return newTiboGroupFixtureForPlatform(t, service.PlatformOpenAI)
+}
+
+func newTiboGroupFixtureForPlatform(t *testing.T, platform string) *tiboGroupFixture {
 	t.Helper()
 	f := &tiboGroupFixture{t: t, ctx: context.Background(), client: testEntClient(t), cache: &schedulerCacheRecorder{}}
 	f.repo = newAccountRepositoryWithSQL(f.client, integrationDB, f.cache)
 	for i, name := range []string{"custom-degraded-" + t.Name(), "custom-healthy-" + t.Name(), "tibo-unrelated-" + t.Name()} {
-		g := mustCreateGroup(t, f.client, &service.Group{Name: name, Platform: service.PlatformOpenAI})
+		g := mustCreateGroup(t, f.client, &service.Group{Name: name, Platform: platform})
 		id := g.ID
 		t.Cleanup(func() {
 			_, err := integrationDB.ExecContext(context.Background(), "DELETE FROM groups WHERE id=$1", id)
@@ -58,7 +62,13 @@ func newTiboGroupFixture(t *testing.T) *tiboGroupFixture {
 			require.NoError(t, settings.Delete(context.Background(), service.SettingKeyOpenAITiboSettings))
 		}
 	})
-	f.settings(service.TiboAutomationSettings{Enabled: true, AutoGroupEnabled: true, HealthyGroupID: f.healthy, DegradedGroupID: f.welfare})
+	configuration := service.TiboAutomationSettings{Enabled: true, AutoGroupEnabled: true}
+	if platform == service.PlatformOpenAIBPS {
+		configuration.BPSHealthyGroupID, configuration.BPSDegradedGroupID = f.healthy, f.welfare
+	} else {
+		configuration.HealthyGroupID, configuration.DegradedGroupID = f.healthy, f.welfare
+	}
+	f.settings(configuration)
 	return f
 }
 

@@ -278,8 +278,8 @@ describe('AccountStatusIndicator', () => {
 })
 
 
-it('shows Tibo quality isolation instead of active while retaining a manual pause', async () => {
-  const account = makeAccount({ platform: 'openai', schedulable: true, extra: { openai_tibo_quality_isolated: true } })
+it.each(['openai', 'openai_bps'] as const)('shows %s Tibo quality isolation instead of active while retaining a manual pause', async (platform) => {
+  const account = makeAccount({ platform, type: 'oauth', schedulable: true, extra: { openai_tibo_quality_isolated: true } })
   const wrapper = mount(AccountStatusIndicator, { props: { account }, global: { stubs: { Icon: true } } })
   expect(wrapper.text()).toContain('admin.accounts.openai.tiboQualityIsolated')
   expect(wrapper.text()).not.toContain('admin.accounts.status.active')

@@ -898,6 +898,7 @@ export default {
         tiboLatestSample: "Latest sample: {sample}",
         tiboUnknownHint: "Gray dots have no definitive sample; Tibo results are heuristic signals.",
         codexTiboRoutes: 'Routes',
+        bpsTiboRouteDesc: 'Tibo probes BPS Responses with this BPS OAuth account’s own credentials, workspace and proxy (astra / xhigh), without Codex tickets. Manually paused accounts continue periodic probes when quota and other availability checks allow, while remaining paused.',
         codexTiboRouteDesc: 'Astra HTTP is selected by the Tibo probe (astra / xhigh). OAuth / setup-token probes chatgpt.com; API-key accounts probe their own Responses URL. Manually paused OAuth accounts continue periodic probes when quota and other availability checks allow, while remaining paused.',
         codexTiboRouteSummary: 'Route {route}: {verdict}',
         codexTiboRouteVerdict: {

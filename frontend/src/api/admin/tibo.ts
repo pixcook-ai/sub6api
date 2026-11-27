@@ -6,6 +6,8 @@ export interface TiboAutomationSettings {
   auto_group_enabled: boolean
   healthy_group_id: number
   degraded_group_id: number
+  bps_healthy_group_id: number
+  bps_degraded_group_id: number
   pause_on_degraded: boolean
   auto_resume_on_healthy: boolean
 }
@@ -15,6 +17,8 @@ export const defaultTiboSettings = (): TiboAutomationSettings => ({
   auto_group_enabled: false,
   healthy_group_id: 0,
   degraded_group_id: 0,
+  bps_healthy_group_id: 0,
+  bps_degraded_group_id: 0,
   pause_on_degraded: true,
   auto_resume_on_healthy: false
 })

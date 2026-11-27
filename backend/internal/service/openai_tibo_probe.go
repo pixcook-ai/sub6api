@@ -127,6 +127,9 @@ func openAITiboAccountSkipReason(account *Account, now time.Time) string {
 	if account.Status != StatusActive {
 		return "not_active"
 	}
+	if account.IsOpenAIBPS() && !openAITiboBPSAccountReady(account, now) {
+		return "bps_probe_unavailable"
+	}
 	if !account.Schedulable {
 		// Request-triggered probes follow business eligibility. Only the
 		// background hold check allows otherwise usable paused OAuth accounts.
@@ -154,8 +157,13 @@ func openAITiboAccountSkipReason(account *Account, now time.Time) string {
 const openAITiboProbeModel = "gpt-6-astra"
 
 func isOpenAITiboAccount(account *Account) bool {
-	if account == nil || !account.IsOpenAI() ||
-		account.IsOpenAIAgentIdentity() || account.IsShadow() || account.IsSyntheticUITest() {
+	if account == nil || account.IsShadow() || account.IsSyntheticUITest() {
+		return false
+	}
+	if account.IsOpenAIBPS() {
+		return account.Type == AccountTypeOAuth
+	}
+	if !account.IsOpenAI() || account.IsOpenAIAgentIdentity() {
 		return false
 	}
 	// A managed BPS backend has its own account-bound Files and inference
