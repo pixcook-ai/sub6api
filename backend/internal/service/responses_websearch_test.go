@@ -98,6 +98,38 @@ func TestHostedResponsesSearchProvidesToolAndContinuesWithEvidence(t *testing.T)
 	require.NotContains(t, recorder.Body.String(), responsesWebSearchFunctionPrefix)
 }
 
+func TestHostedResponsesSearchBPSIgnoresMaxOutputTokens(t *testing.T) {
+	body := `{"model":"gpt-6.2-sol","input":"find latest","tools":[{"type":"web_search"}],"max_output_tokens":16}`
+	c, recorder := hostedSearchTestContext(t, body, 311)
+	account := &Account{Platform: PlatformOpenAIBPS, Type: AccountTypeOAuth}
+	modelRounds, searches := 0, 0
+	forward := func(next []byte) (*OpenAIForwardResult, error) {
+		modelRounds++
+		require.False(t, gjson.GetBytes(next, "max_output_tokens").Exists())
+		if modelRounds == 1 {
+			call := hostedSearchTestCall(next, "bps_search")
+			require.NotEmpty(t, call)
+			return hostedSearchTestResponse(c, "resp_bps_search", []json.RawMessage{call}, 10, 24), nil
+		}
+		require.Contains(t, gjson.GetBytes(next, "input.2.output").String(), "verified evidence")
+		message := json.RawMessage(`{"type":"message","id":"msg_answer","role":"assistant","status":"completed","content":[{"type":"output_text","text":"answer"}]}`)
+		return hostedSearchTestResponse(c, "resp_bps_final", []json.RawMessage{message}, 15, 5), nil
+	}
+	search := func(_ context.Context, _ *Account, query string, _ *responsesWebSearchPlan) (*websearch.SearchResponse, error) {
+		searches++
+		require.Equal(t, "actual model search query", query)
+		return &websearch.SearchResponse{Results: []websearch.SearchResult{{URL: "https://example.org", Snippet: "verified evidence"}}}, nil
+	}
+	result, err := forwardHostedResponsesWebSearch(context.Background(), c, account, []byte(body), forward, mergeOpenAIWebSearchResult, search)
+	require.NoError(t, err)
+	require.Equal(t, 2, modelRounds)
+	require.Equal(t, 1, searches)
+	require.Equal(t, 29, result.Usage.OutputTokens)
+	require.Equal(t, "max_output_tokens", recorder.Result().Header.Get("X-BPS-Ignored-Parameters"))
+	require.Equal(t, "completed", gjson.GetBytes(recorder.Body.Bytes(), "status").String())
+	require.False(t, gjson.GetBytes(recorder.Body.Bytes(), "max_output_tokens").Exists())
+}
+
 func TestHostedResponsesSearchMixedCallsPreserveClientAndScopedReplay(t *testing.T) {
 	body := `{"model":"test-model","input":"look up release and read local file","tools":[{"type":"function","name":"read_file","parameters":{"type":"object"}}]}`
 	c, recorder := hostedSearchTestContext(t, body, 302)

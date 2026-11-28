@@ -23,6 +23,12 @@
 - 不提供 WebSocket、Chat Completions、Claude Messages、图像/音频或 Excel 本地凭证读取。自动续期仅适用于保存了正规 Excel Refresh Token 的账号；没有 RT 的账号仍需手动替换 AT。不能用 `previous_response_id` 或 `item_reference` 代替完整历史。
 - 模型目录声明串行工具、文本输入及 HTTP。目录的 200,000 token 上下文和 160,000 token 压缩阈值是保守的本地策略，不是上游配额或能力保证。
 
+## 输出 Token 上限
+
+BPS 路由兼容 Responses 客户端发送的 `max_output_tokens`。网关验证该值为正整数后，调用 BPS 时省略该字段，并在 JSON 和 SSE 的 HTTP 响应头中返回 `X-BPS-Ignored-Parameters: max_output_tokens`。配置允许的跨域来源也能读取该响应头。省略字段和传 `null` 等价，不返回该提示。零、负数、小数、字符串等无效值或重复字段返回 HTTP 400。
+
+BPS 路由不会执行该字段指定的生成上限。开启在途余额预留时，按未指定上限的请求估算，最终按 BPS 返回的实际 `usage` 结算。需要限制可见输出和推理 Token 总数时，请选择原生支持该参数的上游。
+
 ## 会话、工具与压缩
 
 建议客户端保持 `session_id` 或 `prompt_cache_key` 并携带完整历史。没有显式 ID 时，以首条用户消息生成稳定身份，更换模型或工具不改变会话。完全相同的首条消息无法区分两个独立会话，因此需要并行同题对话时应指定不同 ID。

@@ -22,6 +22,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 )
 
 const (
@@ -287,6 +288,25 @@ func mergeOpenAIWebSearchResult(total, next *OpenAIForwardResult) *OpenAIForward
 }
 
 func forwardHostedResponsesWebSearch[T any](ctx context.Context, c *gin.Context, account *Account, body []byte, forward func([]byte) (*T, error), merge func(*T, *T) *T, search func(context.Context, *Account, string, *responsesWebSearchPlan) (*websearch.SearchResponse, error)) (*T, error) {
+	if account.IsOpenAIBPS() {
+		limitRequested, err := bpsOutputLimitRequested(body)
+		if err != nil {
+			WriteOpenAIBPSError(c, err)
+			return nil, err
+		}
+		// Drop the field before constructing the hosted plan so its round budget
+		// and public response do not use a limit that BPS cannot enforce.
+		if gjson.GetBytes(body, "max_output_tokens").Exists() {
+			body, err = sjson.DeleteBytes(body, "max_output_tokens")
+			if err != nil {
+				writeResponsesWebSearchRequestError(c, err)
+				return nil, err
+			}
+		}
+		if limitRequested && !c.Writer.Written() {
+			c.Header(bpsIgnoredParametersHeader, "max_output_tokens")
+		}
+	}
 	// Disabling future searches never disables replay of already-paid evidence.
 	var replayErr error
 	body, replayErr = normalizeResponsesWebSearchHistory(c, body)
