@@ -210,7 +210,7 @@ func TestOpenAIBPSProtocolAndHeaders(t *testing.T) {
 	require.Equal(t, "workspace-1", req.Header.Get("chatgpt-account-id"))
 	require.Equal(t, "workspace-1", req.Header.Get("x-openai-account-id"))
 	require.Equal(t, "chatgpt", req.Header.Get("x-basispoints-auth-mode"))
-	for _, bad := range []string{`{"model":"gpt-6-astra","input":"hi","reasoning":{"effort":"max"}}`, `{"model":"gpt-6-astra","input":"hi","previous_response_id":"resp_1"}`, `{"input":"hi"}`, `{"model":"gpt-6-astra","input":[],"tools":[{"type":"web_search"}]}`} {
+	for _, bad := range []string{`{"model":"gpt-6-astra","input":"hi","reasoning":{"effort":"max"}}`, `{"model":"gpt-6-astra","input":"hi","previous_response_id":"resp_1"}`, `{"input":"hi"}`, `{"model":"gpt-6-astra","input":[],"tools":[{"type":"unknown_hosted_tool","name":"unknown"}]}`} {
 		_, err = s.prepareOpenAIBPS(c.Request.Context(), c, a, []byte(bad))
 		require.Error(t, err, bad)
 	}
@@ -263,7 +263,7 @@ func TestOpenAIBPSCustomAndPlan(t *testing.T) {
 	tools := map[string]bpsTool{}
 	var catalog []any
 	plan := map[string]any{"type": "function", "name": "update_plan", "parameters": map[string]any{"type": "object", "required": []any{"plan"}, "properties": map[string]any{"plan": map[string]any{"type": "array", "items": map[string]any{"type": "object", "required": []any{"step", "status"}, "properties": map[string]any{"step": map[string]any{"type": "string"}, "status": map[string]any{"enum": []any{"pending", "in_progress", "completed"}}}}}}}}
-	require.NoError(t, bpsCollectTools([]any{plan, map[string]any{"type": "custom", "name": "apply_patch"}}, "", tools, &catalog, 0))
+	require.NoError(t, bpsCollectTools([]any{plan, map[string]any{"type": "custom", "name": "apply_patch"}}, "", tools, &catalog, make(map[string]struct{}), 0))
 	r := &bpsRequest{Tools: tools}
 	native := map[string]any{"type": "function_call", "id": "fc_p", "call_id": "p", "name": "update_plan", "arguments": `{"plan":[{"description":"fix it","status":"done"}]}`}
 	client, err := bpsConvertTool(native, r)
@@ -277,7 +277,7 @@ func TestOpenAIBPSCustomAndPlan(t *testing.T) {
 	require.Equal(t, "ctc_p", client["id"])
 	// A client schema can never trigger file or network reads.
 	tools = map[string]bpsTool{}
-	err = bpsCollectTools([]any{map[string]any{"type": "function", "name": "remote", "parameters": map[string]any{"$ref": "file:///etc/passwd"}}}, "", tools, &catalog, 0)
+	err = bpsCollectTools([]any{map[string]any{"type": "function", "name": "remote", "parameters": map[string]any{"$ref": "file:///etc/passwd"}}}, "", tools, &catalog, make(map[string]struct{}), 0)
 	require.Error(t, err)
 }
 func TestOpenAIBPSCompactionAndIsolation(t *testing.T) {
@@ -383,6 +383,69 @@ func TestOpenAIBPSForward(t *testing.T) {
 		require.NotContains(t, string(up.requestBody), "compaction_trigger")
 	})
 }
+func TestOpenAIBPSForwardMixedTools(t *testing.T) {
+	s, account := bpsFixture()
+	native := bpsNative("call_mixed", "exec", map[string]any{"command": "pwd"})
+	upstream := &bpsHTTPStub{contentType: "application/json", body: bpsJSON(bpsResponse(native))}
+	s.httpUpstream = upstream
+	c, rec := bpsContext(1, "/v1/responses")
+	body := []byte(bpsJSON(map[string]any{
+		"model": "gpt-6-astra", "input": "inspect",
+		"tools": []any{map[string]any{"type": "web_search", "external_web_access": true}, bpsFunction("exec")},
+	}))
+	_, err := s.Forward(c.Request.Context(), c, account, body)
+	require.NoError(t, err)
+	require.Equal(t, 200, rec.Code)
+	require.Equal(t, "exec", gjson.Get(rec.Body.String(), "output.0.name").String())
+	protocol := gjson.GetBytes(upstream.requestBody, "input.0.content.0.text").String()
+	require.Contains(t, protocol, "Hosted tools unavailable through BPS: web_search.")
+	require.Contains(t, protocol, `"name":"exec"`)
+	require.NotContains(t, protocol, "external_web_access")
+}
+
+func TestOpenAIBPSForwardHostedToolPolicy(t *testing.T) {
+	for _, tt := range []struct {
+		name        string
+		choice      any
+		tools       []any
+		wantWarning string
+		wantError   string
+	}{
+		{name: "hosted only", tools: []any{map[string]any{"type": "web_search"}}, wantWarning: "web_search"},
+		{name: "disabled", choice: "none", tools: []any{map[string]any{"type": "web_search"}, bpsFunction("exec")}},
+		{name: "forced hosted type", choice: map[string]any{"type": "web_search", "name": "exec"}, tools: []any{map[string]any{"type": "web_search"}, bpsFunction("exec")}, wantError: "BPS cannot execute hosted tool selected by tool_choice: web_search"},
+		{name: "required without a client tool", choice: "required", tools: []any{map[string]any{"type": "web_search"}}, wantError: "tool_choice requires at least one client tool"},
+		{name: "malformed client tool", tools: []any{map[string]any{"type": "web_search"}, map[string]any{"type": "function"}}, wantError: "BPS only supports named function and custom client tools"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			s, account := bpsFixture()
+			upstream := &bpsHTTPStub{contentType: "application/json", body: bpsJSON(bpsResponse(bpsText("hello")))}
+			s.httpUpstream = upstream
+			c, rec := bpsContext(1, "/v1/responses")
+			body := []byte(bpsJSON(map[string]any{
+				"model": "gpt-6-astra", "input": "hi", "tools": tt.tools, "tool_choice": tt.choice,
+			}))
+			_, err := s.Forward(c.Request.Context(), c, account, body)
+			if tt.wantError != "" {
+				require.ErrorContains(t, err, tt.wantError)
+				require.Equal(t, 400, rec.Code)
+				require.Empty(t, upstream.requestBody)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, 200, rec.Code)
+			require.Contains(t, rec.Body.String(), "hello")
+			protocol := gjson.GetBytes(upstream.requestBody, "input.0.content.0.text").String()
+			require.NotContains(t, protocol, "Tool catalog:")
+			if tt.wantWarning == "" {
+				require.NotContains(t, protocol, "Hosted tools unavailable")
+			} else {
+				require.Contains(t, protocol, "Hosted tools unavailable through BPS: "+tt.wantWarning+".")
+			}
+		})
+	}
+}
+
 func TestOpenAIBPSForwardMaxOutputTokens(t *testing.T) {
 	tests := []struct {
 		name   string

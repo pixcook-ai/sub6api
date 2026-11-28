@@ -14,7 +14,7 @@ import (
 func TestOpenAIBPSReferenceEnvelopes(t *testing.T) {
 	tools := map[string]bpsTool{}
 	var catalog []any
-	require.NoError(t, bpsCollectTools([]any{bpsFunction("exec"), map[string]any{"type": "custom", "name": "apply_patch"}}, "functions", tools, &catalog, 0))
+	require.NoError(t, bpsCollectTools([]any{bpsFunction("exec"), map[string]any{"type": "custom", "name": "apply_patch"}}, "functions", tools, &catalog, make(map[string]struct{}), 0))
 	r := &bpsRequest{Tools: tools}
 	envelope := `{"tool":"functions.exec","args":{"command":"pwd"}}`
 	for name, code := range map[string]any{
@@ -66,11 +66,12 @@ func TestOpenAIBPSReferenceEnvelopes(t *testing.T) {
 func TestOpenAIBPSAdditionalToolsAndReplay(t *testing.T) {
 	s, a := bpsFixture()
 	c, _ := bpsContext(1, "/responses")
-	source := map[string]any{"model": "gpt-6-astra", "tools": []any{bpsFunction("exec")}, "input": []any{bpsMessage("user", "inspect"), map[string]any{"type": "additional_tools", "tools": []any{bpsFunction("exec"), map[string]any{"type": "namespace", "name": "functions", "tools": []any{map[string]any{"type": "custom", "name": "apply_patch"}}}}}}}
+	source := map[string]any{"model": "gpt-6-astra", "tools": []any{bpsFunction("exec")}, "input": []any{bpsMessage("user", "inspect"), map[string]any{"type": "additional_tools", "tools": []any{bpsFunction("exec"), map[string]any{"type": "namespace", "name": "functions", "tools": []any{map[string]any{"type": "custom", "name": "apply_patch"}, map[string]any{"type": "tool_search"}}}}}}}
 	prepared, err := s.prepareOpenAIBPS(c.Request.Context(), c, a, []byte(bpsJSON(source)))
 	require.NoError(t, err)
 	require.Len(t, prepared.Tools, 2)
 	require.NotContains(t, string(prepared.Body), "additional_tools")
+	require.Contains(t, string(prepared.Body), "Hosted tools unavailable through BPS: tool_search.")
 	native := bpsNative("call_custom", "functions.apply_patch", nil)
 	native["arguments"] = bpsJSON(map[string]any{"summary": "codex2api.custom/functions.apply_patch", "extended_summary": "preserve this", "references": []any{"native-reference"}, "code": "*** Begin Patch\n*** End Patch"})
 	original := bpsJSON(native)

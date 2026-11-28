@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -63,7 +64,17 @@ func bpsMessage(role, text string) map[string]any {
 }
 func bpsJSON(v any) string { data, _ := json.Marshal(v); return string(data) }
 
-func bpsCollectTools(raw any, namespace string, result map[string]bpsTool, catalog *[]any, depth int) error {
+func bpsUnsupportedHostedTool(kind string) bool {
+	switch kind {
+	case "web_search", "web_search_preview", "web_search_preview_2025_03_11", "web_search_2025_08_26",
+		"tool_search", "image_generation", "file_search", "code_interpreter", "computer", "computer_use_preview", "mcp":
+		return true
+	default:
+		return false
+	}
+}
+
+func bpsCollectTools(raw any, namespace string, result map[string]bpsTool, catalog *[]any, omittedHostedTools map[string]struct{}, depth int) error {
 	if depth > 8 {
 		return bpsInvalid("Tool namespaces are nested too deeply")
 	}
@@ -79,8 +90,12 @@ func bpsCollectTools(raw any, namespace string, result map[string]bpsTool, catal
 		if !ok {
 			return bpsInvalid("Invalid tool declaration")
 		}
-		name := strings.TrimSpace(stringValue(spec["name"]))
 		kind := stringValue(spec["type"])
+		if bpsUnsupportedHostedTool(kind) {
+			omittedHostedTools[kind] = struct{}{}
+			continue
+		}
+		name := strings.TrimSpace(stringValue(spec["name"]))
 		if name == "" {
 			return bpsInvalid("BPS only supports named function and custom client tools")
 		}
@@ -89,7 +104,7 @@ func bpsCollectTools(raw any, namespace string, result map[string]bpsTool, catal
 			full = namespace + "." + name
 		}
 		if kind == "namespace" {
-			if e := bpsCollectTools(spec["tools"], full, result, catalog, depth+1); e != nil {
+			if e := bpsCollectTools(spec["tools"], full, result, catalog, omittedHostedTools, depth+1); e != nil {
 				return e
 			}
 			continue
@@ -216,18 +231,22 @@ func (s *OpenAIGatewayService) prepareOpenAIBPS(ctx context.Context, c *gin.Cont
 		return nil, bpsInvalid("input must be a string or an array")
 	}
 	var catalog []any
+	omittedHostedTools := make(map[string]struct{})
 	if !r.Compact && source["tool_choice"] != "none" {
-		if e := bpsCollectTools(source["tools"], "", r.Tools, &catalog, 0); e != nil {
+		if e := bpsCollectTools(source["tools"], "", r.Tools, &catalog, omittedHostedTools, 0); e != nil {
 			return nil, e
 		}
 		for _, raw := range input {
 			if item, ok := raw.(map[string]any); ok && item["type"] == "additional_tools" {
-				if e := bpsCollectTools(item["tools"], "", r.Tools, &catalog, 0); e != nil {
+				if e := bpsCollectTools(item["tools"], "", r.Tools, &catalog, omittedHostedTools, 0); e != nil {
 					return nil, e
 				}
 			}
 		}
 		if choice, ok := source["tool_choice"].(map[string]any); ok {
+			if kind := stringValue(choice["type"]); bpsUnsupportedHostedTool(kind) {
+				return nil, bpsInvalid("BPS cannot execute hosted tool selected by tool_choice: " + kind)
+			}
 			name := stringValue(choice["name"])
 			if ns := stringValue(choice["namespace"]); ns != "" {
 				name = ns + "." + name
@@ -238,7 +257,7 @@ func (s *OpenAIGatewayService) prepareOpenAIBPS(ctx context.Context, c *gin.Cont
 			}
 			r.Tools = map[string]bpsTool{name: tool}
 			catalog = nil
-			if e := bpsCollectTools([]any{tool.Spec}, tool.Namespace, map[string]bpsTool{}, &catalog, 0); e != nil {
+			if e := bpsCollectTools([]any{tool.Spec}, tool.Namespace, map[string]bpsTool{}, &catalog, omittedHostedTools, 0); e != nil {
 				return nil, e
 			}
 			r.RequireTool = true
@@ -338,6 +357,14 @@ func (s *OpenAIGatewayService) prepareOpenAIBPS(ctx context.Context, c *gin.Cont
 		if r.RequireTool {
 			protocol += " You must call one of the listed tools in this response."
 		}
+	}
+	if len(omittedHostedTools) > 0 {
+		kinds := make([]string, 0, len(omittedHostedTools))
+		for kind := range omittedHostedTools {
+			kinds = append(kinds, kind)
+		}
+		sort.Strings(kinds)
+		protocol += "\nHosted tools unavailable through BPS: " + strings.Join(kinds, ", ") + ". Do not claim to have used them. If required, explain the limitation or use a suitable declared client tool."
 	}
 	if r.Structured != nil {
 		protocol += "\n" + r.Structured.instructions()
