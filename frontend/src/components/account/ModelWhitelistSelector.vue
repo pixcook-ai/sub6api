@@ -145,7 +145,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { onUnmounted, ref, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { accountsAPI } from '@/api/admin/accounts'
@@ -186,6 +186,17 @@ const searchQuery = ref('')
 const customModel = ref('')
 const isComposing = ref(false)
 const isSyncingUpstream = ref(false)
+let upstreamSyncVersion = 0
+
+watch(() => props.accountId, () => {
+  upstreamSyncVersion += 1
+  isSyncingUpstream.value = false
+})
+
+onUnmounted(() => {
+  upstreamSyncVersion += 1
+})
+
 const normalizedPlatforms = computed(() => {
   const rawPlatforms =
     props.platforms && props.platforms.length > 0
@@ -227,7 +238,7 @@ const canSyncUpstream = computed(() => {
 })
 
 const availableOptions = computed(() => {
-  if (props.candidateModels && props.candidateModels.length > 0) {
+  if (props.candidateModels !== undefined) {
     return props.candidateModels.map(model => ({ value: model, label: model }))
   }
   if (normalizedPlatforms.value.length === 0) {
@@ -265,6 +276,13 @@ const toggleModel = (model: string) => {
   if (props.modelValue.includes(model)) {
     removeModel(model)
   } else {
+    const conflict = props.modelMappings?.find(
+      mapping => mapping.from.trim() === model && mapping.to.trim() && mapping.to.trim() !== model
+    )
+    if (conflict) {
+      appStore.showInfo(t('admin.accounts.modelMappingConflict', { from: model, to: conflict.to.trim() }))
+      return
+    }
     emit('update:modelValue', [...props.modelValue, model])
   }
 }
@@ -295,7 +313,7 @@ const handleEnter = () => {
 
 const fillRelated = () => {
   const newModels = [...props.modelValue]
-  if (props.candidateModels && props.candidateModels.length > 0) {
+  if (props.candidateModels !== undefined) {
     for (const model of props.candidateModels) {
       if (!newModels.includes(model)) newModels.push(model)
     }
@@ -316,6 +334,7 @@ const syncUpstreamModels = async () => {
   if (isSyncingUpstream.value) return
   if (!props.accountId && !props.syncCredentials) return
 
+  const syncVersion = ++upstreamSyncVersion
   isSyncingUpstream.value = true
   try {
     let result
@@ -326,6 +345,7 @@ const syncUpstreamModels = async () => {
     } else {
       return
     }
+    if (syncVersion !== upstreamSyncVersion) return
 
     const upstreamModels = result.models.map(model => model.trim()).filter(Boolean)
     if (upstreamModels.length === 0) {
@@ -367,10 +387,11 @@ const syncUpstreamModels = async () => {
       appStore.showWarning(t('admin.accounts.syncUpstreamModelsMetadataPartial'))
     }
   } catch (error) {
+    if (syncVersion !== upstreamSyncVersion) return
     const message = error instanceof Error ? error.message : t('admin.accounts.syncUpstreamModelsFailed')
     appStore.showError(t('admin.accounts.syncUpstreamModelsError', { message }))
   } finally {
-    isSyncingUpstream.value = false
+    if (syncVersion === upstreamSyncVersion) isSyncingUpstream.value = false
   }
 }
 

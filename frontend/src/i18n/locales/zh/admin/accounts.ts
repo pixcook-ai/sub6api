@@ -145,7 +145,7 @@ export default {
         tokenRequired: "请输入 Access Token",
         accountHint: "留空时从 JWT 自动提取；也可填写账号 ID 覆盖。",
         expiresAt: "Token 到期时间",
-        modelsHint: "默认允许以下两个候选模型；左侧为客户端名称，右侧为上游模型。删除全部规则将允许任意模型。",
+        modelsHint: "客户端模型同名时优先使用模型映射。删除全部规则将允许任意模型。",
         clientModel: "客户端模型",
         upstreamModel: "上游模型",
       },

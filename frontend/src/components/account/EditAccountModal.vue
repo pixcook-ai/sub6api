@@ -4262,7 +4262,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   mixedChannelWarningDetails.value = null
   mixedChannelWarningRawMessage.value = ''
   mixedChannelWarningAction.value = null
-  bpsDraft.value = newBPSAccountDraft(newAccount.credentials)
+  bpsDraft.value = newBPSAccountDraft(newAccount.credentials ?? {})
   bpsTestAfterSave.value = false
   form.name = newAccount.name
   form.notes = newAccount.notes || ''
@@ -5340,10 +5340,6 @@ const handleSubmit = async () => {
       }
     }
 
-    if (props.account.platform === 'openai_bps') {
-      updatePayload.credentials = bpsCredentials(bpsDraft.value)
-    }
-
     // For apikey type, handle credentials update
     if (props.account.type === 'apikey') {
       const currentCredentials = (props.account.credentials as Record<string, unknown>) || {}
@@ -5598,7 +5594,9 @@ const handleSubmit = async () => {
     } else {
       // For oauth/setup-token types, only update intercept_warmup_requests if changed
       const currentCredentials = (props.account.credentials as Record<string, unknown>) || {}
-      const newCredentials: Record<string, unknown> = { ...currentCredentials }
+      const newCredentials = props.account.platform === 'openai_bps'
+        ? bpsCredentials(bpsDraft.value)
+        : { ...currentCredentials }
 
       applyInterceptWarmup(newCredentials, interceptWarmupRequests.value, 'edit')
       applyAccountSchedulingThresholdOverridePatch(newCredentials, currentCredentials)

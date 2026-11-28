@@ -145,7 +145,7 @@ export default {
         tokenRequired: "Access Token is required",
         accountHint: "Extracted from the JWT when blank; enter an account ID to override.",
         expiresAt: "Token expires",
-        modelsHint: "These two candidate models are allowed by default. Map client names to upstream models; removing all rules allows any model.",
+        modelsHint: "A mapping takes precedence over a whitelist entry with the same client model name. Removing all rules allows any model.",
         clientModel: "Client model",
         upstreamModel: "Upstream model",
       },

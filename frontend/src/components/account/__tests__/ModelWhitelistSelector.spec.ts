@@ -100,6 +100,18 @@ describe('ModelWhitelistSelector', () => {
     expect(showInfo).toHaveBeenCalledWith(expect.stringContaining('gpt-latest → deepseek-chat'))
   })
 
+  it('rejects a catalog whitelist model that is already mapped to a different target', async () => {
+    const wrapper = mountSelector({
+      candidateModels: ['gpt-latest'],
+      modelMappings: [{ from: 'gpt-latest', to: 'deepseek-chat' }]
+    })
+    await wrapper.get('div.cursor-pointer').trigger('click')
+    await findModelRow(wrapper, 'gpt-latest').get('[data-testid=\"select-model\"]').trigger('click')
+
+    expect(wrapper.emitted('update:modelValue')).toBeUndefined()
+    expect(showInfo).toHaveBeenCalledWith(expect.stringContaining('gpt-latest → deepseek-chat'))
+  })
+
   it('keeps the existing duplicate identity warning before checking mappings', async () => {
     const wrapper = mountSelector({ modelValue: ['gpt-latest'], modelMappings: [{ from: 'gpt-latest', to: 'deepseek-chat' }] })
     await wrapper.get('input[placeholder="admin.accounts.enterCustomModelName"]').setValue('gpt-latest')
@@ -120,6 +132,52 @@ describe('ModelWhitelistSelector', () => {
     await wrapper.get('input[placeholder="admin.accounts.enterCustomModelName"]').setValue('custom-model')
     await wrapper.findAll('button').find(button => button.text() === 'admin.accounts.addModel')!.trigger('click')
     expect(wrapper.emitted('update:modelValue')).toEqual([[['custom-model']]])
+  })
+
+  it('treats an explicitly empty candidate list as empty', async () => {
+    const wrapper = mountSelector({ candidateModels: [] })
+    await wrapper.get('div.cursor-pointer').trigger('click')
+
+    expect(wrapper.findAll('[data-testid="model-option"]')).toHaveLength(0)
+
+    await wrapper.findAll('button').find(button => button.text() === 'admin.accounts.fillRelatedModels')!.trigger('click')
+    expect(wrapper.emitted('update:modelValue')).toEqual([[[]]])
+  })
+
+  it('ignores a model sync result after its account changes', async () => {
+    let resolveFirst!: (value: { models: string[] }) => void
+    let resolveSecond!: (value: { models: string[] }) => void
+    const firstResult = new Promise<{ models: string[] }>(resolve => { resolveFirst = resolve })
+    const secondResult = new Promise<{ models: string[] }>(resolve => { resolveSecond = resolve })
+    syncUpstreamModels.mockImplementationOnce(() => firstResult as never)
+    syncUpstreamModels.mockImplementationOnce(() => secondResult as never)
+
+    const wrapper = mount(ModelWhitelistSelector, {
+      props: {
+        modelValue: [],
+        platform: 'openai',
+        accountId: 46
+      },
+      global: {
+        stubs: {
+          ModelIcon: true
+        }
+      }
+    })
+    const getSyncButton = () => wrapper
+      .findAll('button')
+      .find(button => button.text() === 'admin.accounts.syncUpstreamModels')!
+
+    await getSyncButton().trigger('click')
+    await wrapper.setProps({ accountId: 47 })
+    await getSyncButton().trigger('click')
+
+    resolveSecond({ models: ['current-account-model'] })
+    await flushPromises()
+    resolveFirst({ models: ['stale-account-model'] })
+    await flushPromises()
+
+    expect(wrapper.emitted('update:modelValue')).toEqual([[['current-account-model']]])
   })
 
   it('copies a model ID without selecting the model', async () => {

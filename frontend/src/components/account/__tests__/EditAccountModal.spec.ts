@@ -1781,11 +1781,18 @@ describe('EditAccountModal OpenAI BPS', () => {
     updateAccountMock.mockReset().mockResolvedValue(account)
     checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
     const wrapper = mountModal(account)
+    await wrapper.get('[data-testid="add-model-mapping"]').trigger('click')
+    await wrapper.get('[data-testid="bps-model-mapping-source"]').setValue('public-astra')
+    await wrapper.get('[data-testid="bps-model-mapping-target"]').setValue('gpt-6-astra')
     await wrapper.get('[data-testid="bps-save-and-test"]').trigger('click')
     await wrapper.get('form#edit-account-form').trigger('submit.prevent')
     await vi.waitFor(() => expect(wrapper.emitted('test')).toEqual([[account]]))
     expect(updateAccountMock.mock.calls[0][1].credentials).not.toHaveProperty('access_token')
     expect(updateAccountMock.mock.calls[0][1].credentials.chatgpt_account_id).toBe('workspace')
+    expect(updateAccountMock.mock.calls[0][1].credentials.model_mapping).toEqual({
+      'gpt-6-astra': 'gpt-6-astra',
+      'public-astra': 'gpt-6-astra'
+    })
     wrapper.unmount()
   })
 })
