@@ -155,13 +155,13 @@ type upstreamBillingProbeSettingRepo struct {
 
 type upstreamBillingProbeHTTPStub struct {
 	calls          atomic.Int64
+	balanceCalls   atomic.Int64
 	active         atomic.Int64
 	maxActive      atomic.Int64
 	beforeResponse func()
 }
 
 func (u *upstreamBillingProbeHTTPStub) Do(req *http.Request, proxyURL string, accountID int64, accountConcurrency int) (*http.Response, error) {
-	u.calls.Add(1)
 	active := u.active.Add(1)
 	defer u.active.Add(-1)
 	for {
@@ -170,6 +170,15 @@ func (u *upstreamBillingProbeHTTPStub) Do(req *http.Request, proxyURL string, ac
 			break
 		}
 	}
+	if req.URL.Path == upstreamBalanceProbePath {
+		u.balanceCalls.Add(1)
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       upstreamBalanceProbeWalletBody(),
+		}, nil
+	}
+	u.calls.Add(1)
 	if u.beforeResponse != nil {
 		u.beforeResponse()
 	}
@@ -330,10 +339,13 @@ func TestUpstreamBillingProbeSuccessPersistsSanitizedSnapshot(t *testing.T) {
 	require.Equal(t, 0.6, *account.RateMultiplier)
 	require.NotNil(t, snapshot.SyncedRateMultiplier)
 	require.Equal(t, 0.6, *snapshot.SyncedRateMultiplier)
-	require.Equal(t, "https://upstream.example/v1/sub2api/billing", upstream.lastReq.URL.String())
-	require.Equal(t, http.MethodGet, upstream.lastReq.Method)
-	require.Equal(t, "Bearer sk-sensitive", upstream.lastReq.Header.Get("Authorization"))
-	require.True(t, HTTPUpstreamRedirectsDisabled(upstream.lastReq.Context()))
+	require.Len(t, upstream.requests, 2)
+	require.Equal(t, "https://upstream.example/v1/sub2api/billing", upstream.requests[0].URL.String())
+	for _, request := range upstream.requests {
+		require.Equal(t, http.MethodGet, request.Method)
+		require.Equal(t, "Bearer sk-sensitive", request.Header.Get("Authorization"))
+		require.True(t, HTTPUpstreamRedirectsDisabled(request.Context()))
+	}
 
 	persisted := decodeUpstreamBillingProbeSnapshot(account.Extra)
 	require.NotNil(t, persisted)
@@ -369,7 +381,10 @@ func TestUpstreamBillingProbeAdaptiveCNUsesChatProtocolBaseURL(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Equal(t, UpstreamBillingProbeStatusOK, snapshot.Status)
-	require.Equal(t, "https://chat-relay.example/v1/sub2api/billing", upstream.lastReq.URL.String())
+	require.Len(t, upstream.requests, 2)
+	require.Equal(t, "https://chat-relay.example/v1/sub2api/billing", upstream.requests[0].URL.String())
+	require.Equal(t, "chat-relay.example", upstream.requests[1].URL.Host)
+	require.Equal(t, upstreamBalanceProbePath, upstream.requests[1].URL.Path)
 }
 
 func TestUpstreamBillingProbeSyncsResolvedRateForAllAPIKeyPlatforms(t *testing.T) {
@@ -931,12 +946,14 @@ func TestUpstreamBillingProbeRunnerIsBoundedAndManualProbeIgnoresSwitches(t *tes
 
 	require.NoError(t, svc.RunDue(context.Background()))
 	require.Equal(t, int64(20), upstream.calls.Load())
+	require.Equal(t, int64(20), upstream.balanceCalls.Load())
 
 	settingsRepo.mu.Lock()
 	settingsRepo.values[SettingKeyUpstreamBillingProbeSettings] = `{"enabled":false,"interval_minutes":30}`
 	settingsRepo.mu.Unlock()
 	require.NoError(t, svc.RunDue(context.Background()))
 	require.Equal(t, int64(20), upstream.calls.Load())
+	require.Equal(t, int64(20), upstream.balanceCalls.Load())
 
 	accounts[25].Extra[UpstreamBillingProbeEnabledExtraKey] = false
 	manualRate := 0.25

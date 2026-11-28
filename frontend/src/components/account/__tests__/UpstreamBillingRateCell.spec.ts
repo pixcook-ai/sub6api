@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import UpstreamBillingRateCell from '../UpstreamBillingRateCell.vue'
 import HelpTooltip from '@/components/common/HelpTooltip.vue'
-import type { Account } from '@/types'
+import type { Account, UpstreamBalanceData, UpstreamBalanceSnapshot, UpstreamBillingProbeSnapshot } from '@/types'
 
 vi.mock('vue-i18n', async () => {
   const actual = await vi.importActual<typeof import('vue-i18n')>('vue-i18n')
@@ -56,6 +56,52 @@ const billingData = {
   effective_rate_multiplier: 0.9,
   timezone: 'Asia/Shanghai',
   observed_at: '2026-07-13T00:00:00Z'
+}
+
+const balanceSnapshot = (
+  overrides: Partial<UpstreamBalanceSnapshot> = {},
+  data: Partial<UpstreamBalanceData> = {}
+): UpstreamBalanceSnapshot => ({
+  status: 'ok',
+  data: {
+    is_valid: true,
+    mode: 'unrestricted',
+    unit: 'USD',
+    remaining: 12.34,
+    wallet_balance: 12.34,
+    ...data
+  },
+  received_at: '2026-07-13T00:00:00Z',
+  fresh_until: '2026-07-13T01:00:00Z',
+  last_attempt_at: '2026-07-13T00:00:00Z',
+  ...overrides
+})
+
+const accountWithBalance = (
+  balance: UpstreamBalanceSnapshot | undefined,
+  probeOverrides: Partial<UpstreamBillingProbeSnapshot> = {}
+): Account => makeAccount({
+  extra: {
+    upstream_billing_probe: {
+      status: 'ok',
+      data: billingData,
+      received_at: '2026-07-13T00:00:00Z',
+      fresh_until: '2026-07-13T02:00:00Z',
+      last_attempt_at: '2026-07-13T00:00:00Z',
+      next_probe_at: '2026-07-13T00:30:00Z',
+      balance,
+      ...probeOverrides
+    }
+  }
+})
+
+const openBalanceTooltip = async (wrapper: ReturnType<typeof mount>) => {
+  await wrapper.get('[data-testid="upstream-balance-details"]').trigger('mouseenter')
+  await flushPromises()
+  const tooltip = Array.from(document.body.querySelectorAll<HTMLElement>('[role="tooltip"]'))
+    .find(element => element.style.display !== 'none')
+  expect(tooltip).toBeDefined()
+  return tooltip as HTMLElement
 }
 
 describe('UpstreamBillingRateCell', () => {
@@ -356,5 +402,77 @@ describe('UpstreamBillingRateCell', () => {
       'admin.accounts.upstreamBilling.unsupported'
     )
     expect(wrapper.text()).not.toContain('-admin.accounts.upstreamBilling.unsupported')
+  })
+
+  it('shows the upstream balance below the rate with balance details', async () => {
+    const wrapper = mount(UpstreamBillingRateCell, {
+      attachTo: document.body,
+      props: { account: accountWithBalance(balanceSnapshot()), now: Date.now() }
+    })
+
+    expect(wrapper.get('[data-testid="upstream-billing-rate"]').text()).toBe('0.60x')
+    expect(wrapper.get('[data-testid="upstream-balance-value"]').text()).toBe('$12.34')
+    const tooltip = await openBalanceTooltip(wrapper)
+    expect(tooltip.textContent).toContain('admin.accounts.upstreamBilling.balance.kindWallet')
+    expect(tooltip.textContent).toContain('admin.accounts.upstreamBilling.balance.remaining:$12.34')
+    wrapper.unmount()
+  })
+
+  it('marks stale balances while retaining the last known amount in the tooltip', async () => {
+    const wrapper = mount(UpstreamBillingRateCell, {
+      attachTo: document.body,
+      props: {
+        account: accountWithBalance(balanceSnapshot()),
+        now: Date.parse('2026-07-13T01:00:00.001Z')
+      }
+    })
+
+    expect(wrapper.get('[data-testid="upstream-balance-value"]').text()).toBe('admin.accounts.upstreamBilling.stale')
+    expect(wrapper.get('[data-testid="upstream-balance-value"]').classes()).toContain('text-amber-600')
+    const tooltip = await openBalanceTooltip(wrapper)
+    expect(tooltip.querySelector('[data-testid="upstream-balance-last-value"]')?.textContent).toContain('$12.34')
+    wrapper.unmount()
+  })
+
+  it('shows unsupported balance status only when a balance query was attempted', async () => {
+    const unsupported: UpstreamBalanceSnapshot = {
+      status: 'unsupported',
+      last_attempt_at: '2026-07-13T00:00:00Z',
+      http_status: 404,
+      last_error: 'unsupported'
+    }
+    const unsupportedRate: Partial<UpstreamBillingProbeSnapshot> = { status: 'unsupported', data: undefined }
+    const wrapper = mount(UpstreamBillingRateCell, {
+      props: {
+        account: accountWithBalance(unsupported, unsupportedRate),
+        now: Date.now()
+      }
+    })
+
+    expect(wrapper.find('[data-testid="upstream-balance"]').exists()).toBe(false)
+    await wrapper.setProps({ account: accountWithBalance(unsupported), now: Date.now() })
+    expect(wrapper.get('[data-testid="upstream-balance-value"]').text()).toBe('admin.accounts.upstreamBilling.unsupported')
+    wrapper.unmount()
+  })
+
+  it('shows a retained balance and the latest upstream error after a failed probe', async () => {
+    const wrapper = mount(UpstreamBillingRateCell, {
+      attachTo: document.body,
+      props: {
+        account: accountWithBalance(balanceSnapshot({
+          status: 'failed',
+          last_attempt_at: '2026-07-13T00:30:00Z',
+          http_status: 502,
+          last_error: 'http_error'
+        })),
+        now: Date.now()
+      }
+    })
+
+    expect(wrapper.get('[data-testid="upstream-balance-value"]').text()).toBe('$12.34')
+    expect(wrapper.get('[data-testid="upstream-balance"]').text()).toContain('admin.accounts.upstreamBilling.failed')
+    const tooltip = await openBalanceTooltip(wrapper)
+    expect(tooltip.querySelector('[data-testid="upstream-balance-error"]')?.textContent).toContain('http_error (HTTP 502)')
+    wrapper.unmount()
   })
 })

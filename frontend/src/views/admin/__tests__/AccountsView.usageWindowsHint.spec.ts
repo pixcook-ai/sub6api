@@ -9,6 +9,8 @@ const {
   listWithEtag,
   getBatchTodayStats,
   getBatchUsage,
+  probeUpstreamBilling,
+  getUpstreamBillingRatesWithEtag,
   getAllProxies,
   getAllGroups
 } = vi.hoisted(() => ({
@@ -16,6 +18,8 @@ const {
   listWithEtag: vi.fn(),
   getBatchTodayStats: vi.fn(),
   getBatchUsage: vi.fn(),
+  probeUpstreamBilling: vi.fn(),
+  getUpstreamBillingRatesWithEtag: vi.fn(),
   getAllProxies: vi.fn(),
   getAllGroups: vi.fn()
 }))
@@ -28,6 +32,8 @@ vi.mock('@/api/admin', () => ({
       listWithEtag,
       getBatchTodayStats,
       getBatchUsage,
+      probeUpstreamBilling,
+      getUpstreamBillingRatesWithEtag,
       getUpstreamBillingProbeSettings: vi.fn().mockResolvedValue({ enabled: true, interval_minutes: 30 }),
       delete: vi.fn(),
       batchClearError: vi.fn(),
@@ -83,6 +89,9 @@ const DataTableStub = {
       <div v-for="row in data" :key="row.id" data-test="account-rate">
         <slot name="cell-rate_multiplier" :row="row" />
       </div>
+      <div v-for="row in data" :key="'billing-' + row.id" data-test="account-upstream-billing">
+        <slot name="cell-upstream_billing_rate" :row="row" />
+      </div>
       <div v-for="row in data" :key="'usage-' + row.id" data-test="account-usage">
         <slot name="cell-usage" :row="row" />
       </div>
@@ -93,7 +102,7 @@ const DataTableStub = {
 // Expose the content passed to HelpTooltip without dealing with its <Teleport>.
 const HelpTooltipStub = {
   props: ['content', 'widthClass'],
-  template: '<span data-test="usage-windows-hint">{{ content }}</span>'
+  template: '<span data-test="usage-windows-hint">{{ content }}<slot name="trigger" /></span>'
 }
 
 const AccountUsageCellStub = defineComponent({
@@ -156,6 +165,9 @@ describe('admin AccountsView usage windows hint', () => {
     listWithEtag.mockReset()
     getBatchTodayStats.mockReset()
     getBatchUsage.mockReset()
+    probeUpstreamBilling.mockReset()
+    getUpstreamBillingRatesWithEtag.mockReset()
+    getUpstreamBillingRatesWithEtag.mockResolvedValue({ notModified: true, etag: null, data: null })
     getAllProxies.mockReset()
     getAllGroups.mockReset()
 
@@ -319,5 +331,38 @@ describe('admin AccountsView usage windows hint', () => {
     expect(wrapper.get('[data-test="account-rate"]').text()).toBe('0.065x')
     const indicator = wrapper.get('[data-testid="account-rate-sync-indicator"]')
     expect(indicator.attributes('title')).toBe('admin.accounts.upstreamBilling.syncedRateTooltip')
+  })
+
+  it('displays the balance returned by a manual probe in the account rate column', async () => {
+    const now = Date.now()
+    const receivedAt = new Date(now).toISOString()
+    const nextProbeAt = new Date(now + 30 * 60_000).toISOString()
+    const account = {
+      id: 8, name: 'relay-account', platform: 'openai', type: 'apikey',
+      status: 'active', schedulable: true, rate_multiplier: 1,
+      created_at: receivedAt, updated_at: receivedAt
+    }
+    listAccounts.mockResolvedValueOnce({ items: [account], total: 1, page: 1, page_size: 20, pages: 1 })
+    probeUpstreamBilling.mockResolvedValueOnce({
+      account_id: account.id,
+      snapshot: {
+        status: 'unsupported', last_attempt_at: receivedAt, next_probe_at: nextProbeAt,
+        balance: {
+          status: 'ok', received_at: receivedAt, fresh_until: nextProbeAt, last_attempt_at: receivedAt,
+          data: { is_valid: true, unit: 'USD', remaining: 12.34 }
+        }
+      }
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+    const cell = wrapper.get('[data-test="account-upstream-billing"]')
+    expect(cell.find('[data-testid="upstream-balance-value"]').exists()).toBe(false)
+    await cell.get('[data-testid="upstream-billing-probe"]').trigger('click')
+    await flushPromises()
+
+    expect(probeUpstreamBilling).toHaveBeenCalledWith(account.id)
+    expect(cell.get('[data-testid="upstream-balance-value"]').text()).toBe('$12.34')
+    wrapper.unmount()
   })
 })

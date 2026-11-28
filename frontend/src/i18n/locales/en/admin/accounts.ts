@@ -595,7 +595,36 @@ export default {
         noEligibleAccounts: 'Select API key accounts',
         batchLimit: 'A batch can probe at most 20 accounts',
         batchCompleted: 'Probed {count} account(s)',
-        batchPartial: 'Probe partially completed: {success} succeeded, {failed} failed'
+        batchPartial: 'Probe partially completed: {success} succeeded, {failed} failed',
+        balance: {
+          label: 'Balance',
+          unlimited: 'Unlimited',
+          unsupported: 'The upstream does not support balance queries',
+          kindWallet: 'Billing: wallet balance',
+          kindKeyQuota: 'Billing: key quota',
+          kindPlan: 'Plan: {name}',
+          remaining: 'Remaining: {value}',
+          keyQuota: 'Key quota: {used} used of {limit}',
+          window: '{window}: {used} used of {limit}',
+          windowWithReset: '{window}: {used} used of {limit}, resets {reset}',
+          windows: {
+            daily: 'Daily',
+            weekly: 'Weekly',
+            monthly: 'Monthly',
+            hours5: '5 hours',
+            days1: '1 day',
+            days7: '7 days'
+          },
+          expiresAt: 'Expires: {value}',
+          keyStatus: 'Key status: {value}',
+          keyStatuses: {
+            quotaExhausted: 'Quota exhausted',
+            expired: 'Expired'
+          },
+          invalid: 'The upstream reports this key as unusable',
+          lastBalance: 'Last balance: {value}',
+          lastError: 'Last balance query failed: {value}'
+        }
       },
       allPrivacyModes: 'All Privacy States',
       privacyUnset: 'Unset',

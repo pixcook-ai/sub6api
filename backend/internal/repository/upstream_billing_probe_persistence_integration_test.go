@@ -27,9 +27,15 @@ func TestAccountUpdatePreservesConcurrentProbeSnapshot(t *testing.T) {
 	stale, err := repo.GetByID(ctx, account.ID)
 	require.NoError(t, err)
 	require.NotContains(t, stale.Extra, service.UpstreamBillingProbeExtraKey)
+	now := time.Now().UTC()
 	require.NoError(t, repo.UpdateUpstreamBillingProbeSnapshot(ctx, stale, &service.UpstreamBillingProbeSnapshot{
 		Status:        service.UpstreamBillingProbeStatusOK,
-		LastAttemptAt: time.Now().UTC(),
+		LastAttemptAt: now,
+		Balance: &service.UpstreamBalanceSnapshot{
+			Status:        service.UpstreamBillingProbeStatusOK,
+			LastAttemptAt: now,
+			Data:          map[string]any{"is_valid": true, "remaining": 12.34, "unit": "USD"},
+		},
 	}, nil))
 
 	stale.Name = "ordinary-edit"
@@ -39,6 +45,10 @@ func TestAccountUpdatePreservesConcurrentProbeSnapshot(t *testing.T) {
 	snapshot, ok := got.Extra[service.UpstreamBillingProbeExtraKey].(map[string]any)
 	require.True(t, ok)
 	require.Equal(t, service.UpstreamBillingProbeStatusOK, snapshot["status"])
+	balance, ok := snapshot["balance"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, service.UpstreamBillingProbeStatusOK, balance["status"])
+	require.Equal(t, map[string]any{"is_valid": true, "remaining": 12.34, "unit": "USD"}, balance["data"])
 
 	require.NoError(t, repo.UpdateExtra(ctx, got.ID, map[string]any{service.UpstreamBillingProbeEnabledExtraKey: false}))
 	disabled, err := repo.GetByID(ctx, account.ID)

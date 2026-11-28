@@ -445,7 +445,36 @@ export default {
         noEligibleAccounts: '请选择 API Key 账号',
         batchLimit: '每次最多探测 20 个账号',
         batchCompleted: '已完成 {count} 个账号的倍率探测',
-        batchPartial: '倍率探测部分完成：成功 {success} 个，失败 {failed} 个'
+        batchPartial: '倍率探测部分完成：成功 {success} 个，失败 {failed} 个',
+        balance: {
+          label: '余额',
+          unlimited: '不限',
+          unsupported: '上游不支持余额查询',
+          kindWallet: '计费方式：钱包余额',
+          kindKeyQuota: '计费方式：Key 额度',
+          kindPlan: '套餐：{name}',
+          remaining: '剩余：{value}',
+          keyQuota: 'Key 额度：已用 {used} / {limit}',
+          window: '{window}：已用 {used} / {limit}',
+          windowWithReset: '{window}：已用 {used} / {limit}，{reset} 重置',
+          windows: {
+            daily: '每日',
+            weekly: '每周',
+            monthly: '每月',
+            hours5: '5 小时',
+            days1: '1 天',
+            days7: '7 天'
+          },
+          expiresAt: '到期时间：{value}',
+          keyStatus: 'Key 状态：{value}',
+          keyStatuses: {
+            quotaExhausted: '额度已用尽',
+            expired: '已过期'
+          },
+          invalid: '上游报告该 Key 不可用',
+          lastBalance: '上次查询余额：{value}',
+          lastError: '最近一次余额查询失败：{value}'
+        }
       },
       allPrivacyModes: '全部Privacy状态',
       privacyUnset: '未设置',
