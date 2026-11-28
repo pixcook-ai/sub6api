@@ -127,9 +127,14 @@ func bpsDiagnosticIdentifier(value, accessToken string) string {
 		strings.HasPrefix(lower, "sk-") || strings.HasPrefix(lower, "sess-") || strings.HasPrefix(lower, "eyj") {
 		return ""
 	}
-	if strings.IndexFunc(value, func(r rune) bool {
-		return !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '-' || r == '.')
-	}) >= 0 {
+	if strings.ContainsFunc(value, func(r rune) bool {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_', r == '-', r == '.':
+			return false
+		default:
+			return true
+		}
+	}) {
 		return ""
 	}
 	return value
