@@ -53,7 +53,7 @@ jobs:
     timeout-minutes: 20
     environment:
       name: sub6api-production
-      url: https://sub6api.pixcook.ai
+      url: https://pixcook.ai
     steps:
       - uses: actions/checkout@v6
       - uses: actions/download-artifact@v4
@@ -81,7 +81,7 @@ jobs:
           ssh -i ~/.ssh/sub6api -o BatchMode=yes "$DEPLOY_USER@$DEPLOY_HOST" "deploy $GITHUB_SHA"
       - name: Verify public HTTPS
         run: |
-          curl --fail --silent --show-error --retry 3 https://sub6api.pixcook.ai/health | python3 -c 'import json,sys; assert json.load(sys.stdin)["status"] == "ok"'
+          curl --fail --silent --show-error --retry 3 https://pixcook.ai/health | python3 -c 'import json,sys; assert json.load(sys.stdin)["status"] == "ok"'
       - name: Remove SSH key
         if: always()
         run: rm -f ~/.ssh/sub6api

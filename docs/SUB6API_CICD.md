@@ -1,6 +1,6 @@
 # Sub6API CI/CD
 
-目标为现有独立实例 `https://sub6api.pixcook.ai`，服务器目录 `/opt/sub6api`。现有站点、数据库、Redis、账号授权菜单和数据卷保持独立。
+目标为生产站点 `https://pixcook.ai`，服务器目录 `/opt/sub6api`。现有站点、数据库、Redis、账号授权菜单和数据卷保持独立。
 
 ## 流程
 
@@ -36,7 +36,7 @@ Go lint 以基座提交 `a3eaf63afc672ffedf7844e6cfc5cb6750d52a3e` 为既有问�
 
 ## 发布清单：批量邮箱----密码----2FA 授权与自动重授权
 
-目标：`https://sub6api.pixcook.ai`，服务器目录 `/opt/sub6api`。本次发布含迁移 251 和运行时变更，不能走普通自动部署。
+目标：`https://pixcook.ai`，服务器目录 `/opt/sub6api`。本次发布含迁移 251 和运行时变更，不能走普通自动部署。
 
 ### 为什么不能直接部署
 

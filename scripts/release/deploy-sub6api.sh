@@ -77,7 +77,7 @@ wait_healthy || { echo 'App did not become healthy' >&2; exit 1; }
 expected=$(sha256sum sub2api | cut -d' ' -f1)
 actual=$(docker exec --user 1000:1000 sub6api-app-1 sha256sum /proc/1/exe | cut -d' ' -f1)
 [[ "$expected" == "$actual" ]] || { echo 'Running binary checksum mismatch' >&2; exit 1; }
-curl --fail --silent --show-error --retry 3 https://sub6api.pixcook.ai/health | python3 -c 'import json,sys; assert json.load(sys.stdin)["status"] == "ok"'
+curl --fail --silent --show-error --retry 3 https://pixcook.ai/health | python3 -c 'import json,sys; assert json.load(sys.stdin)["status"] == "ok"'
 python3 - "$root/logs/deployment-$commit.json" "$commit" "$image" "$expected" "$previous" <<'PY'
 import json,sys,datetime
 with open(sys.argv[1],'w') as f: json.dump(dict(commit=sys.argv[2],image=sys.argv[3],binary_sha256=sys.argv[4],previous_image=sys.argv[5],verified_at=datetime.datetime.now(datetime.timezone.utc).isoformat()),f,indent=2)
