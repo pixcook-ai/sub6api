@@ -401,7 +401,9 @@ func TestOpenAIBPSForwardMaxOutputTokens(t *testing.T) {
 			account.Credentials["model_mapping"] = map[string]any{tt.model: tt.model}
 			response := bpsResponse(bpsText("hello"))
 			response["model"] = tt.model
-			response["usage"].(map[string]any)["output_tokens"] = 24
+			usage, ok := response["usage"].(map[string]any)
+			require.True(t, ok)
+			usage["output_tokens"] = 24
 			upstream := &bpsHTTPStub{
 				contentType: "text/event-stream",
 				body:        bpsEvent("response.completed", map[string]any{"response": response}),
