@@ -45,22 +45,47 @@ func bpsCatalogService(upstream HTTPUpstream, accounts ...Account) *OpenAIGatewa
 	return &OpenAIGatewayService{accountRepo: &compositeOwnershipAccountRepo{accounts: accounts}, httpUpstream: upstream}
 }
 
-func TestOpenAIBPSAvailableModels_IntersectsMappingWithUpstreamCatalog(t *testing.T) {
+func TestOpenAIBPSAvailableModels_RespectsAccountWhitelistAndUpstreamCatalog(t *testing.T) {
 	upstream := &bpsAccessStub{body: bpsCatalogBody}
-	svc := bpsCatalogService(upstream, bpsCatalogAccount(1, "token-intersect", map[string]any{"alias": "gpt-6-astra", "gone": "gpt-5.6-terra"}))
+	mapping := map[string]any{
+		"alias":       "gpt-6-astra",
+		"gpt-5.6-sol": "gpt-5.6-sol",
+		"gone":        "gpt-5.6-terra",
+	}
+	svc := bpsCatalogService(upstream, bpsCatalogAccount(1, "token-intersect", mapping))
 	groupID := int64(3)
 
 	ids, ok := svc.OpenAIBPSAvailableModels(context.Background(), &groupID)
 	require.True(t, ok)
-	// The upstream catalog is authoritative; the mapping only adds aliases whose target upstream allows.
-	// "gone" maps to a model absent from the catalog, so it is not advertised.
-	require.Equal(t, []string{"alias", "gpt-5.6-sol", "gpt-6-astra"}, ids)
+	// The account's non-empty mapping limits client-facing IDs, while upstream
+	// authorization still determines which mapped targets can be advertised.
+	require.Equal(t, []string{"alias", "gpt-5.6-sol"}, ids)
 	require.Equal(t, http.MethodGet, upstream.method)
 	require.Equal(t, "/basispoints/api/responses/access?include_models=true", upstream.uri)
 }
 
+func TestOpenAIBPSAvailableModels_ExpandsWildcardWhitelistAgainstUpstreamCatalog(t *testing.T) {
+	upstream := &bpsAccessStub{body: bpsCatalogBody}
+	svc := bpsCatalogService(upstream, bpsCatalogAccount(5, "token-wildcard", map[string]any{"gpt-*": "gpt-6-astra"}))
+	groupID := int64(3)
+
+	ids, ok := svc.OpenAIBPSAvailableModels(context.Background(), &groupID)
+	require.True(t, ok)
+	require.Equal(t, []string{"gpt-5.6-sol", "gpt-6-astra"}, ids)
+}
+
+func TestOpenAIBPSAvailableModels_HidesWildcardWhenTargetUnavailable(t *testing.T) {
+	upstream := &bpsAccessStub{body: bpsCatalogBody}
+	svc := bpsCatalogService(upstream, bpsCatalogAccount(6, "token-wildcard-denied", map[string]any{"gpt-*": "gpt-5.6-terra"}))
+	groupID := int64(3)
+
+	ids, ok := svc.OpenAIBPSAvailableModels(context.Background(), &groupID)
+	require.True(t, ok)
+	require.Empty(t, ids)
+}
+
 func TestOpenAIBPSAvailableModels_AccountWithoutMappingExposesWholeCatalog(t *testing.T) {
-	svc := bpsCatalogService(&bpsAccessStub{body: bpsCatalogBody}, bpsCatalogAccount(2, "token-nomap", nil))
+	svc := bpsCatalogService(&bpsAccessStub{body: bpsCatalogBody}, bpsCatalogAccount(2, "token-nomap", map[string]any{}))
 	groupID := int64(3)
 
 	ids, ok := svc.OpenAIBPSAvailableModels(context.Background(), &groupID)
@@ -75,6 +100,16 @@ func TestOpenAIBPSAvailableModels_UpstreamFailureFallsBack(t *testing.T) {
 	ids, ok := svc.OpenAIBPSAvailableModels(context.Background(), &groupID)
 	require.False(t, ok, "caller must fall back to the configured list")
 	require.Empty(t, ids)
+}
+
+func TestOpenAIBPSAvailableModels_UpstreamFailureKeepsAccountRestrictions(t *testing.T) {
+	svc := bpsCatalogService(&bpsAccessStub{status: http.StatusForbidden, body: "{}"},
+		bpsCatalogAccount(7, "token-restricted-fallback", map[string]any{"alias": "gpt-6-astra"}))
+	groupID := int64(3)
+
+	ids, ok := svc.OpenAIBPSAvailableModels(context.Background(), &groupID)
+	require.True(t, ok)
+	require.Equal(t, []string{"alias"}, ids)
 }
 
 func TestOpenAIBPSAvailableModels_ReusesFreshCache(t *testing.T) {

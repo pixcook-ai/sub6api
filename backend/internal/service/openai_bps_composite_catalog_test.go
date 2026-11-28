@@ -40,10 +40,10 @@ func TestCompleteCompositeBPSModelCatalogRequiresKnownTarget(t *testing.T) {
 		target  string
 		listed  bool
 	}{
-		{name: "mapping value", mapping: map[string]any{"configured-alias": "custom-upstream-model"}, target: "custom-upstream-model", listed: true},
+		{name: "mapping value is not a whitelisted client model", mapping: map[string]any{"configured-alias": "custom-upstream-model"}, target: "custom-upstream-model"},
 		{name: "mapping key", mapping: map[string]any{"configured-alias": "custom-upstream-model"}, target: "configured-alias", listed: true},
 		{name: "default model", target: defaults[0], listed: true},
-		{name: "default with alias mapping", mapping: map[string]any{"configured-alias": "custom-upstream-model"}, target: defaults[0], listed: true},
+		{name: "default omitted from configured whitelist", mapping: map[string]any{"configured-alias": "custom-upstream-model"}, target: defaults[0]},
 		{name: "unknown target", mapping: map[string]any{"configured-alias": "custom-upstream-model"}, target: "unavailable-model"},
 		{name: "wildcard is not target evidence", mapping: map[string]any{"*": "custom-upstream-model"}, target: "unavailable-model"},
 		{name: "wildcard target is not enumerable", mapping: map[string]any{"*": "custom-upstream-model"}, target: "*"},
@@ -98,9 +98,11 @@ func TestCompleteCompositeBPSModelCatalogExactRouteOverridesPrefix(t *testing.T)
 	require.Empty(t, models)
 }
 
-func TestBPSCompositeCatalogDoesNotRestrictRequestAdmission(t *testing.T) {
+func TestBPSCompositeCatalogKeepsUnknownTargetsHiddenAndHonorsAccountWhitelist(t *testing.T) {
 	account := newBPSCompositeCatalogAccount(map[string]any{"configured-alias": "custom-upstream-model"})
 	require.False(t, bpsCompositeCatalogTargetKnown(&account, "new-upstream-model"))
-	require.True(t, account.IsModelSupported("new-upstream-model"))
-	require.True(t, isOpenAICompatibleAccountEligibleForRequestBeforeProfit(context.Background(), &account, PlatformOpenAIBPS, "new-upstream-model", false, OpenAIEndpointCapabilityResponses))
+	require.True(t, account.IsModelSupported("configured-alias"))
+	require.False(t, account.IsModelSupported("new-upstream-model"))
+	require.True(t, isOpenAICompatibleAccountEligibleForRequestBeforeProfit(context.Background(), &account, PlatformOpenAIBPS, "configured-alias", false, OpenAIEndpointCapabilityResponses))
+	require.False(t, isOpenAICompatibleAccountEligibleForRequestBeforeProfit(context.Background(), &account, PlatformOpenAIBPS, "new-upstream-model", false, OpenAIEndpointCapabilityResponses))
 }

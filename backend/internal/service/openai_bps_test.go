@@ -76,6 +76,77 @@ func bpsEvent(typ string, fields map[string]any) string {
 	return "event: " + typ + "\ndata: " + bpsJSON(fields) + "\n\n"
 }
 
+func TestOpenAIBPSForwardModelMapping(t *testing.T) {
+	tests := []struct {
+		name          string
+		mapping       map[string]any
+		requested     string
+		allowed       bool
+		upstreamModel string
+	}{
+		{
+			name:          "empty mapping allows any non-empty model",
+			mapping:       map[string]any{},
+			requested:     "unlisted-model",
+			allowed:       true,
+			upstreamModel: "unlisted-model",
+		},
+		{
+			name:          "identity mapping allows its model",
+			mapping:       map[string]any{"public-model": "public-model"},
+			requested:     "public-model",
+			allowed:       true,
+			upstreamModel: "public-model",
+		},
+		{
+			name:          "alias maps to its upstream model",
+			mapping:       map[string]any{"public-alias": "gpt-6-astra"},
+			requested:     "public-alias",
+			allowed:       true,
+			upstreamModel: "gpt-6-astra",
+		},
+		{
+			name:          "trailing wildcard allows and maps matching model",
+			mapping:       map[string]any{"public-*": "gpt-6-astra"},
+			requested:     "public-custom",
+			allowed:       true,
+			upstreamModel: "gpt-6-astra",
+		},
+		{
+			name:      "non-mapped model is rejected without upstream request",
+			mapping:   map[string]any{"public-model": "gpt-6-astra"},
+			requested: "other-model",
+		},
+		{
+			name:      "non-matching wildcard is rejected without upstream request",
+			mapping:   map[string]any{"public-*": "gpt-6-astra"},
+			requested: "private-model",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s, account := bpsFixture()
+			account.Credentials["model_mapping"] = tt.mapping
+			upstream := &bpsHTTPStub{body: bpsJSON(bpsResponse(bpsText("ok"))), contentType: "application/json"}
+			s.httpUpstream = upstream
+			c, _ := bpsContext(1, "/v1/responses")
+			body := []byte(bpsJSON(map[string]any{"model": tt.requested, "input": "hello"}))
+
+			_, err := s.Forward(c.Request.Context(), c, account, body)
+			if !tt.allowed {
+				require.Error(t, err)
+				require.Zero(t, upstream.requests)
+				return
+			}
+
+			require.NoError(t, err)
+			require.Equal(t, 1, upstream.requests)
+			require.Equal(t, tt.upstreamModel, gjson.GetBytes(upstream.requestBody, "model").String())
+		})
+	}
+}
+
 type bpsHTTPStub struct {
 	HTTPUpstream
 	body        string

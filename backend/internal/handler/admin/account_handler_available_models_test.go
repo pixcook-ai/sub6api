@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -35,6 +36,13 @@ func setupAvailableModelsRouter(adminSvc service.AdminService) *gin.Engine {
 	handler := NewAccountHandler(adminSvc, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	router.GET("/api/v1/admin/accounts/:id/models", handler.GetAvailableModels)
 	return router
+}
+
+func newAvailableModelsBPSGateway(upstream service.HTTPUpstream) *service.OpenAIGatewayService {
+	return service.NewOpenAIGatewayService(
+		nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
+		nil, nil, upstream, nil, nil, nil, nil, nil, nil, nil, nil,
+	)
 }
 
 type syncUpstreamHTTPUpstream struct {
@@ -181,6 +189,121 @@ func TestAccountHandlerGetAvailableModels_OpenAIOAuthUsesExplicitModelMapping(t 
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
 	require.Len(t, resp.Data, 1)
 	require.Equal(t, "gpt-5", resp.Data[0].ID)
+}
+
+func TestAccountHandlerGetAvailableModels_OpenAIBPSDiscoveryFailureFallsBackToDefaultsAndConfiguredAliases(t *testing.T) {
+	defaults := service.OpenAIBPSDefaultModels()
+	require.NotEmpty(t, defaults)
+	account := service.Account{
+		ID:       47,
+		Name:     "bps-oauth",
+		Platform: service.PlatformOpenAIBPS,
+		Type:     service.AccountTypeOAuth,
+		Status:   service.StatusActive,
+		Credentials: map[string]any{
+			"access_token":       "test-token",
+			"chatgpt_account_id": "test-workspace",
+			"model_mapping": map[string]any{
+				"configured-alias":  defaults[0],
+				defaults[1]:         defaults[1],
+				"unsupported-alias": "unavailable-model",
+				"wildcard-*":        defaults[0],
+				"wildcard?":         defaults[0],
+			},
+		},
+	}
+	svc := &availableModelsAdminService{stubAdminService: newStubAdminService(), account: account}
+	upstream := &syncUpstreamHTTPUpstream{err: errors.New("upstream unavailable")}
+	gateway := newAvailableModelsBPSGateway(upstream)
+
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	handler := NewAccountHandler(svc, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	handler.SetCodexTicketGateway(gateway)
+	router.GET("/api/v1/admin/accounts/:id/models", handler.GetAvailableModels)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/accounts/47/models", nil)
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	var resp struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	ids := make([]string, 0, len(resp.Data))
+	for _, model := range resp.Data {
+		ids = append(ids, model.ID)
+	}
+	want := []string{defaults[1], "configured-alias"}
+	require.ElementsMatch(t, want, ids)
+	require.NotContains(t, ids, "unsupported-alias")
+	require.NotContains(t, ids, "wildcard-*")
+	require.NotContains(t, ids, "wildcard?")
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/admin/accounts/47/models?scope=upstream", nil)
+	router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	ids = ids[:0]
+	for _, model := range resp.Data {
+		ids = append(ids, model.ID)
+	}
+	require.ElementsMatch(t, defaults, ids)
+}
+
+func TestAccountHandlerGetAvailableModels_OpenAIBPSUsesLiveCatalogWhenDiscoverySucceeds(t *testing.T) {
+	account := service.Account{
+		ID:       48,
+		Name:     "bps-oauth-live-catalog",
+		Platform: service.PlatformOpenAIBPS,
+		Type:     service.AccountTypeOAuth,
+		Status:   service.StatusActive,
+		Credentials: map[string]any{
+			"access_token":       "test-token",
+			"chatgpt_account_id": "test-workspace",
+			"model_mapping": map[string]any{
+				"live-alias":  "gpt-live-model",
+				"gpt-*":       "gpt-live-model",
+				"stale-alias": "gpt-6-astra",
+			},
+		},
+	}
+	svc := &availableModelsAdminService{stubAdminService: newStubAdminService(), account: account}
+	upstream := &syncUpstreamHTTPUpstream{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(`{"allowed":true,"model_catalog":{"models":[{"id":"gpt-live-model"}]}}`)),
+	}}
+
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	handler := NewAccountHandler(svc, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	handler.SetCodexTicketGateway(newAvailableModelsBPSGateway(upstream))
+	router.GET("/api/v1/admin/accounts/:id/models", handler.GetAvailableModels)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/accounts/48/models", nil)
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	var resp struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	ids := make([]string, 0, len(resp.Data))
+	for _, model := range resp.Data {
+		ids = append(ids, model.ID)
+	}
+	require.ElementsMatch(t, []string{"live-alias", "gpt-live-model"}, ids)
+	require.NotContains(t, ids, "gpt-*")
+	require.NotContains(t, ids, "stale-alias")
+	require.NotContains(t, ids, "gpt-6-astra")
 }
 
 func TestAccountHandlerGetAvailableModels_OpenAIOAuthPassthroughFallsBackToDefaults(t *testing.T) {

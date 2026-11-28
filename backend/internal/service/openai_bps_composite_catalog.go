@@ -105,8 +105,7 @@ func (s *GatewayService) CompleteCompositeBPSModelCatalog(ctx context.Context, g
 	return models, nil
 }
 
-// Admission defers BPS permissions to upstream; catalog publication still needs
-// an enumerable model, rather than treating every nonempty route target as one.
+// Catalog publication requires an enumerable target in addition to account admission.
 func bpsCompositeCatalogTargetKnown(account *Account, target string) bool {
 	if account == nil || !account.IsOpenAIBPS() || target == "" || strings.ContainsAny(target, "*?") {
 		return false
