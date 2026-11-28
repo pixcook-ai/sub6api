@@ -443,7 +443,8 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	if isOpenAILegacyCompactPath(c) && gjson.GetBytes(body, "stream").Bool() {
 		service.MarkOpenAICompactClientStream(c)
 	}
-	if openAICompatibleRequestPlatform(c.Request.Context(), apiKey) != service.PlatformOpenAIBPS {
+	isBPS := openAICompatibleRequestPlatform(c.Request.Context(), apiKey) == service.PlatformOpenAIBPS
+	if !isBPS {
 		body, ok = h.normalizeOpenAIResponsesCompactRequest(c, reqLog, body)
 		if !ok {
 			return
@@ -459,8 +460,10 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	// body-signal compact：上游 unary 等待期间向下游发 SSE 注释行心跳，防止
 	// 反向代理空闲超时掐断长压缩连接（#3887）。首拍延迟一个心跳间隔，快速
 	// 失败仍走 JSON+状态码链路；未标记客户端流式或间隔为 0 时是 no-op。
-	stopCompactKeepalive := service.StartOpenAICompactSSEKeepalive(c, h.openAICompactKeepaliveInterval())
-	defer stopCompactKeepalive()
+	if !isBPS {
+		stopCompactKeepalive := service.StartOpenAICompactSSEKeepalive(c, h.openAICompactKeepaliveInterval())
+		defer stopCompactKeepalive()
+	}
 
 	// 校验请求体 JSON 合法性
 	if !gjson.ValidBytes(body) {
@@ -616,6 +619,9 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			service.WriteOpenAIBPSError(c, err)
 			return
 		}
+		// BPS compatibility headers are set before SSE heartbeats can write.
+		stopCompactKeepalive := service.StartOpenAICompactSSEKeepalive(c, h.openAICompactKeepaliveInterval())
+		defer stopCompactKeepalive()
 	}
 
 	service.SetOpsLatencyMs(c, service.OpsAuthLatencyMsKey, time.Since(requestStart).Milliseconds())
@@ -645,7 +651,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	}
 
 	// 余额模式在途预留：防止并发请求在预检时看到同一份余额而集体透支。
-	inflightRelease, err := reserveInflightBalance(c, h.billingCacheService, h.gatewayService, apiKey, subscription, tokenInflightEstimate(reqModel, body))
+	inflightRelease, err := reserveInflightBalance(c, h.billingCacheService, h.gatewayService, apiKey, subscription, openAIResponsesInflightEstimate(requestPlatform, reqModel, body))
 	if err != nil {
 		reqLog.Info("openai.inflight_reservation_rejected", zap.Error(err))
 		status, code, message, retryAfter := billingErrorDetails(err)

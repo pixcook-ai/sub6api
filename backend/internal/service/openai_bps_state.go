@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -14,6 +15,8 @@ import (
 )
 
 const OpenAIBPSStateTTL = 7 * 24 * time.Hour
+
+const bpsIgnoredParametersHeader = "X-BPS-Ignored-Parameters"
 
 // Implemented by the Redis gateway cache. No in-process fallback: tool history
 // must survive an instance change and must never be shared between API keys.
@@ -110,6 +113,15 @@ func bpsCompactReferenceKey(apiKeyID int64, ref string) string {
 // PrepareOpenAIBPSRouting runs before account selection. An established binding
 // is a hard constraint, not a sticky preference that can silently fail over.
 func (s *OpenAIGatewayService) PrepareOpenAIBPSRouting(c *gin.Context, body []byte) error {
+	limitRequested, err := bpsOutputLimitRequested(body)
+	if err != nil {
+		return err
+	}
+	if limitRequested {
+		// The BPS wire adapter omits this field. Disclose that before a
+		// concurrency wait or compact heartbeat can commit the HTTP headers.
+		c.Header(bpsIgnoredParametersHeader, "max_output_tokens")
+	}
 	store, err := s.bpsStateStore()
 	if err != nil {
 		return err
@@ -164,6 +176,32 @@ func (s *OpenAIGatewayService) PrepareOpenAIBPSRouting(c *gin.Context, body []by
 	}
 	c.Request = c.Request.WithContext(context.WithValue(c.Request.Context(), bpsRoutingContextKey{}, routing))
 	return nil
+}
+
+// bpsOutputLimitRequested validates an output cap that the wire adapter omits.
+func bpsOutputLimitRequested(body []byte) (bool, error) {
+	raw := gjson.GetBytes(body, "max_output_tokens")
+	if !raw.Exists() {
+		return false, nil
+	}
+	count := 0
+	gjson.ParseBytes(body).ForEach(func(key, _ gjson.Result) bool {
+		if key.Str == "max_output_tokens" {
+			count++
+		}
+		return count < 2
+	})
+	if count > 1 {
+		return false, bpsInvalid("max_output_tokens must appear at most once")
+	}
+	if raw.Type == gjson.Null {
+		return false, nil
+	}
+	value, err := strconv.ParseInt(raw.Raw, 10, 64)
+	if raw.Type != gjson.Number || err != nil || value <= 0 {
+		return false, bpsInvalid("max_output_tokens must be a positive integer or null")
+	}
+	return true, nil
 }
 
 func bpsBoundAccountAllowed(ctx context.Context, account *Account) bool {

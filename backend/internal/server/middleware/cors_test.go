@@ -69,6 +69,7 @@ func TestCORS_DisallowedOrigin_NoAllowHeaders(t *testing.T) {
 				"不允许的 origin 不应收到 Allow-Methods")
 			assert.Empty(t, w.Header().Get("Access-Control-Max-Age"),
 				"不允许的 origin 不应收到 Max-Age")
+			assert.Empty(t, w.Header().Get("Access-Control-Expose-Headers"))
 			assert.Empty(t, w.Header().Get("Access-Control-Allow-Origin"),
 				"不允许的 origin 不应收到 Allow-Origin")
 		})
@@ -108,6 +109,7 @@ func TestCORS_AllowedOrigin_HasAllowHeaders(t *testing.T) {
 			assert.NotEmpty(t, w.Header().Get("Access-Control-Allow-Methods"),
 				"允许的 origin 应收到 Allow-Methods")
 			assert.Contains(t, w.Header().Get("Access-Control-Expose-Headers"), "Server-Timing")
+			assert.Contains(t, w.Header().Get("Access-Control-Expose-Headers"), "X-BPS-Ignored-Parameters")
 			assert.Equal(t, "86400", w.Header().Get("Access-Control-Max-Age"),
 				"允许的 origin 应收到 Max-Age=86400")
 			assert.Equal(t, "https://allowed.example.com", w.Header().Get("Access-Control-Allow-Origin"),

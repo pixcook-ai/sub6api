@@ -33,6 +33,15 @@ func tokenInflightEstimate(model string, body []byte) service.InflightEstimateRe
 	}
 }
 
+func openAIResponsesInflightEstimate(platform, model string, body []byte) service.InflightEstimateRequest {
+	estimate := tokenInflightEstimate(model, body)
+	if platform == service.PlatformOpenAIBPS {
+		// BPS does not enforce the client cap. Reserve as for a request without one.
+		estimate.MaxTokens = 0
+	}
+	return estimate
+}
+
 func inflightNoop() {}
 
 // reserveInflightBalance 在 CheckBillingEligibility 之后为余额模式请求登记在途预留。

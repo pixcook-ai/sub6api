@@ -383,6 +383,83 @@ func TestOpenAIBPSForward(t *testing.T) {
 		require.NotContains(t, string(up.requestBody), "compaction_trigger")
 	})
 }
+func TestOpenAIBPSForwardMaxOutputTokens(t *testing.T) {
+	tests := []struct {
+		name   string
+		model  string
+		stream bool
+		limit  json.RawMessage
+	}{
+		{name: "Sol SSE", model: "gpt-6.2-sol", stream: true, limit: json.RawMessage("16")},
+		{name: "Astra JSON", model: "gpt-6.2-astra", limit: json.RawMessage("16")},
+		{name: "null", model: "gpt-6.2-astra", limit: json.RawMessage("null")},
+		{name: "omitted", model: "gpt-6.2-astra"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s, account := bpsFixture()
+			account.Credentials["model_mapping"] = map[string]any{tt.model: tt.model}
+			response := bpsResponse(bpsText("hello"))
+			response["model"] = tt.model
+			response["usage"].(map[string]any)["output_tokens"] = 24
+			upstream := &bpsHTTPStub{
+				contentType: "text/event-stream",
+				body:        bpsEvent("response.completed", map[string]any{"response": response}),
+			}
+			s.httpUpstream = upstream
+			c, rec := bpsContext(1, "/v1/responses")
+			payload := map[string]any{"model": tt.model, "input": "hi", "stream": tt.stream}
+			if tt.limit != nil {
+				payload["max_output_tokens"] = tt.limit
+			}
+			body := []byte(bpsJSON(payload))
+
+			result, err := s.Forward(c.Request.Context(), c, account, body)
+			require.NoError(t, err)
+			require.Equal(t, http.StatusOK, rec.Code)
+			require.Equal(t, 1, upstream.requests)
+			require.False(t, gjson.GetBytes(upstream.requestBody, "max_output_tokens").Exists())
+			require.Equal(t, 24, result.Usage.OutputTokens)
+			require.Contains(t, rec.Body.String(), "hello")
+			require.Contains(t, rec.Body.String(), `"output_tokens":24`)
+			require.NotContains(t, rec.Body.String(), `"max_output_tokens":16`)
+			if tt.stream {
+				require.Contains(t, rec.Body.String(), "event: response.completed")
+			}
+			ignored := ""
+			if string(tt.limit) == "16" {
+				ignored = "max_output_tokens"
+			}
+			require.Equal(t, ignored, rec.Result().Header.Get("X-BPS-Ignored-Parameters"))
+		})
+	}
+}
+
+func TestOpenAIBPSRejectsDuplicateMaxOutputTokens(t *testing.T) {
+	s, _ := bpsFixture()
+	c, _ := bpsContext(1, "/v1/responses")
+	body := []byte(`{"model":"gpt-6-astra","input":"hi","max_output_tokens":null,"max_output_tokens":16}`)
+	require.ErrorContains(t, s.PrepareOpenAIBPSRouting(c, body), "max_output_tokens must appear at most once")
+}
+
+func TestOpenAIBPSForwardRejectsInvalidMaxOutputTokens(t *testing.T) {
+	for _, limit := range []string{"0", "-1", "1.5", `"256"`, "true", "{}", "[]", "9223372036854775808"} {
+		t.Run(limit, func(t *testing.T) {
+			s, account := bpsFixture()
+			upstream := &bpsHTTPStub{}
+			s.httpUpstream = upstream
+			c, rec := bpsContext(1, "/v1/responses")
+			body := []byte(`{"model":"gpt-6-astra","input":"hi","stream":true,"max_output_tokens":` + limit + `}`)
+			_, err := s.Forward(c.Request.Context(), c, account, body)
+			require.ErrorContains(t, err, "max_output_tokens must be a positive integer or null")
+			require.Equal(t, http.StatusBadRequest, rec.Code)
+			require.True(t, json.Valid(rec.Body.Bytes()))
+			require.Zero(t, upstream.requests)
+			require.Empty(t, rec.Result().Header.Get("X-BPS-Ignored-Parameters"))
+		})
+	}
+}
+
 func TestOpenAIBPSHTTPFailoverBoundary(t *testing.T) {
 	s, a := bpsFixture()
 	c, _ := bpsContext(1, "/v1/responses")

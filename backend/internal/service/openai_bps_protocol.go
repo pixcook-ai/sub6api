@@ -153,7 +153,7 @@ func (s *OpenAIGatewayService) prepareOpenAIBPS(ctx context.Context, c *gin.Cont
 	if background, _ := source["background"].(bool); background {
 		return nil, bpsInvalid("BPS does not support background responses")
 	}
-	for _, key := range []string{"service_tier", "temperature", "top_p", "max_output_tokens"} {
+	for _, key := range []string{"service_tier", "temperature", "top_p"} {
 		if value, exists := source[key]; exists && value != nil {
 			if key == "service_tier" && (value == "auto" || value == "default") {
 				continue

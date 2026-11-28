@@ -25,6 +25,36 @@ func TestRequestMaxOutputTokens(t *testing.T) {
 	require.Equal(t, 0, requestMaxOutputTokens([]byte(`{}`)))
 }
 
+func TestOpenAIResponsesInflightEstimateUsesEffectivePlatform(t *testing.T) {
+	body := []byte(`{"model":"gpt-6.2-sol","max_output_tokens":16}`)
+	for _, tt := range []struct {
+		name           string
+		groupPlatform  string
+		targetPlatform string
+		wantMaxTokens  int
+	}{
+		{name: "BPS group", groupPlatform: service.PlatformOpenAIBPS},
+		{name: "Composite to BPS", groupPlatform: service.PlatformComposite, targetPlatform: service.PlatformOpenAIBPS},
+		{name: "OpenAI group", groupPlatform: service.PlatformOpenAI, wantMaxTokens: 16},
+		{name: "Composite to OpenAI", groupPlatform: service.PlatformComposite, targetPlatform: service.PlatformOpenAI, wantMaxTokens: 16},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			if tt.targetPlatform != "" {
+				ctx = service.WithCompositeRouteDecision(ctx, service.CompositeRouteDecision{
+					Matched: true, TargetPlatform: tt.targetPlatform,
+				})
+			}
+			apiKey := &service.APIKey{Group: &service.Group{Platform: tt.groupPlatform}}
+			platform := openAICompatibleRequestPlatform(ctx, apiKey)
+			estimate := openAIResponsesInflightEstimate(platform, "gpt-6.2-sol", body)
+			require.Equal(t, service.InflightEstimateRequest{
+				Model: "gpt-6.2-sol", BodyBytes: len(body), MaxTokens: tt.wantMaxTokens, Kind: service.InflightEstimateToken,
+			}, estimate)
+		})
+	}
+}
+
 type countingEstimator struct {
 	calls  int
 	cost   float64
