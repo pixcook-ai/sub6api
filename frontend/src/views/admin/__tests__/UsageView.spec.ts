@@ -800,3 +800,36 @@ describe('admin UsageView model audit export', () => {
 		expect(saveAs).toHaveBeenCalledTimes(1)
 	})
 })
+
+
+describe('admin UsageView Tibo route filters', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    list.mockReset().mockResolvedValue({ items: [], total: 0, pages: 0 })
+    getStats.mockReset().mockResolvedValue({ total_requests: 0, total_input_tokens: 0, total_output_tokens: 0, total_cache_tokens: 0, total_tokens: 0, total_cost: 0, total_actual_cost: 0, average_duration_ms: 0 })
+    getSnapshotV2.mockReset().mockResolvedValue({ trend: [], models: [], groups: [] })
+    getModelStats.mockReset().mockResolvedValue({ models: [] })
+  })
+  afterEach(() => vi.useRealTimers())
+
+  it.each([true, false])('sends route_degraded=%s only to supported list/stats endpoints and clears it on reset', async value => {
+    const wrapper = mountRouteFilteredUsageView()
+    vi.advanceTimersByTime(120)
+    await flushPromises()
+    list.mockClear(); getStats.mockClear(); getModelStats.mockClear(); getSnapshotV2.mockClear()
+    ;(wrapper.vm as any).filters.route_degraded = value
+    ;(wrapper.vm as any).applyFilters()
+    await flushPromises()
+    expect(list).toHaveBeenCalledWith(expect.objectContaining({ route_degraded: value }), expect.anything())
+    expect(getStats).toHaveBeenCalledWith(expect.objectContaining({ route_degraded: value }))
+    expect(getModelStats.mock.calls[0][0]).not.toHaveProperty('route_degraded')
+    expect(getSnapshotV2.mock.calls[0][0]).not.toHaveProperty('route_degraded')
+    expect((wrapper.vm as any).breakdownFilters).not.toHaveProperty('route_degraded')
+    list.mockClear(); getStats.mockClear()
+    ;(wrapper.vm as any).resetFilters()
+    await flushPromises()
+    expect(list).toHaveBeenCalledWith(expect.objectContaining({ route_degraded: null }), expect.anything())
+    expect(getStats).toHaveBeenCalledWith(expect.objectContaining({ route_degraded: null }))
+    wrapper.unmount()
+  })
+})

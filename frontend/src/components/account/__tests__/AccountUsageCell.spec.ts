@@ -130,6 +130,194 @@ describe('AccountUsageCell', () => {
     })
   })
 
+  it.each(['openai', 'openai_bps'] as const)('updates %s Tibo history without treating existing Codex tickets as probe results', async (platform) => {
+    getUsage.mockResolvedValue({})
+    const current = makeAccount({
+      id: 9891, platform, type: platform === 'openai_bps' ? 'oauth' : 'apikey', schedulable: false,
+      codex_turn_tickets: [{ model: 'gpt-6-astra', ready: true, remaining_seconds: 30, blocked: false }],
+      tibo_account_statuses: [{ model: 'gpt-6-astra', tibo_routes: [{ route: 'http', verdict: 'degraded', probes_hour: 1, flips_hour: 0, recent_samples: [{ verdict: 'degraded' }] }] }]
+    })
+    const wrapper = mount(AccountUsageCell, { props: { account: current } })
+    expect(wrapper.findAll('[data-testid="tibo-dot"]')).toHaveLength(24)
+    expect(wrapper.findAll('[data-verdict="degraded"]')).toHaveLength(1)
+    await wrapper.setProps({ account: { ...current, tibo_account_statuses: [{
+      model: 'gpt-6-astra', tibo_routes: [{ route: 'http', verdict: 'healthy', probes_hour: 2, flips_hour: 0, recent_samples: [{ verdict: 'degraded' }, { verdict: 'healthy' }] }]
+    }] } })
+    expect(wrapper.findAll('[data-verdict="healthy"]')).toHaveLength(1)
+    expect(wrapper.props('account').schedulable).toBe(false)
+    if (platform === 'openai') expect(getUsage).not.toHaveBeenCalled()
+    await wrapper.setProps({ account: { ...current, tibo_account_statuses: [] } })
+    expect(wrapper.find('[data-testid="tibo-routes"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('BPS 沿用参考统计行：零用量隐藏，刷新后显示请求、Token 和 A/U 费用', async () => {
+    const emptyStats = { requests: 0, tokens: 0, cost: 0, user_cost: 0 }
+    getUsage.mockResolvedValue({
+      five_hour: { utilization: 0, quota_unknown: true, window_stats: emptyStats },
+      seven_day: { utilization: 0, quota_unknown: true, window_stats: emptyStats },
+      thirty_day: { utilization: 1, window_stats: emptyStats }
+    })
+    const wrapper = mount(AccountUsageCell, {
+      props: { account: makeAccount({ id: 9901, platform: 'openai_bps' }) }
+    })
+    await flushPromises()
+    expect(wrapper.text()).not.toContain('0 req')
+    expect(wrapper.text()).not.toContain('A $0.00')
+    expect(wrapper.text()).not.toContain('U $0.00')
+    expect(wrapper.find('[data-test="estimated-total-cost"]').exists()).toBe(false)
+
+    getUsage.mockResolvedValueOnce({
+      seven_day: { utilization: 100, window_stats: { requests: 4000, tokens: 778500000, cost: 1302.97, user_cost: 1100.25 } }
+    })
+    await wrapper.get('[data-test="bps-usage-query"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('4.0K req')
+    expect(wrapper.text()).toContain('778.5M')
+    expect(wrapper.text()).toContain('A $1302.97')
+    expect(wrapper.text()).toContain('U $1100.25')
+    // ChatGPT/Codex 百分比不能用于推算独立 BPS 的费用上限。
+    expect(wrapper.find('[data-test="estimated-total-cost"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('BPS 显示真实用量窗口并支持主动刷新', async () => {
+    getUsage.mockResolvedValue({
+      five_hour: { utilization: 25, resets_at: '2099-01-01T02:00:00Z' },
+      seven_day: { utilization: 60, resets_at: '2099-01-07T00:00:00Z' }
+    })
+    const wrapper = mount(AccountUsageCell, {
+      props: { account: makeAccount({ id: 9801, platform: 'openai_bps' }) }
+    })
+    await flushPromises()
+    expect(getUsage).toHaveBeenCalledWith(9801)
+    expect(wrapper.text()).toContain('25%')
+    expect(wrapper.text()).toContain('60%')
+
+    getUsage.mockResolvedValueOnce({ five_hour: { utilization: 35 }, seven_day: { utilization: 65 } })
+    const query = wrapper.get('[data-test="bps-usage-query"]')
+    await query.trigger('click')
+    await flushPromises()
+    expect(getUsage).toHaveBeenLastCalledWith(9801, 'active', true)
+    expect(wrapper.text()).toContain('35%')
+    expect(wrapper.text()).toContain('65%')
+    wrapper.unmount()
+  })
+
+  it('BPS 显示实际 30 天配额并保留 5h 和 7d 本地统计', async () => {
+    getUsage.mockResolvedValue({
+      five_hour: { utilization: 0, quota_unknown: true, window_stats: { requests: 3, tokens: 500, cost: 1.5 } },
+      seven_day: { utilization: 0, quota_unknown: true, window_stats: { requests: 8, tokens: 1500, cost: 4.5 } },
+      thirty_day: { utilization: 25, resets_at: '2099-01-30T00:00:00Z' }
+    })
+    const wrapper = mount(AccountUsageCell, {
+      props: { account: makeAccount({ id: 9899, platform: 'openai_bps' }) }
+    })
+    await flushPromises()
+    expect(wrapper.text()).toContain('30d')
+    expect(wrapper.text()).toContain('25%')
+    expect(wrapper.text()).toContain('5h')
+    expect(wrapper.text()).toContain('7d')
+    expect(wrapper.text()).toContain('3 req')
+    expect(wrapper.text()).toContain('8 req')
+    expect(wrapper.text().match(/—/g)).toHaveLength(2)
+    expect(wrapper.text()).not.toContain('admin.accounts.bps.usageSourceHint')
+    await wrapper.get('button[aria-label="admin.accounts.bps.usageDetails"]').trigger('click')
+    await flushPromises()
+    expect(Array.from(document.querySelectorAll<HTMLElement>('[role="tooltip"]')).find((node) => node.style.display !== 'none')?.textContent).toContain('admin.accounts.bps.usageSourceHint')
+    expect(wrapper.text()).not.toContain('0%')
+    expect(wrapper.text()).not.toContain('usage.resetNow')
+    expect(wrapper.text()).not.toContain('admin.accounts.bps.quotaUnavailable')
+    expect(wrapper.find('[data-test="estimated-total-cost"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('BPS 配额不可用时保留本地统计并显示未知用量', async () => {
+    getUsage.mockResolvedValue({
+      five_hour: { utilization: 0, quota_unknown: true, window_stats: { requests: 5, tokens: 500, cost: 1.5 } },
+      seven_day: { utilization: 0, quota_unknown: true },
+      error_code: 'quota_unavailable'
+    })
+    const wrapper = mount(AccountUsageCell, {
+      props: { account: makeAccount({ id: 9802, platform: 'openai_bps' }) }
+    })
+    await flushPromises()
+    expect(wrapper.text()).toContain('5 req')
+    expect(wrapper.text()).not.toContain('admin.accounts.bps.quotaUnavailable')
+    await wrapper.get('button[aria-label="admin.accounts.bps.usageDetails"]').trigger('click')
+    await flushPromises()
+    expect(Array.from(document.querySelectorAll<HTMLElement>('[role="tooltip"]')).find((node) => node.style.display !== 'none')?.textContent).toContain('admin.accounts.bps.quotaUnavailable')
+    expect(wrapper.text()).not.toContain('0%')
+    expect(wrapper.text()).not.toContain('usage.resetNow')
+    expect(wrapper.find('[data-test="bps-usage-query"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('BPS 主动查询失败后显示错误且允许重试', async () => {
+    getUsage.mockResolvedValue({ five_hour: { utilization: 25 } })
+    const wrapper = mount(AccountUsageCell, {
+      props: { account: makeAccount({ id: 9803, platform: 'openai_bps' }) }
+    })
+    await flushPromises()
+    getUsage.mockRejectedValueOnce(new Error('offline'))
+    await wrapper.get('[data-test="bps-usage-query"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('common.error')
+    expect(wrapper.text()).toContain('25%')
+    expect(wrapper.get('[data-test="bps-usage-query"]').attributes('disabled')).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('BPS 桌面主动刷新更新父级批量缓存，不另发单次请求', async () => {
+    const requestBatchedUsage = vi.fn()
+    const account = makeAccount({ id: 9804, platform: 'openai_bps' })
+    const wrapper = mount(AccountUsageCell, {
+      props: {
+        account,
+        requestBatchedUsage,
+        batchedUsage: { five_hour: { utilization: 25 } } as any
+      }
+    })
+    await flushPromises()
+    requestBatchedUsage.mockClear()
+    await wrapper.get('[data-test="bps-usage-query"]').trigger('click')
+    await flushPromises()
+    expect(requestBatchedUsage).toHaveBeenCalledWith(account, { force: true })
+    expect(getUsage).not.toHaveBeenCalled()
+    await wrapper.setProps({ batchedUsage: { five_hour: { utilization: 45 } } as any })
+    expect(wrapper.text()).toContain('45%')
+    wrapper.unmount()
+  })
+
+  it.each([false, true])('OpenAI 显示 30d 配额，保留未知短窗口统计且不估算未知额度（本地窗口：%s）', async (hasLocalWindows) => {
+    getUsage.mockResolvedValue({
+      thirty_day: { utilization: 0, resets_at: '2099-01-30T00:00:00Z' },
+      ...(hasLocalWindows ? {
+        five_hour: { utilization: 0, quota_unknown: true, window_stats: { requests: 5, tokens: 500, cost: 1.5 } },
+        seven_day: { utilization: 50, quota_unknown: true, window_stats: { requests: 12, tokens: 1500, cost: 4.5 } }
+      } : {})
+    })
+    const wrapper = mount(AccountUsageCell, {
+      props: { account: makeAccount({ id: hasLocalWindows ? 9812 : 9811, platform: 'openai' }) },
+      global: { stubs: { OpenAIQuotaResetCell: true } }
+    })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('30d')
+    expect(wrapper.text().match(/0%/g)).toHaveLength(1)
+    if (hasLocalWindows) {
+      expect(wrapper.text()).toContain('5h')
+      expect(wrapper.text()).toContain('7d')
+      expect(wrapper.text()).toContain('5 req')
+      expect(wrapper.text()).toContain('12 req')
+      expect(wrapper.text().match(/—/g)).toHaveLength(2)
+      expect(wrapper.text()).not.toContain('50%')
+    }
+    expect(wrapper.text()).not.toContain('usage.resetNow')
+    expect(wrapper.find('[data-test="estimated-total-cost"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
   it.each(['oauth', 'setup-token'] as const)('does not repeat Codex ticket status in OpenAI %s usage windows', async (type) => {
     getUsage.mockResolvedValue({ five_hour: { utilization: 25 } })
     const wrapper = mount(AccountUsageCell, {

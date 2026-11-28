@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 
 	utls "github.com/refraction-networking/utls"
 	"golang.org/x/net/proxy"
@@ -365,7 +366,8 @@ func buildClientHelloSpecFromProfile(profile *Profile) *utls.ClientHelloSpec {
 
 	supportedVersions := []uint16{utls.VersionTLS13, utls.VersionTLS12}
 	if profile != nil && len(profile.SupportedVersions) > 0 {
-		supportedVersions = profile.SupportedVersions
+		// uTLS rewrites GREASE values in place when applying each handshake preset.
+		supportedVersions = slices.Clone(profile.SupportedVersions)
 	}
 
 	keyShareGroups := []utls.CurveID{utls.X25519}

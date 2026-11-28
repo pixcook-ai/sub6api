@@ -1635,6 +1635,7 @@ type openAIModelsRequest struct {
 	credentialAccount   *Account
 	accountConcurrency  int
 	useAPIKeyUpstream   bool
+	requestProxy        bool
 	// Cached bodies have already been converted to their requested format.
 	standardModelsList bool
 }
@@ -1732,6 +1733,12 @@ func (s *OpenAIGatewayService) FetchCodexModelsManifest(ctx context.Context, acc
 		return nil, infraerrors.Newf(http.StatusInternalServerError, "OPENAI_CODEX_MODELS_CREDENTIALS_FAILED", "resolve credential account: %v", err)
 	}
 
+	ctx, releaseProxy, err := s.beginOpenAIRequestProxy(ctx, nil, credAccount)
+	if err != nil {
+		return nil, err
+	}
+	defer releaseProxy()
+
 	clientVersion = strings.TrimSpace(clientVersion)
 	if clientVersion == "" {
 		clientVersion = CodexCanonicalClientVersion()
@@ -1806,8 +1813,11 @@ func (s *OpenAIGatewayService) FetchCodexModelsManifest(ctx context.Context, acc
 	}
 	headers.Set("Version", headerVersion)
 
-	proxyURL := ""
-	if account.ProxyID != nil && account.Proxy != nil {
+	proxyURL, err := resolveOpenAIMaintenanceProxy(ctx, credAccount, s.requestProxyRepository())
+	if err != nil {
+		return nil, err
+	}
+	if !credAccount.OpenAIRequestProxyEnabled() && account.ProxyID != nil && account.Proxy != nil {
 		proxyURL = account.Proxy.URL()
 	}
 
@@ -1820,6 +1830,7 @@ func (s *OpenAIGatewayService) FetchCodexModelsManifest(ctx context.Context, acc
 		credentialAccount:   credAccount,
 		accountConcurrency:  account.Concurrency,
 		useAPIKeyUpstream:   useAPIKeyUpstream,
+		requestProxy:        credAccount.OpenAIRequestProxyEnabled(),
 	}
 	if useAPIKeyUpstream {
 		return s.fetchCachedOpenAIModels(ctx, request, s.fetchCodexModelsManifestUpstreamForRequest(request), ifNoneMatch)
@@ -1899,6 +1910,26 @@ func (s *OpenAIGatewayService) fetchCachedOpenAIModels(ctx context.Context, requ
 	if state == openAIModelsCacheFresh {
 		return openAIModelsResponseForClient(manifest, ifNoneMatch), nil
 	}
+	if request.requestProxy {
+		// A detached cache refresh would lose its request lease. Refresh this
+		// policy synchronously so cancellation and scope release bound the send.
+		upstreamETag := ""
+		if manifest != nil {
+			upstreamETag = manifest.upstreamETag
+		}
+		refreshed, err := fetch(ctx, upstreamETag)
+		if err != nil {
+			return nil, err
+		}
+		if refreshed.NotModified && manifest != nil {
+			s.openAIModelsCache.set(cacheKey, manifest, time.Now())
+			return openAIModelsResponseForClient(manifest, ifNoneMatch), nil
+		}
+		if !refreshed.NotModified {
+			s.openAIModelsCache.set(cacheKey, refreshed, time.Now())
+		}
+		return openAIModelsResponseForClient(refreshed, ifNoneMatch), nil
+	}
 	resultCh := s.refreshCachedOpenAIModels(cacheKey, request, fetch)
 	if state == openAIModelsCacheStale {
 		return openAIModelsResponseForClient(manifest, ifNoneMatch), nil
@@ -1955,6 +1986,11 @@ func (s *OpenAIGatewayService) fetchOpenAIModelsUpstream(ctx context.Context, re
 	if err != nil {
 		return nil, infraerrors.Newf(http.StatusInternalServerError, "OPENAI_CODEX_MODELS_REQUEST_FAILED", "create codex models request: %v", err)
 	}
+	if request.requestProxy {
+		if _, err := ValidateOpenAIRequestProxyEgress(reqCtx, request.credentialAccountID, request.proxyURL); err != nil {
+			return nil, err
+		}
+	}
 	req.Header = request.headers.Clone()
 	if ifNoneMatch = strings.TrimSpace(ifNoneMatch); ifNoneMatch != "" {
 		req.Header.Set("If-None-Match", ifNoneMatch)
@@ -1969,7 +2005,7 @@ func (s *OpenAIGatewayService) fetchOpenAIModelsUpstream(ctx context.Context, re
 		resp, err = s.httpUpstream.Do(req, request.proxyURL, request.accountID, request.accountConcurrency)
 	} else {
 		handled := false
-		if s.pluginManager != nil {
+		if s.pluginManager != nil && !request.requestProxy {
 			resp, handled, err = s.pluginManager.RoundTripOpenAIOAuth(reqCtx, req, request.proxyURL, request.credentialAccount)
 		}
 		if !handled {
@@ -2583,7 +2619,7 @@ func validateCodexModelsManifestEnvelope(body []byte) error {
 
 func buildOpenAIModelsCacheKey(request openAIModelsRequest) string {
 	hasher := sha256.New()
-	_, _ = fmt.Fprintf(hasher, "%d\n%d\n%t\n%s\n%s\n", request.accountID, request.credentialAccountID, request.standardModelsList, request.proxyURL, request.url)
+	_, _ = fmt.Fprintf(hasher, "%d\n%d\n%t\n%t\n%s\n%s\n", request.accountID, request.credentialAccountID, request.standardModelsList, request.requestProxy, request.proxyURL, request.url)
 	headerNames := make([]string, 0, len(request.headers))
 	for name := range request.headers {
 		headerNames = append(headerNames, name)

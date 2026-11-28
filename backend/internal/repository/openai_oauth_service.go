@@ -53,7 +53,7 @@ func (s *openaiOAuthService) ExchangeCode(ctx context.Context, code, codeVerifie
 		SetHeader("originator", authOriginator).
 		SetFormDataFromValues(formData).
 		SetSuccessResult(&tokenResp).
-		Post(s.tokenURL)
+		Post(openAITokenURL(s.tokenURL, clientID))
 
 	if err != nil {
 		if shouldReturnOpenAINoProxyHint(ctx, proxyURL, err) {
@@ -97,14 +97,18 @@ func (s *openaiOAuthService) refreshTokenWithClientID(ctx context.Context, refre
 	var tokenResp openai.TokenResponse
 
 	authUA, authOriginator := service.CodexCanonicalAuthIdentity()
-	resp, err := client.R().
+	request := client.R().
 		SetContext(ctx).
 		SetHeader("User-Agent", authUA).
 		SetHeader("originator", authOriginator).
-		SetHeader("Content-Type", "application/json").
-		SetBodyJsonMarshal(refreshRequest).
-		SetSuccessResult(&tokenResp).
-		Post(s.tokenURL)
+		SetSuccessResult(&tokenResp)
+	if strings.TrimSpace(clientID) == openai.ExcelClientID {
+		// The official Excel client refreshes with a form-encoded body.
+		request = request.SetFormDataFromValues(url.Values{"client_id": {clientID}, "grant_type": {"refresh_token"}, "refresh_token": {refreshToken}})
+	} else {
+		request = request.SetHeader("Content-Type", "application/json").SetBodyJsonMarshal(refreshRequest)
+	}
+	resp, err := request.Post(openAITokenURL(s.tokenURL, clientID))
 
 	if err != nil {
 		if shouldReturnOpenAINoProxyHint(ctx, proxyURL, err) {
@@ -143,4 +147,12 @@ func newOpenAINoProxyHintError(cause error) error {
 		"OPENAI_OAUTH_PROXY_REQUIRED",
 		"OpenAI OAuth request failed: no proxy is configured and this server could not reach OpenAI directly. Select a proxy that can access OpenAI, then retry; if the authorization code has expired, regenerate the authorization URL.",
 	).WithCause(cause)
+}
+
+// openAITokenURL selects the Excel token endpoint for the Excel client; every other client keeps the configured endpoint.
+func openAITokenURL(base, clientID string) string {
+	if strings.TrimSpace(clientID) == openai.ExcelClientID {
+		return openai.ExcelTokenURL
+	}
+	return base
 }

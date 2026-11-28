@@ -205,11 +205,12 @@ type AdminGroup struct {
 }
 
 type Account struct {
-	ID       int64   `json:"id"`
-	Name     string  `json:"name"`
-	Notes    *string `json:"notes"`
-	Platform string  `json:"platform"`
-	Type     string  `json:"type"`
+	TiboAccountStatuses []service.OpenAITiboAccountStatus `json:"tibo_account_statuses,omitempty"`
+	ID                  int64                             `json:"id"`
+	Name                string                            `json:"name"`
+	Notes               *string                           `json:"notes"`
+	Platform            string                            `json:"platform"`
+	Type                string                            `json:"type"`
 	// Credentials 经 RedactCredentials 处理后只含非敏感子键；敏感 token / api_key / 私钥
 	// 的存在性通过 CredentialsStatus（has_<key>）暴露，原始值不返回前端。
 	Credentials             map[string]any                    `json:"credentials"`
@@ -334,11 +335,12 @@ type Account struct {
 // repeated account_groups and groups object graphs. Fetch /admin/accounts/:id
 // for the complete Account DTO when editing or inspecting an account.
 type AccountListItem struct {
-	ID       int64   `json:"id"`
-	Name     string  `json:"name"`
-	Notes    *string `json:"notes"`
-	Platform string  `json:"platform"`
-	Type     string  `json:"type"`
+	TiboAccountStatuses []service.OpenAITiboAccountStatus `json:"tibo_account_statuses,omitempty"`
+	ID                  int64                             `json:"id"`
+	Name                string                            `json:"name"`
+	Notes               *string                           `json:"notes"`
+	Platform            string                            `json:"platform"`
+	Type                string                            `json:"type"`
 
 	Credentials            map[string]any                    `json:"credentials,omitempty"`
 	CredentialsStatus      map[string]bool                   `json:"credentials_status,omitempty"`
@@ -689,6 +691,8 @@ type AdminUsageLog struct {
 	UpstreamResponseModel *string `json:"upstream_response_model,omitempty"`
 	// UpstreamModelMismatch is nil when the upstream did not declare a model.
 	UpstreamModelMismatch *bool `json:"upstream_model_mismatch,omitempty"`
+	// RouteDegraded is omitted when Tibo routing did not apply; admin-only.
+	RouteDegraded *bool `json:"route_degraded,omitempty"`
 
 	// ChannelID 渠道 ID
 	ChannelID *int64 `json:"channel_id,omitempty"`

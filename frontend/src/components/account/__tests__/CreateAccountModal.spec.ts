@@ -9,6 +9,8 @@ const {
   showWarningMock,
   importCodexSessionMock,
   createOpenAICodexPATMock,
+  generateAuthUrlMock,
+  exchangeCodeMock,
   authIsSimpleMode,
 } = vi.hoisted(() => ({
   createAccountMock: vi.fn(),
@@ -17,6 +19,8 @@ const {
   showWarningMock: vi.fn(),
   importCodexSessionMock: vi.fn(),
   createOpenAICodexPATMock: vi.fn(),
+  generateAuthUrlMock: vi.fn(),
+  exchangeCodeMock: vi.fn(),
   authIsSimpleMode: { value: true },
 }))
 
@@ -45,13 +49,19 @@ vi.mock('@/api/admin', () => ({
       checkMixedChannelRisk: vi.fn().mockResolvedValue({ has_risk: false }),
       importCodexSession: importCodexSessionMock,
       createOpenAICodexPAT: createOpenAICodexPATMock,
+      generateAuthUrl: generateAuthUrlMock,
+      exchangeCode: exchangeCodeMock,
     },
+    proxies: { getProxyAccounts: vi.fn().mockResolvedValue([]), testProxy: vi.fn().mockResolvedValue({ success: true, message: 'ok' }) },
     settings: {
       getWebSearchEmulationConfig: vi.fn().mockResolvedValue({ enabled: false, providers: [] }),
       getSettings: vi.fn().mockResolvedValue({}),
     },
     tlsFingerprintProfiles: {
       list: vi.fn().mockResolvedValue([]),
+    },
+    groups: {
+      getAll: vi.fn().mockResolvedValue([]),
     },
   },
 }))
@@ -69,6 +79,7 @@ vi.mock('vue-i18n', async () => {
 })
 
 import CreateAccountModal from '../CreateAccountModal.vue'
+import OAuthAuthorizationFlow from '../OAuthAuthorizationFlow.vue'
 
 const BaseDialogStub = defineComponent({
   name: 'BaseDialog',
@@ -84,11 +95,24 @@ const OAuthAuthorizationFlowStub = defineComponent({
     showAgentIdentityOption: Boolean,
     showCodexPatOption: Boolean,
     initialInputMethod: String,
+    authUrl: String,
+    sessionId: String,
+    error: String,
   },
-  data: () => ({ inputMethod: 'manual' }),
-  emits: ['import-codex-session', 'import-codex-pat'],
+  data: () => ({ inputMethod: 'manual', authCode: '', oauthState: '', refreshToken: '' }),
+  emits: ['import-codex-session', 'import-codex-pat', 'generate-url', 'update:input-method'],
+  methods: {
+    reset() {
+      this.inputMethod = 'manual'
+      this.authCode = ''
+      this.oauthState = ''
+      this.refreshToken = ''
+    },
+  },
   template: `
     <div>
+      <p v-if="error">{{ error }}</p>
+      <slot v-if="inputMethod === 'manual'" name="manual-options" />
       <button data-testid="import-codex-session" @click="$emit('import-codex-session', 'session-json')">session</button>
       <button data-testid="import-codex-pat" @click="$emit('import-codex-pat', 'pat-token')">pat</button>
     </div>
@@ -133,13 +157,13 @@ const ModelWhitelistSelectorStub = defineComponent({
   >models</button>`,
 })
 
-function mountModal(groups: any[] = []) {
+function mountModal(groups: any[] = [], useRealOAuthFlow = false, proxies: any[] = []) {
   return mount(CreateAccountModal, {
-    props: { show: true, proxies: [], groups },
+    props: { show: true, proxies, groups },
     global: {
       stubs: {
         BaseDialog: BaseDialogStub,
-        OAuthAuthorizationFlow: OAuthAuthorizationFlowStub,
+        OAuthAuthorizationFlow: useRealOAuthFlow ? false : OAuthAuthorizationFlowStub,
         ConfirmDialog: true,
         Select: true,
         Icon: true,
@@ -210,9 +234,113 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
       warnings: [],
     })
     createOpenAICodexPATMock.mockReset().mockResolvedValue({})
+    generateAuthUrlMock.mockReset().mockImplementation(async (_endpoint, config) => ({
+      auth_url: 'https://auth.example.com/authorize?state=test-state', session_id: 'test-session',
+      ...(config.proxy_mode === 'request' ? { proxy_mode: 'request', proxy_id: config.proxy_ids?.[0] } : {}),
+    }))
+    exchangeCodeMock.mockReset().mockResolvedValue({ access_token: 'at', refresh_token: 'rt', expires_at: 1900000000 })
   })
 
   afterEach(() => vi.useRealTimers())
+
+  const requestProxies = [
+    { id: 11, name: 'Proxy A', protocol: 'http', host: 'a.example.test', port: 8080, status: 'active', expires_at: null },
+    { id: 22, name: 'Proxy B', protocol: 'http', host: 'b.example.test', port: 8080, status: 'active', expires_at: null },
+  ]
+  async function requestMode(wrapper: ReturnType<typeof mountModal>, ids = [11, 22]) {
+    await wrapper.get('[data-testid="openai-proxy-mode-request"]').setValue()
+    await wrapper.get('[data-testid="bps-proxy-trigger"]').trigger('click')
+    for (const id of ids) await wrapper.get(`[data-testid="bps-proxy-${id}"]`).setValue(true)
+  }
+  async function requestAuthorization() {
+    const wrapper = mountModal([], false, requestProxies)
+    await selectButtonByText(wrapper, 'OpenAI')
+    await wrapper.getComponent({ name: 'ProxySelector' }).vm.$emit('update:modelValue', 45)
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('Request account')
+    await requestMode(wrapper)
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    const flow = wrapper.getComponent(OAuthAuthorizationFlowStub)
+    flow.vm.$emit('generate-url')
+    await flushPromises()
+    return { wrapper, flow }
+  }
+
+  it('creates request routing from a selected group and retains the previous single proxy', async () => {
+    const { wrapper, flow } = await requestAuthorization()
+    expect(generateAuthUrlMock).toHaveBeenLastCalledWith('/admin/openai/generate-auth-url', {
+      proxy_mode: 'request', proxy_ids: [11, 22],
+    })
+    await flow.setData({ authCode: 'authorization-code' })
+    await selectButtonByText(wrapper, 'admin.accounts.oauth.completeAuth')
+    await flushPromises()
+    expect(exchangeCodeMock).toHaveBeenLastCalledWith('/admin/openai/exchange-code', {
+      session_id: 'test-session', code: 'authorization-code', state: 'test-state', proxy_mode: 'request', proxy_ids: [11, 22],
+    })
+    expect(createAccountMock).toHaveBeenCalledWith(expect.objectContaining({
+      proxy_id: 45, extra: expect.objectContaining({ openai_proxy_mode: 'request', openai_proxy_ids: [11, 22] }),
+    }))
+    wrapper.unmount()
+  })
+
+  it.each(['expired', 'endpoint', 'credentials', 'inactive', 'removed'])('requires fresh authorization when selected egress is %s', async change => {
+    const { wrapper, flow } = await requestAuthorization()
+    const changes: Record<string, object> = {
+      expired: { expires_at: '2000-01-01T00:00:00Z' }, endpoint: { host: 'changed.example.test' },
+      credentials: { username: 'changed' }, inactive: { status: 'inactive' }, removed: {},
+    }
+    await wrapper.setProps({ proxies: change === 'removed' ? [requestProxies[1]] : [{ ...requestProxies[0], ...changes[change] }, requestProxies[1]] })
+    await flow.setData({ authCode: 'authorization-code' })
+    await selectButtonByText(wrapper, 'admin.accounts.oauth.completeAuth')
+    expect(exchangeCodeMock).not.toHaveBeenCalled()
+    expect(createAccountMock).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('admin.accounts.openai.proxyAuthorizationChanged')
+    wrapper.unmount()
+  })
+
+  it('blocks an empty request group and catalog failures before starting authorization', async () => {
+    const wrapper = mountModal([], false, requestProxies)
+    await selectButtonByText(wrapper, 'OpenAI')
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('Request account')
+    await wrapper.get('[data-testid="openai-proxy-mode-request"]').setValue()
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    expect(wrapper.findComponent(OAuthAuthorizationFlowStub).exists()).toBe(false)
+    await requestMode(wrapper, [11])
+    await wrapper.setProps({ proxiesLoadError: true })
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    expect(wrapper.findComponent(OAuthAuthorizationFlowStub).exists()).toBe(false)
+    expect(generateAuthUrlMock).not.toHaveBeenCalled()
+    await wrapper.get('[data-testid="bps-proxy-catalog-retry"]').trigger('click')
+    expect(wrapper.emitted('retry-proxies')).toHaveLength(1)
+    wrapper.unmount()
+  })
+
+  it.each(['pat', 'agent_identity'])('blocks unsupported %s imports in request mode', async method => {
+    const { wrapper, flow } = await requestAuthorization()
+    if (method === 'pat') flow.vm.$emit('import-codex-pat', 'pat-token')
+    else flow.vm.$emit('import-codex-session', JSON.stringify({ auth_mode: 'agentIdentity', agent_identity: {} }))
+    await flushPromises()
+    expect(createOpenAICodexPATMock).not.toHaveBeenCalled()
+    expect(importCodexSessionMock).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('admin.accounts.openai.proxyUnsupportedImport')
+    wrapper.unmount()
+  })
+
+  it('applies request groups to the independent BPS platform without OpenAI-only extra settings', async () => {
+    const wrapper = mountModal([], false, requestProxies)
+    await selectButtonByText(wrapper, 'OpenAI BPS')
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('BPS group')
+    await wrapper.get('#bps-access-token').setValue('private-test-token')
+    await wrapper.get('#bps-account-id').setValue('workspace')
+    await requestMode(wrapper)
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+    wrapper.getComponent('[data-testid="bps-risk-confirmation"]').vm.$emit('confirm')
+    await flushPromises()
+    expect(createAccountMock).toHaveBeenCalledWith(expect.objectContaining({
+      platform: 'openai_bps', extra: { openai_proxy_mode: 'request', openai_proxy_ids: [11, 22] },
+    }))
+    wrapper.unmount()
+  })
 
   it('sets month and year expiry presets without submitting the account form', async () => {
     vi.useFakeTimers({ toFake: ['Date'] })
@@ -599,6 +727,136 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
     expect(flow.props('showAgentIdentityOption')).toBe(true)
     expect(flow.props('showCodexPatOption')).toBe(true)
     expect(flow.props('initialInputMethod')).toBe('manual')
+  })
+
+  it('keeps the manual OAuth channel selection out of step one', async () => {
+    const wrapper = mountModal()
+    await selectButtonByText(wrapper, 'OpenAI')
+
+    expect(wrapper.find('[data-testid="openai-excel-oauth"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="openai-oauth-channel"]').exists()).toBe(false)
+  })
+
+  it('shows the Codex and Excel channel choices for manual authorization', async () => {
+    const wrapper = await openCodexImportStep()
+    const channel = wrapper.get('[data-testid="openai-oauth-channel"]')
+    const radios = channel.findAll<HTMLInputElement>('input[type="radio"]')
+
+    expect(channel.text()).toContain('Codex OAuth')
+    expect(channel.text()).toContain('Excel / BPS OAuth')
+    expect(radios).toHaveLength(2)
+    expect(radios[0]?.element.checked).toBe(true)
+    expect(radios[1]?.element.checked).toBe(false)
+
+    const flow = wrapper.getComponent(OAuthAuthorizationFlowStub)
+    flow.vm.inputMethod = 'batch_login'
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="openai-oauth-channel"]').exists()).toBe(false)
+  })
+
+  it('uses the Excel OAuth client when generating the selected manual channel URL', async () => {
+    const wrapper = await openCodexImportStep()
+    const radios = wrapper.get('[data-testid="openai-oauth-channel"]').findAll('input[type="radio"]')
+    await radios[1]?.setValue(true)
+
+    const flow = wrapper.getComponent(OAuthAuthorizationFlowStub)
+    flow.vm.$emit('generate-url')
+    await flushPromises()
+
+    expect(generateAuthUrlMock).toHaveBeenCalledWith('/admin/openai/generate-auth-url', {
+      oauth_client: 'excel',
+    })
+    expect(flow.props('authUrl')).toBe('https://auth.example.com/authorize?state=test-state')
+    expect(flow.props('sessionId')).toBe('test-session')
+  })
+
+  it('clears the actual manual callback when changing channels and keeps batch targets independent', async () => {
+    const wrapper = mountModal([], true)
+    await selectButtonByText(wrapper, 'OpenAI')
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('OpenAI account')
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    const flow = wrapper.getComponent(OAuthAuthorizationFlow)
+    const channel = wrapper.get('[data-testid="openai-oauth-channel"]')
+
+    flow.vm.$emit('generate-url')
+    await flushPromises()
+    expect(generateAuthUrlMock).toHaveBeenLastCalledWith('/admin/openai/generate-auth-url', {})
+    await flow.get('textarea').setValue('http://localhost/callback?code=old-code&state=old-state')
+    await flushPromises()
+    expect(flow.vm.authCode).toBe('old-code')
+    expect(flow.vm.oauthState).toBe('old-state')
+
+    await channel.findAll('input[type="radio"]')[1]?.setValue(true)
+    await flushPromises()
+    expect(flow.props('authUrl')).toBe('')
+    expect(flow.props('sessionId')).toBe('')
+    expect(flow.vm.authCode).toBe('')
+    expect(flow.vm.oauthState).toBe('')
+
+    await flow.get('input[type="radio"][value="batch_login"]').setValue(true)
+    await flushPromises()
+    expect(wrapper.find('[data-testid="openai-oauth-channel"]').exists()).toBe(false)
+    expect(flow.get<HTMLInputElement>('input[type="radio"][value="batch_login"]').element.checked).toBe(true)
+    expect(flow.get<HTMLInputElement>('input[type="checkbox"][value="bps"]').element.checked).toBe(true)
+    expect(flow.get<HTMLInputElement>('input[type="checkbox"][value="codex"]').element.checked).toBe(false)
+    await flow.get('input[type="checkbox"][value="bps"]').setValue(false)
+    await flow.get('input[type="checkbox"][value="codex"]').setValue(true)
+    expect(flow.get<HTMLInputElement>('input[type="radio"][value="batch_login"]').element.checked).toBe(true)
+
+    await flow.get('input[type="radio"][value="manual"]').setValue(true)
+    await flushPromises()
+    expect(wrapper.get('[data-testid="openai-oauth-channel"]').findAll<HTMLInputElement>('input[type="radio"]')[0]?.element.checked).toBe(true)
+    flow.vm.$emit('generate-url')
+    await flushPromises()
+    expect(generateAuthUrlMock).toHaveBeenLastCalledWith('/admin/openai/generate-auth-url', {})
+    wrapper.unmount()
+  })
+
+  it('preserves the selected refresh-token method when leaving the Excel manual channel', async () => {
+    const wrapper = await openCodexImportStep()
+    const radios = wrapper.get('[data-testid="openai-oauth-channel"]').findAll('input[type="radio"]')
+    await radios[1]?.setValue(true)
+    const flow = wrapper.getComponent(OAuthAuthorizationFlowStub)
+    const reset = vi.spyOn(flow.vm, 'reset')
+
+    flow.vm.inputMethod = 'refresh_token'
+    flow.vm.$emit('update:input-method', 'refresh_token')
+    await flushPromises()
+
+    expect(flow.vm.inputMethod).toBe('refresh_token')
+    expect(reset).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-testid="openai-oauth-channel"]').exists()).toBe(false)
+  })
+
+  it('clears the generated session, child credentials, and pricing groups when changing channels', async () => {
+    authIsSimpleMode.value = false
+    const wrapper = await openCodexImportStep()
+    const radios = wrapper.get('[data-testid="openai-oauth-channel"]').findAll('input[type="radio"]')
+    await radios[1]?.setValue(true)
+    await wrapper.get('[data-testid="select-pricing-groups"]').trigger('click')
+
+    const flow = wrapper.getComponent(OAuthAuthorizationFlowStub)
+    flow.vm.$emit('generate-url')
+    await flushPromises()
+    flow.vm.authCode = 'old-code'
+    flow.vm.oauthState = 'old-state'
+    flow.vm.refreshToken = 'old-refresh-token'
+    const reset = vi.spyOn(flow.vm, 'reset')
+    expect(wrapper.getComponent(GroupSelectorStub).props('modelValue')).toEqual([1, 2])
+
+    await radios[0]?.setValue(true)
+    await flushPromises()
+
+    expect(flow.props('authUrl')).toBe('')
+    expect(flow.props('sessionId')).toBe('')
+    expect(reset).toHaveBeenCalledOnce()
+    expect(flow.vm.authCode).toBe('')
+    expect(flow.vm.oauthState).toBe('')
+    expect(flow.vm.refreshToken).toBe('')
+
+    await radios[1]?.setValue(true)
+    expect(wrapper.getComponent(GroupSelectorStub).props('modelValue')).toEqual([])
   })
 
   it.each([

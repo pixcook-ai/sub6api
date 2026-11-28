@@ -95,7 +95,7 @@ func (s *GatewayService) CompleteCompositeBPSModelCatalog(ctx context.Context, g
 		}
 		for i := range accounts {
 			a := &accounts[i]
-			if a.Type == AccountTypeOAuth && isOpenAICompatibleAccountEligibleForRequestBeforeProfit(ctx, a, PlatformOpenAIBPS, target, false, OpenAIEndpointCapabilityResponses) {
+			if a.Type == AccountTypeOAuth && bpsCompositeCatalogTargetKnown(a, target) && isOpenAICompatibleAccountEligibleForRequestBeforeProfit(ctx, a, PlatformOpenAIBPS, target, false, OpenAIEndpointCapabilityResponses) {
 				models = append(models, model)
 				break
 			}
@@ -103,4 +103,27 @@ func (s *GatewayService) CompleteCompositeBPSModelCatalog(ctx context.Context, g
 	}
 	sort.Strings(models)
 	return models, nil
+}
+
+// Admission defers BPS permissions to upstream; catalog publication still needs
+// an enumerable model, rather than treating every nonempty route target as one.
+func bpsCompositeCatalogTargetKnown(account *Account, target string) bool {
+	if account == nil || !account.IsOpenAIBPS() || target == "" || strings.ContainsAny(target, "*?") {
+		return false
+	}
+	for _, model := range OpenAIBPSDefaultModels() {
+		if model == target {
+			return true
+		}
+	}
+	mapping := account.GetModelMapping()
+	if _, ok := mapping[target]; ok {
+		return true
+	}
+	for _, model := range mapping {
+		if model == target {
+			return true
+		}
+	}
+	return false
 }

@@ -1162,6 +1162,9 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			//     覆盖（Store(nil)），因为 OpenAI 上游对该帧实际不传
 			//     service_tier 时按 default 处理，billing 应如实反映。
 			if policyErr == nil && blocked == nil && isResponseCreate {
+				if qualityErr := s.checkOpenAITiboQualityAdmission(ctx, account, out); qualityErr != nil {
+					return out, nil, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "account is isolated by Tibo quality monitoring", qualityErr)
+				}
 				usageMeta.updateFromResponseCreate(out, model, requestModelForThisFrame)
 				_, actualModel := usageMeta.turnModels(requestModelForThisFrame)
 				SetOpsUpstreamModel(c, actualModel)
@@ -1189,6 +1192,10 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		},
 	}
 	upstreamFirstMessageSent := false
+	// Dialing can wait; re-read isolation before the first upstream frame.
+	if qualityErr := s.checkOpenAITiboQualityAdmission(ctx, account, firstClientMessage); qualityErr != nil {
+		return NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "account is isolated by Tibo quality monitoring", qualityErr)
+	}
 	firstWriteCtx, cancelFirstWrite := context.WithTimeout(ctx, s.openAIWSWriteTimeout())
 	firstWriteErr := relayUpstreamFrameConn.WriteFrame(firstWriteCtx, coderws.MessageText, firstClientMessage)
 	cancelFirstWrite()

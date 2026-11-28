@@ -276,3 +276,16 @@ describe('AccountStatusIndicator', () => {
     expect(wrapper.text()).toContain('admin.accounts.status.creditsExhausted')
   })
 })
+
+
+it.each(['openai', 'openai_bps'] as const)('shows %s Tibo quality isolation instead of active while retaining a manual pause', async (platform) => {
+  const account = makeAccount({ platform, type: 'oauth', schedulable: true, extra: { openai_tibo_quality_isolated: true } })
+  const wrapper = mount(AccountStatusIndicator, { props: { account }, global: { stubs: { Icon: true } } })
+  expect(wrapper.text()).toContain('admin.accounts.openai.tiboQualityIsolated')
+  expect(wrapper.text()).not.toContain('admin.accounts.status.active')
+  await wrapper.setProps({ account: { ...account, schedulable: false } })
+  expect(wrapper.text()).toContain('admin.accounts.openai.tiboManualPauseRetained')
+  await wrapper.setProps({ account: { ...account, schedulable: false, extra: { openai_tibo_quality_isolated: false } } })
+  expect(wrapper.find('[data-testid="tibo-quality-isolated"]').exists()).toBe(false)
+  expect(wrapper.text()).toContain('admin.accounts.status.paused')
+})

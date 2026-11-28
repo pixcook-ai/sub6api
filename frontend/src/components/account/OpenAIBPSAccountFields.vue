@@ -15,24 +15,41 @@
     <p v-if="editing && draft.token.trim()" class="input-hint">{{ t('admin.accounts.bps.newTokenPending') }}</p>
     <div>
       <label class="input-label">{{ t('admin.accounts.modelMapping') }}</label>
+      <ModelWhitelistSelector v-model="selectedModels" platform="openai" :candidate-models="upstreamModels" />
       <p class="input-hint">{{ t('admin.accounts.bps.modelsHint') }}</p>
-      <div v-for="(row, index) in draft.models" :key="index" class="mt-2 flex items-center gap-2">
-        <input v-model="row.from" class="input min-w-0" :aria-label="t('admin.accounts.bps.clientModel')" :placeholder="t('admin.accounts.bps.clientModel')" required />
-        <span aria-hidden="true">→</span>
-        <input v-model="row.to" class="input min-w-0" :aria-label="t('admin.accounts.bps.upstreamModel')" :placeholder="row.from" />
-        <button type="button" class="btn btn-secondary" :aria-label="t('common.delete')" @click="draft.models.splice(index, 1)">×</button>
-      </div>
-      <button type="button" class="btn btn-secondary mt-2" @click="draft.models.push({ from: '', to: '' })">{{ t('common.add') }}</button>
     </div>
   </section>
 </template>
 <script setup lang="ts">
+import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { adminAPI } from '@/api/admin'
+import ModelWhitelistSelector from './ModelWhitelistSelector.vue'
 import type { BPSAccountDraft, BPSCredentialState } from '@/utils/openaiBps'
 import { useBPSCredentialState } from '@/composables/useBPSCredentialState'
 import BPSCredentialStatus from './BPSCredentialStatus.vue'
-const props = defineProps<{ editing?: boolean; expiresAt?: string; credentialState?: BPSCredentialState; accountStatus?: string; schedulable?: boolean }>()
+const props = defineProps<{ accountId?: number; editing?: boolean; expiresAt?: string; credentialState?: BPSCredentialState; accountStatus?: string; schedulable?: boolean }>()
 const { state: savedState } = useBPSCredentialState(() => ({ platform: 'openai_bps', credentials: { expires_at: props.expiresAt }, bps_credential_state: props.credentialState, status: props.accountStatus, schedulable: props.schedulable }))
 const draft = defineModel<BPSAccountDraft>({ required: true })
 const { t } = useI18n()
+// Models the BPS upstream says this account may use; empty until loaded or when unavailable.
+const upstreamModels = ref<string[]>([])
+const loadUpstreamModels = async () => {
+  if (!props.accountId) return
+  try {
+    const models = await adminAPI.accounts.getAvailableModels(props.accountId)
+    upstreamModels.value = models.map(model => model.id).filter(Boolean)
+  } catch {
+    upstreamModels.value = []
+  }
+}
+onMounted(loadUpstreamModels)
+watch(() => props.accountId, loadUpstreamModels)
+// Same selector as the reference repo; each chosen model maps to itself unless a mapping already exists.
+const selectedModels = computed<string[]>({
+  get: () => draft.value.models.map(row => row.from).filter(Boolean),
+  set: (value) => {
+    draft.value.models = value.map(from => ({ from, to: draft.value.models.find(row => row.from === from)?.to || from }))
+  }
+})
 </script>

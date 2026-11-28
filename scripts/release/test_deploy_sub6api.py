@@ -89,5 +89,21 @@ fi''')
         self.assertFalse((self.root / 'docker.log').exists())
 
 
+    def test_prepared_runtime_base_is_used_without_retagging(self):
+        (self.root / 'RUNTIME_BASE_IMAGE').write_text('sub6api:runtime-node-1\n')
+        result = self.run_deploy()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        log = (self.root / 'docker.log').read_text()
+        self.assertNotIn('tag sha256:previous', log)
+        self.assertIn('image inspect sub6api:runtime-node-1', log)
+        self.assertIn('FROM sub6api:runtime-node-1', (self.release / 'runtime' / 'Dockerfile').read_text())
+
+    def test_invalid_runtime_base_reference_never_switches(self):
+        (self.root / 'RUNTIME_BASE_IMAGE').write_text('evil/image:latest\n')
+        self.assertNotEqual(self.run_deploy().returncode, 0)
+        self.assertNotIn('up -d', (self.root / 'docker.log').read_text())
+        self.assertEqual(json.loads((self.root / 'compose.json').read_text())['services']['app']['image'], 'previous')
+
+
 if __name__ == '__main__':
     unittest.main()

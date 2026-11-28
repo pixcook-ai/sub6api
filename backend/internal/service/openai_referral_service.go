@@ -112,6 +112,11 @@ func (s *OpenAIQuotaService) QueryReferralEligibility(ctx context.Context, id in
 	if err != nil {
 		return nil, err
 	}
+	ctx, release, err := s.beginQuotaRequestProxy(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 	callCtx, cancel := context.WithTimeout(ctx, openaiQuotaUpstreamTimeout)
 	defer cancel()
 	program := referralProgram(account)
@@ -157,6 +162,11 @@ func (s *OpenAIQuotaService) SendReferralInvite(ctx context.Context, id int64, i
 	if input.ProgramID != referralProgram(account) {
 		return nil, infraerrors.New(http.StatusConflict, "OPENAI_REFERRAL_PROGRAM_CHANGED", "refresh invitation eligibility before sending")
 	}
+	ctx, release, err := s.beginQuotaRequestProxy(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 	// Recheck the server's current eligibility rather than trusting a UI cache.
 	eligibility, err := s.QueryReferralEligibility(ctx, id)
 	if err != nil {

@@ -1,5 +1,33 @@
 export default {
     settings: {
+      tibo: {
+        "title": "Tibo quality probes and automation",
+        "description": "Probe each eligible Codex and BPS OAuth Responses account and show its last 24 definitive results. Disabled by default; probes consume upstream traffic and usage.",
+        "enabled": "Enable background Tibo probes",
+        "enabledHint": "Disabling stops new probes and automated actions. Saved history, existing quality isolation and manual pauses remain.",
+        "pauseOnDegraded": "Stop account scheduling on degraded results",
+        "pauseHint": "A fresh degraded probe adds a separate quality-isolation marker without changing the administrator scheduling switch. Unknown results, network failures and rate limits are not quality failures.",
+        "autoResume": "Automatically clear quality isolation when healthy",
+        "autoResumeHint": "Only clears Tibo quality isolation; never enables an administrator-paused account. Leave off to clear isolation manually in account editing.",
+        "autoGroup": "Automatically move groups by probe result (optional)",
+        "autoGroupHint": "Codex and BPS OAuth use separate healthy/degraded group pairs from their own platform. Only accounts already in a selected pair move; other memberships remain. Configure at least one pair and leave both fields empty for platforms that should not move. Independent of quality isolation.",
+        "openai": "Codex / OpenAI groups",
+        "openai_bps": "OpenAI BPS groups",
+        "healthy_group_id": "Group for healthy results",
+        "degraded_group_id": "Group for degraded results",
+        "bps_healthy_group_id": "Group for healthy results",
+        "bps_degraded_group_id": "Group for degraded results",
+        "chooseGroup": "No group selected",
+        "unavailableGroup": "Group #{id} is unavailable; choose another",
+        "groupValidation": "Configure at least one complete pair of different active groups from the same platform. Leave both fields empty for other platforms. Groups are optional when automatic grouping is off.",
+        "signalCaution": "Tibo is a heuristic; one question cannot prove internal model degradation. Automated actions use definitive active samples and may produce false positives. Observe probe history before enabling actions. Saving does not replay old samples against accounts.",
+        "saved": "Tibo settings saved",
+        "retry": "Reload settings",
+        "retryGroups": "Reload groups",
+        "groupsLoadFailed": "Failed to load groups",
+        "loadFailed": "Failed to load Tibo settings",
+        "saveFailed": "Failed to save Tibo settings"
+      },
       title: 'System Settings',
       description: 'Manage registration, email verification, default values, and SMTP settings',
       tabs: {

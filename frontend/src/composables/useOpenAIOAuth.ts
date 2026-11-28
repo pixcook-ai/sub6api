@@ -26,6 +26,11 @@ export interface OpenAITokenInfo {
 }
 
 export type OpenAIOAuthPlatform = 'openai'
+export interface OpenAIOAuthProxyRouting {
+  mode: 'single' | 'request'
+  ids?: number[]
+}
+export const OPENAI_EXCEL_OAUTH_CLIENT_ID = 'app_fnr0pYvVwwFDocDumLG3H2Bp'
 
 export function useOpenAIOAuth() {
   const appStore = useAppStore()
@@ -35,6 +40,7 @@ export function useOpenAIOAuth() {
   // State
   const authUrl = ref('')
   const sessionId = ref('')
+  const authorizationProxyId = ref<number | null>(null)
   const oauthState = ref('')
   const loading = ref(false)
   const error = ref('')
@@ -43,6 +49,7 @@ export function useOpenAIOAuth() {
   const resetState = () => {
     authUrl.value = ''
     sessionId.value = ''
+    authorizationProxyId.value = null
     oauthState.value = ''
     loading.value = false
     error.value = ''
@@ -51,21 +58,29 @@ export function useOpenAIOAuth() {
   // Generate auth URL for OpenAI OAuth
   const generateAuthUrl = async (
     proxyId?: number | null,
-    redirectUri?: string
+    redirectUri?: string,
+    oauthClient: 'codex' | 'excel' = 'codex',
+    proxyRouting?: OpenAIOAuthProxyRouting
   ): Promise<boolean> => {
     loading.value = true
     authUrl.value = ''
     sessionId.value = ''
+    authorizationProxyId.value = null
     oauthState.value = ''
     error.value = ''
 
     try {
       const payload: Record<string, unknown> = {}
+      if (oauthClient === 'excel') payload.oauth_client = 'excel'
       if (proxyId) {
         payload.proxy_id = proxyId
       }
       if (redirectUri) {
         payload.redirect_uri = redirectUri
+      }
+      if (proxyRouting) {
+        payload.proxy_mode = proxyRouting.mode
+        payload.proxy_ids = [...(proxyRouting.ids ?? [])]
       }
 
       const response = await adminAPI.accounts.generateAuthUrl(
@@ -74,6 +89,7 @@ export function useOpenAIOAuth() {
       )
       authUrl.value = response.auth_url
       sessionId.value = response.session_id
+      authorizationProxyId.value = response.proxy_id ?? null
       try {
         const parsed = new URL(response.auth_url)
         oauthState.value = parsed.searchParams.get('state') || ''
@@ -95,7 +111,8 @@ export function useOpenAIOAuth() {
     code: string,
     currentSessionId: string,
     state: string,
-    proxyId?: number | null
+    proxyId?: number | null,
+    proxyRouting?: OpenAIOAuthProxyRouting
   ): Promise<OpenAITokenInfo | null> => {
     if (!code.trim() || !currentSessionId || !state.trim()) {
       error.value = 'Missing auth code, session ID, or state'
@@ -106,13 +123,17 @@ export function useOpenAIOAuth() {
     error.value = ''
 
     try {
-      const payload: { session_id: string; code: string; state: string; proxy_id?: number } = {
+      const payload: { session_id: string; code: string; state: string; proxy_id?: number; proxy_mode?: 'single' | 'request'; proxy_ids?: number[] } = {
         session_id: currentSessionId,
         code: code.trim(),
         state: state.trim()
       }
       if (proxyId) {
         payload.proxy_id = proxyId
+      }
+      if (proxyRouting) {
+        payload.proxy_mode = proxyRouting.mode
+        payload.proxy_ids = [...(proxyRouting.ids ?? [])]
       }
 
       const tokenInfo = await adminAPI.accounts.exchangeCode(`${endpointPrefix}/exchange-code`, payload)
@@ -227,6 +248,7 @@ export function useOpenAIOAuth() {
     // State
     authUrl,
     sessionId,
+    authorizationProxyId,
     oauthState,
     loading,
     error,

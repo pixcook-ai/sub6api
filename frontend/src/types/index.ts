@@ -1197,6 +1197,42 @@ export interface OpenCodeGoUsageSettings {
 
 export type { BPSCredentialState } from "@/utils/openaiBps"
 
+export type TiboRouteName = 'http' | 'bps' | 'cookie_ws'
+export type TiboRouteVerdict = 'healthy' | 'unknown' | 'degraded' | 'unavailable'
+
+// Admin view of one Tibo HTTP route. `verdict` is the effective verdict used
+// for routing; `confirmed` is the last confirmed one and may differ from it
+// once the confirmation goes stale.
+export interface TiboRouteStatus {
+  route: TiboRouteName
+  verdict: TiboRouteVerdict
+  confirmed?: 'healthy' | 'degraded'
+  checked_at?: string
+  flipped_at?: string
+  next_probe_at?: string
+  pending_votes?: ('healthy' | 'degraded')[]
+  last_sample?: 'healthy' | 'unknown' | 'degraded'
+  last_http?: number
+  last_answer?: string
+  recent_samples?: { verdict: TiboRouteVerdict; at?: string }[]
+  probes_hour: number
+  flips_hour: number
+  // Calibration counters since the gateway process started. A vote window
+  // opens on a sample that disagrees with the confirmed verdict; confirmed =
+  // it flipped, rejected = later samples outvoted it.
+  vote_windows?: number
+  vote_confirmed?: number
+  vote_rejected?: number
+  // BPS only: definitive BPS samples matching / differing from the HTTP verdict.
+  shadow_agree?: number
+  shadow_disagree?: number
+}
+
+export interface OpenAITiboAccountStatus {
+  model: string
+  tibo_routes?: TiboRouteStatus[]
+}
+
 export interface Account {
   id: number
   name: string
@@ -1209,6 +1245,7 @@ export interface Account {
   // 改为通过 credentials_status.has_<key> 暴露存在性。
   credentials?: Record<string, unknown>
   credentials_status?: Record<string, boolean>
+  tibo_account_statuses?: OpenAITiboAccountStatus[]
   bps_credential_state?: import("@/utils/openaiBps").BPSCredentialState
   ollama_cloud_usage?: OllamaCloudUsageState
   opencode_go_usage?: OpenCodeGoUsageState
@@ -1229,6 +1266,7 @@ export interface Account {
   }>
   // Extra fields including Codex usage, OpenAI compact capability, and model-level rate limits.
   extra?: (CodexUsageSnapshot & OpenAICompactState & {
+    openai_tibo_quality_isolated?: boolean
     openai_request_timezone?: string
     model_rate_limits?: Record<string, { rate_limited_at: string; rate_limit_reset_at: string }>
     antigravity_credits_overages?: Record<string, { activated_at: string; active_until: string }>
@@ -1384,6 +1422,7 @@ export interface WindowStats {
 
 export interface UsageProgress {
   utilization: number // Percentage (0-100+, 100 = 100%)
+  quota_unknown?: boolean // Local statistics are available, but upstream quota is unknown.
   resets_at: string | null
   remaining_seconds: number
   window_stats?: WindowStats | null // 窗口期统计（从窗口开始到当前的使用量）
@@ -1660,6 +1699,8 @@ export interface AdminDataAccount {
   credentials: Record<string, unknown>
   extra?: Record<string, unknown>
   proxy_key?: string | null
+  openai_proxy_keys?: string[]
+  bps_proxy_keys?: string[]
   concurrency: number
   priority: number
   rate_multiplier?: number | null
@@ -1828,6 +1869,8 @@ export interface UsageLogAccountSummary {
 }
 
 export interface AdminUsageLog extends UsageLog {
+  // Admin-only Tibo route result; omitted when route selection did not apply.
+  route_degraded?: boolean | null
   upstream_model?: string | null
   upstream_reasoning_effort?: string | null
   upstream_response_model?: string | null
@@ -2454,7 +2497,16 @@ export interface TotpLogin2FARequest {
 
 // ==================== Scheduled Test Types ====================
 
+export interface PelicanTestConfig {
+  question_kind?: 'candy' | 'pelican' | 'state_probe' | 'random_reasoning'
+  prompt: string
+  reasoning_effort: string
+  parallel_count: number
+  model_id?: string
+}
+
 export interface ScheduledTestPlan {
+  pelican_config?: PelicanTestConfig
   id: number
   account_id: number
   model_id: string
@@ -2469,6 +2521,7 @@ export interface ScheduledTestPlan {
 }
 
 export interface ScheduledTestResult {
+  pelican_config?: PelicanTestConfig
   id: number
   plan_id: number
   status: string
@@ -2481,6 +2534,7 @@ export interface ScheduledTestResult {
 }
 
 export interface CreateScheduledTestPlanRequest {
+  pelican_config?: PelicanTestConfig
   account_id: number
   model_id: string
   cron_expression: string
@@ -2490,6 +2544,7 @@ export interface CreateScheduledTestPlanRequest {
 }
 
 export interface UpdateScheduledTestPlanRequest {
+  pelican_config?: PelicanTestConfig
   model_id?: string
   cron_expression?: string
   enabled?: boolean

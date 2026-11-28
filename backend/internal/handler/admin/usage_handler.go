@@ -158,6 +158,10 @@ func (h *UsageHandler) List(c *gin.Context) {
 		}
 		upstreamModelMismatch = &value
 	}
+	routeDegraded, ok := parseUsageRouteDegradedQuery(c)
+	if !ok {
+		return
+	}
 
 	// Parse date range
 	var startTime, endTime *time.Time
@@ -202,6 +206,7 @@ func (h *UsageHandler) List(c *gin.Context) {
 		BillingType:           billingType,
 		BillingMode:           billingMode,
 		UpstreamModelMismatch: upstreamModelMismatch,
+		RouteDegraded:         routeDegraded,
 		StartTime:             startTime,
 		EndTime:               endTime,
 		ExactTotal:            exactTotal,
@@ -218,6 +223,21 @@ func (h *UsageHandler) List(c *gin.Context) {
 		out = append(out, *dto.UsageLogFromServiceAdmin(&records[i]))
 	}
 	response.Paginated(c, out, result.Total, page, pageSize)
+}
+
+// parseUsageRouteDegradedQuery leaves an absent filter unset; explicit values
+// select only requests where Tibo route observation applied.
+func parseUsageRouteDegradedQuery(c *gin.Context) (*bool, bool) {
+	raw := strings.TrimSpace(c.Query("route_degraded"))
+	if raw == "" {
+		return nil, true
+	}
+	value, err := strconv.ParseBool(raw)
+	if err != nil {
+		response.BadRequest(c, "Invalid route_degraded value, use true or false")
+		return nil, false
+	}
+	return &value, true
 }
 
 // Stats handles getting usage statistics with filters
@@ -309,6 +329,10 @@ func (h *UsageHandler) Stats(c *gin.Context) {
 		}
 		upstreamModelMismatch = &value
 	}
+	routeDegraded, ok := parseUsageRouteDegradedQuery(c)
+	if !ok {
+		return
+	}
 
 	// Parse date range
 	userTZ := c.Query("timezone")
@@ -361,6 +385,7 @@ func (h *UsageHandler) Stats(c *gin.Context) {
 		BillingType:           billingType,
 		BillingMode:           billingMode,
 		UpstreamModelMismatch: upstreamModelMismatch,
+		RouteDegraded:         routeDegraded,
 		StartTime:             &startTime,
 		EndTime:               &endTime,
 	}

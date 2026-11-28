@@ -361,6 +361,70 @@ func (s *GatewayService) readUpstreamErrorBody(resp *http.Response) ([]byte, err
 	return io.ReadAll(io.LimitReader(resp.Body, limit))
 }
 
+func isAnthropicMessagesRoute(c *gin.Context) bool {
+	return c != nil && c.Request != nil && c.Request.URL != nil &&
+		c.Request.Method == http.MethodPost && c.Request.URL.Path == "/v1/messages"
+}
+
+func (s *GatewayService) filterAnthropicMessagesErrorHeaders(src http.Header) http.Header {
+	var filter *responseheaders.CompiledHeaderFilter
+	if s != nil {
+		filter = s.responseHeaderFilter
+	}
+	filtered := responseheaders.FilterHeaders(src, filter)
+	headers := make(http.Header, 3)
+	for _, key := range []string{"request-id", "X-Should-Retry", "Retry-After"} {
+		if value := filtered.Get(key); value != "" {
+			headers.Set(key, value)
+		}
+	}
+	return headers
+}
+
+// WriteAnthropicMessagesErrorHeaders writes upstream protocol headers before the final error is committed.
+func (s *GatewayService) WriteAnthropicMessagesErrorHeaders(c *gin.Context, src http.Header) {
+	if !isAnthropicMessagesRoute(c) || c.Writer.Written() || len(src) == 0 {
+		return
+	}
+	for key, values := range s.filterAnthropicMessagesErrorHeaders(src) {
+		c.Writer.Header()[key] = values
+	}
+}
+
+func isNativeAnthropicOverload(status int, body []byte) bool {
+	return status == 529 && gjson.GetBytes(body, "type").String() == "error" &&
+		gjson.GetBytes(body, "error.type").String() == "overloaded_error"
+}
+
+func isAnthropicMessagesUpstream(c *gin.Context, account *Account) bool {
+	return account.Platform == PlatformAnthropic && !account.IsBedrock() && isAnthropicMessagesRoute(c)
+}
+
+func (s *GatewayService) upstreamHTTPFailoverError(c *gin.Context, account *Account, resp *http.Response, body []byte, retryableOnSameAccount bool) *UpstreamFailoverError {
+	result := &UpstreamFailoverError{
+		StatusCode:             resp.StatusCode,
+		ResponseBody:           body,
+		RetryableOnSameAccount: retryableOnSameAccount,
+	}
+	if isAnthropicMessagesUpstream(c, account) {
+		result.ResponseHeaders = s.filterAnthropicMessagesErrorHeaders(resp.Header)
+		if isNativeAnthropicOverload(resp.StatusCode, body) {
+			result.ClientStatusCode = resp.StatusCode
+		}
+	}
+	return result
+}
+
+func writeGatewayUpstreamJSONError(c *gin.Context, status int, errType, message string) {
+	body := gin.H{"type": "error", "error": gin.H{"type": errType, "message": message}}
+	if isAnthropicMessagesRoute(c) {
+		if requestID := c.Writer.Header().Get("request-id"); requestID != "" {
+			body["request_id"] = requestID
+		}
+	}
+	c.JSON(status, body)
+}
+
 func (s *GatewayService) handleErrorResponse(ctx context.Context, resp *http.Response, c *gin.Context, account *Account, requestedModel ...string) (*ForwardResult, error) {
 	// Upstream returned a non-success HTTP status; count Ollama Cloud / OpenCode Go activity.
 	scheduleOllamaCloudUsageActivity(s.deferredService, account)
@@ -426,9 +490,13 @@ func (s *GatewayService) handleErrorResponse(ctx context.Context, resp *http.Res
 		}
 	}
 	if shouldDisable {
-		return nil, &UpstreamFailoverError{StatusCode: resp.StatusCode, ResponseBody: body}
+		return nil, s.upstreamHTTPFailoverError(c, account, resp, body, false)
 	}
 
+	anthropicMessages := isAnthropicMessagesUpstream(c, account)
+	if anthropicMessages {
+		s.WriteAnthropicMessagesErrorHeaders(c, resp.Header)
+	}
 	MarkResponseCommitted(c)
 
 	// 记录上游错误响应体摘要便于排障（可选：由配置控制；不回显到客户端）
@@ -453,13 +521,7 @@ func (s *GatewayService) handleErrorResponse(ctx context.Context, resp *http.Res
 		"upstream_error",
 		"Upstream request failed",
 	); matched {
-		c.JSON(status, gin.H{
-			"type": "error",
-			"error": gin.H{
-				"type":    errType,
-				"message": errMsg,
-			},
-		})
+		writeGatewayUpstreamJSONError(c, status, errType, errMsg)
 
 		summary := upstreamMsg
 		if summary == "" {
@@ -500,6 +562,9 @@ func (s *GatewayService) handleErrorResponse(ctx context.Context, resp *http.Res
 		errMsg = "Upstream rate limit exceeded, please retry later"
 	case 529:
 		statusCode = http.StatusServiceUnavailable
+		if anthropicMessages && isNativeAnthropicOverload(resp.StatusCode, body) {
+			statusCode = resp.StatusCode
+		}
 		errType = "overloaded_error"
 		errMsg = "Upstream service overloaded, please retry later"
 	case 500, 502, 503, 504:
@@ -513,13 +578,7 @@ func (s *GatewayService) handleErrorResponse(ctx context.Context, resp *http.Res
 	}
 
 	// 返回自定义错误响应
-	c.JSON(statusCode, gin.H{
-		"type": "error",
-		"error": gin.H{
-			"type":    errType,
-			"message": errMsg,
-		},
-	})
+	writeGatewayUpstreamJSONError(c, statusCode, errType, errMsg)
 
 	if upstreamMsg == "" {
 		return nil, fmt.Errorf("upstream error: %d", resp.StatusCode)
@@ -554,6 +613,9 @@ func (s *GatewayService) handleFailoverSideEffects(ctx context.Context, resp *ht
 // OAuth 403：标记账号异常
 // API Key 未配置错误码：仅返回错误，不标记账号
 func (s *GatewayService) handleRetryExhaustedError(ctx context.Context, resp *http.Response, c *gin.Context, account *Account) (*ForwardResult, error) {
+	if isAnthropicMessagesUpstream(c, account) {
+		s.WriteAnthropicMessagesErrorHeaders(c, resp.Header)
+	}
 	MarkResponseCommitted(c)
 	// Capture upstream error body before side-effects consume the stream.
 	respBody, _ := s.readUpstreamErrorBody(resp)
@@ -618,13 +680,7 @@ func (s *GatewayService) handleRetryExhaustedError(ctx context.Context, resp *ht
 		"upstream_error",
 		"Upstream request failed after retries",
 	); matched {
-		c.JSON(status, gin.H{
-			"type": "error",
-			"error": gin.H{
-				"type":    errType,
-				"message": errMsg,
-			},
-		})
+		writeGatewayUpstreamJSONError(c, status, errType, errMsg)
 
 		summary := upstreamMsg
 		if summary == "" {
@@ -637,13 +693,7 @@ func (s *GatewayService) handleRetryExhaustedError(ctx context.Context, resp *ht
 	}
 
 	// 返回统一的重试耗尽错误响应
-	c.JSON(http.StatusBadGateway, gin.H{
-		"type": "error",
-		"error": gin.H{
-			"type":    "upstream_error",
-			"message": "Upstream request failed after retries",
-		},
-	})
+	writeGatewayUpstreamJSONError(c, http.StatusBadGateway, "upstream_error", "Upstream request failed after retries")
 
 	if upstreamMsg == "" {
 		return nil, fmt.Errorf("upstream error: %d (retries exhausted)", resp.StatusCode)

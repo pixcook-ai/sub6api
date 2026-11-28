@@ -22,6 +22,7 @@ var defaultAllowed = map[string]struct{}{
 	"expires":                        {},
 	"vary":                           {},
 	"date":                           {},
+	"request-id":                     {},
 	"x-request-id":                   {},
 	"x-ratelimit-limit-requests":     {},
 	"x-ratelimit-limit-tokens":       {},
@@ -30,6 +31,7 @@ var defaultAllowed = map[string]struct{}{
 	"x-ratelimit-reset-requests":     {},
 	"x-ratelimit-reset-tokens":       {},
 	"retry-after":                    {},
+	"x-should-retry":                 {},
 	"location":                       {},
 	"www-authenticate":               {},
 	// Codex uses this response header to avoid estimating reasoning tokens a

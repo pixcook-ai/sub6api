@@ -92,3 +92,19 @@ describe('useOpenAIOAuth.exchangeAuthCode', () => {
     )
   })
 })
+
+
+describe('useOpenAIOAuth request routing', () => {
+  it('forwards the proxy group for authorization and code exchange while retaining the actual selected exit', async () => {
+    vi.mocked(adminAPI.accounts.generateAuthUrl).mockResolvedValueOnce({ auth_url: 'https://auth.example.test?state=s', session_id: 'session', proxy_id: 22 })
+    vi.mocked(adminAPI.accounts.exchangeCode).mockResolvedValueOnce({ access_token: 'at', refresh_token: 'rt' })
+    const oauth = useOpenAIOAuth()
+    expect(await oauth.generateAuthUrl(undefined, undefined, 'codex', { mode: 'request', ids: [11, 22] })).toBe(true)
+    expect(adminAPI.accounts.generateAuthUrl).toHaveBeenLastCalledWith('/admin/openai/generate-auth-url', { proxy_mode: 'request', proxy_ids: [11, 22] })
+    expect(oauth.authorizationProxyId.value).toBe(22)
+    await oauth.exchangeAuthCode('code', 'session', 's', undefined, { mode: 'request', ids: [11, 22] })
+    expect(adminAPI.accounts.exchangeCode).toHaveBeenLastCalledWith('/admin/openai/exchange-code', { code: 'code', session_id: 'session', state: 's', proxy_mode: 'request', proxy_ids: [11, 22] })
+    oauth.resetState()
+    expect(oauth.authorizationProxyId.value).toBeNull()
+  })
+})

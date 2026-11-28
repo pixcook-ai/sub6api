@@ -196,6 +196,9 @@ func (p *OpenAITokenProvider) GetAccessToken(ctx context.Context, account *Accou
 
 		result, err := p.refreshAPI.RefreshIfNeeded(withOAuthRefreshRequestPath(ctx), account, p.executor, openAITokenRefreshSkew)
 		if err != nil {
+			if isOpenAIRequestProxyRoutingError(err) {
+				return "", err
+			}
 			var rejection *openai.RefreshTokenError
 			if errors.As(err, &rejection) && rejection.Permanent {
 				return "", rejection

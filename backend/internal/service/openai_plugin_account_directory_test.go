@@ -173,6 +173,47 @@ func TestListPluginAccounts_ExcludesNonActiveDefenseInDepth(t *testing.T) {
 	assert.Equal(t, int64(1), infos[0].ID)
 }
 
+type pluginIdentityRequestProxyRepo struct {
+	AccountRepository
+	account *Account
+}
+
+func (r *pluginIdentityRequestProxyRepo) GetByID(context.Context, int64) (*Account, error) {
+	return r.account, nil
+}
+
+func TestPluginIdentityRequestProxyRefusesBeforeTokenResolution(t *testing.T) {
+	for _, platform := range []string{PlatformOpenAI, PlatformOpenAIBPS} {
+		t.Run(platform, func(t *testing.T) {
+			account := &Account{ID: 885701, Platform: platform, Type: AccountTypeOAuth,
+				Extra: map[string]any{OpenAIProxyModeKey: OpenAIProxyModeRequest, OpenAIProxyIDsKey: []int64{11}},
+				Proxy: &Proxy{Protocol: "http", Host: "old-single.invalid", Port: 8080}}
+			// An empty provider fails if token resolution is reached.
+			svc := &OpenAIGatewayService{accountRepo: &pluginIdentityRequestProxyRepo{account: account}, openAITokenProvider: &OpenAITokenProvider{}}
+			scope := newPluginAccountScope(pluginAccountScopeEntry{Platform: platform, AccountType: AccountTypeOAuth})
+			identity, err := svc.ResolvePluginOutboundIdentity(context.Background(), scope, account.ID)
+			require.ErrorIs(t, err, errOpenAIRequestProxyUnavailable)
+			require.Nil(t, identity)
+		})
+	}
+}
+
+func TestPluginIdentityRequestProxyExplicitSingleKeepsExistingIdentity(t *testing.T) {
+	proxyID := int64(11)
+	account := &Account{ID: 885702, Platform: PlatformOpenAI, Type: AccountTypeOAuth,
+		ProxyID:     &proxyID,
+		Credentials: map[string]any{"access_token": "fixture-token", "chatgpt_account_id": "fixture-account"},
+		Extra:       map[string]any{OpenAIProxyModeKey: OpenAIProxyModeSingle, OpenAIProxyIDsKey: []int64{11}},
+		Proxy:       &Proxy{Protocol: "http", Host: "single.example.test", Port: 8080}}
+	svc := &OpenAIGatewayService{accountRepo: &pluginIdentityRequestProxyRepo{account: account}}
+	scope := newPluginAccountScope(pluginAccountScopeEntry{Platform: PlatformOpenAI, AccountType: AccountTypeOAuth})
+	identity, err := svc.ResolvePluginOutboundIdentity(context.Background(), scope, account.ID)
+	require.NoError(t, err)
+	require.NotNil(t, identity)
+	require.Equal(t, account.Proxy.URL(), identity.ProxyURL)
+	require.Equal(t, "fixture-token", identity.Token)
+}
+
 func TestListPluginAccounts_EmptyScopeReturnsNothing(t *testing.T) {
 	svc := &OpenAIGatewayService{accountRepo: &pluginDirRepoStub{byPlatform: map[string][]Account{
 		PlatformOpenAI: {{ID: 1, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true}},

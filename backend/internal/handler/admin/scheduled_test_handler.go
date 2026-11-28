@@ -1,6 +1,8 @@
 package admin
 
 import (
+	"database/sql"
+	"errors"
 	"net/http"
 	"strconv"
 
@@ -20,20 +22,22 @@ func NewScheduledTestHandler(scheduledTestSvc *service.ScheduledTestService) *Sc
 }
 
 type createScheduledTestPlanRequest struct {
-	AccountID      int64  `json:"account_id" binding:"required"`
-	ModelID        string `json:"model_id"`
-	CronExpression string `json:"cron_expression" binding:"required"`
-	Enabled        *bool  `json:"enabled"`
-	MaxResults     int    `json:"max_results"`
-	AutoRecover    *bool  `json:"auto_recover"`
+	PelicanConfig  *service.PelicanTestConfig `json:"pelican_config"`
+	AccountID      int64                      `json:"account_id" binding:"required"`
+	ModelID        string                     `json:"model_id"`
+	CronExpression string                     `json:"cron_expression" binding:"required"`
+	Enabled        *bool                      `json:"enabled"`
+	MaxResults     int                        `json:"max_results"`
+	AutoRecover    *bool                      `json:"auto_recover"`
 }
 
 type updateScheduledTestPlanRequest struct {
-	ModelID        string `json:"model_id"`
-	CronExpression string `json:"cron_expression"`
-	Enabled        *bool  `json:"enabled"`
-	MaxResults     int    `json:"max_results"`
-	AutoRecover    *bool  `json:"auto_recover"`
+	PelicanConfig  *service.PelicanTestConfig `json:"pelican_config"`
+	ModelID        string                     `json:"model_id"`
+	CronExpression string                     `json:"cron_expression"`
+	Enabled        *bool                      `json:"enabled"`
+	MaxResults     int                        `json:"max_results"`
+	AutoRecover    *bool                      `json:"auto_recover"`
 }
 
 // ListByAccount GET /admin/accounts/:id/scheduled-test-plans
@@ -61,6 +65,7 @@ func (h *ScheduledTestHandler) Create(c *gin.Context) {
 	}
 
 	plan := &service.ScheduledTestPlan{
+		PelicanConfig:  req.PelicanConfig,
 		AccountID:      req.AccountID,
 		ModelID:        req.ModelID,
 		CronExpression: req.CronExpression,
@@ -117,6 +122,9 @@ func (h *ScheduledTestHandler) Update(c *gin.Context) {
 	if req.AutoRecover != nil {
 		existing.AutoRecover = *req.AutoRecover
 	}
+	if req.PelicanConfig != nil {
+		existing.PelicanConfig = req.PelicanConfig
+	}
 
 	updated, err := h.scheduledTestSvc.UpdatePlan(c.Request.Context(), existing)
 	if err != nil {
@@ -154,10 +162,57 @@ func (h *ScheduledTestHandler) ListResults(c *gin.Context) {
 		limit = l
 	}
 
-	results, err := h.scheduledTestSvc.ListResults(c.Request.Context(), planID, limit)
+	listResults := h.scheduledTestSvc.ListResults
+	if c.Query("include_content") == "false" {
+		listResults = h.scheduledTestSvc.ListResultSummaries
+		limit = min(limit, 200)
+	}
+	results, err := listResults(c.Request.Context(), planID, limit)
 	if err != nil {
 		response.InternalError(c, err.Error())
 		return
 	}
 	c.JSON(http.StatusOK, results)
+}
+
+func (h *ScheduledTestHandler) GetResult(c *gin.Context) {
+	planID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || planID <= 0 {
+		response.BadRequest(c, "invalid plan id")
+		return
+	}
+	resultID, err := strconv.ParseInt(c.Param("resultID"), 10, 64)
+	if err != nil || resultID <= 0 {
+		response.BadRequest(c, "invalid result id")
+		return
+	}
+	result, err := h.scheduledTestSvc.GetResult(c.Request.Context(), planID, resultID)
+	if errors.Is(err, sql.ErrNoRows) {
+		response.NotFound(c, "result not found")
+		return
+	}
+	if err != nil {
+		response.InternalError(c, "failed to load test result")
+		return
+	}
+	c.JSON(http.StatusOK, result)
+}
+
+func (h *ScheduledTestHandler) ListPelicanHistory(c *gin.Context) {
+	beforeID, err := strconv.ParseInt(c.DefaultQuery("before_id", "0"), 10, 64)
+	if err != nil || beforeID < 0 {
+		response.BadRequest(c, "invalid before_id")
+		return
+	}
+	accountID, err := strconv.ParseInt(c.DefaultQuery("account_id", "0"), 10, 64)
+	if err != nil || accountID < 0 {
+		response.BadRequest(c, "invalid account_id")
+		return
+	}
+	page, err := h.scheduledTestSvc.ListPelicanHistory(c.Request.Context(), beforeID, accountID)
+	if err != nil {
+		response.InternalError(c, "failed to load IQ test history")
+		return
+	}
+	c.JSON(http.StatusOK, page)
 }

@@ -12,6 +12,16 @@ func (s *OpenAIGatewayService) SetPluginManager(manager *PluginManager) {
 // doOpenAIUpstream 只在 OpenAI OAuth 能力绑定已启用时把真实请求交给插件。
 // 插件返回标准 http.Response，响应解析、错误映射、SSE 和计费仍由现有核心链处理。
 func (s *OpenAIGatewayService) doOpenAIUpstream(request *http.Request, proxyURL string, account *Account) (*http.Response, error) {
+	route, scoped := openAIRequestProxyFromContext(request.Context(), account.ID)
+	if route != nil && !account.OpenAIRequestProxyEnabled() {
+		return nil, errOpenAIRequestProxyUnavailable
+	}
+	if account.OpenAIRequestProxyEnabled() {
+		if !scoped {
+			return nil, errOpenAIRequestProxyUnavailable
+		}
+		proxyURL = route.proxy
+	}
 	rejectedToken := strings.TrimPrefix(request.Header.Get("Authorization"), "Bearer ")
 	response, err := s.doOpenAIUpstreamOnce(request, proxyURL, account)
 	if err != nil || response == nil || response.StatusCode != http.StatusUnauthorized || s.openAITokenProvider == nil || request.Context().Err() != nil {
@@ -59,16 +69,38 @@ func (s *OpenAIGatewayService) doOpenAIUpstream(request *http.Request, proxyURL 
 }
 
 func (s *OpenAIGatewayService) doOpenAIUpstreamOnce(request *http.Request, proxyURL string, account *Account) (*http.Response, error) {
+	if route, scoped := openAIRequestProxyFromContext(request.Context(), account.ID); route != nil || account.OpenAIRequestProxyEnabled() {
+		if !scoped || !account.OpenAIRequestProxyEnabled() {
+			return nil, errOpenAIRequestProxyUnavailable
+		}
+		var err error
+		request, err = route.bind(request)
+		if err != nil {
+			return nil, err
+		}
+		proxyURL = route.proxy
+	}
+	if request != nil {
+		if err := s.checkOpenAITiboQualityAdmissionForPrevious(request.Context(), account, ""); err != nil {
+			return nil, err
+		}
+	}
 	snapshot := snapshotCodexTicketHTTPRequest(request, account)
 	if s.pluginManager != nil {
 		response, handled, err := s.pluginManager.RoundTripOpenAIOAuth(request.Context(), request, proxyURL, account)
 		if handled {
 			s.observeCodexTicketHTTPResponse(snapshot, response)
+			if route, ok := openAIRequestProxyFromContext(request.Context(), account.ID); ok {
+				route.track(response)
+			}
 			return response, err
 		}
 	}
 	response, err := s.httpUpstream.Do(request, proxyURL, account.ID, account.Concurrency)
 	s.observeCodexTicketHTTPResponse(snapshot, response)
+	if route, ok := openAIRequestProxyFromContext(request.Context(), account.ID); ok {
+		route.track(response)
+	}
 	return response, err
 }
 
@@ -79,7 +111,19 @@ func (s *AccountTestService) doOpenAIAccountTestUpstream(
 	proxyURL string,
 	account *Account,
 	useTLSFallback bool,
-) (*http.Response, error) {
+) (result *http.Response, resultErr error) {
+	if route, scoped := openAIRequestProxyFromContext(request.Context(), account.ID); route != nil || account.OpenAIRequestProxyEnabled() {
+		if !scoped || !account.OpenAIRequestProxyEnabled() {
+			return nil, errOpenAIRequestProxyUnavailable
+		}
+		var err error
+		request, err = route.bind(request)
+		if err != nil {
+			return nil, err
+		}
+		proxyURL = route.proxy
+		defer func() { route.track(result) }()
+	}
 	if s.pluginManager != nil {
 		response, handled, err := s.pluginManager.RoundTripOpenAIOAuth(request.Context(), request, proxyURL, account)
 		if handled {

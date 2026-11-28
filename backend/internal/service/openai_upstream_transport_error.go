@@ -115,6 +115,10 @@ func isClientCanceledTransportError(ctx context.Context, err error) bool {
 //
 // passthrough tags the Ops error event for the OpenAI passthrough forward path.
 func (s *OpenAIGatewayService) handleOpenAIUpstreamTransportError(ctx context.Context, c *gin.Context, account *Account, err error, passthrough bool) error {
+	var qualityErr *UpstreamFailoverError
+	if errors.As(err, &qualityErr) && qualityErr.Reason == GatewayFailureReason("openai_tibo_quality_isolated") {
+		return err
+	}
 	if isClientCanceledTransportError(ctx, err) {
 		return err
 	}
@@ -147,6 +151,12 @@ func (s *OpenAIGatewayService) handleOpenAIUpstreamTransportError(ctx context.Co
 	// 插件已把请求交给上游时，自动切换账号可能造成重复扣费或重复执行。
 	var pluginErr *PluginTransportError
 	if errors.As(err, &pluginErr) && pluginErr.RequestSent {
+		return err
+	}
+
+	// The transport cannot prove whether the request reached the provider.
+	// A leased request must not be replayed through another account/exit.
+	if _, scoped := openAIRequestProxyFromContext(ctx, account.ID); scoped {
 		return err
 	}
 

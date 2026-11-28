@@ -180,7 +180,15 @@ func (a *Account) EffectiveLoadFactor() int {
 	return 1
 }
 
+// IsOpenAITiboQualityIsolated is independent of the administrator scheduling switch.
+func (a *Account) IsOpenAITiboQualityIsolated() bool {
+	return a != nil && (a.IsOpenAI() || a.IsOpenAIBPS()) && a.getExtraBool("openai_tibo_quality_isolated")
+}
+
 func (a *Account) IsSchedulable() bool {
+	if a == nil || a.IsOpenAITiboQualityIsolated() {
+		return false
+	}
 	if a.IsOpenAIBPS() {
 		state := a.OpenAIBPSCredentialState(time.Now())
 		if state.Status == "expired" || state.Status == "revoked" || state.Status == "auth_failed" {
@@ -222,7 +230,7 @@ func (a *Account) IsSchedulable() bool {
 // 手动 Schedulable 开关:spark 影子拥有独立 spark 配额窗口,母账号 global 429(走 RateLimitResetAt)
 // 不应连坐 spark(否则重新耦合影子架构本应解耦的两条 429 道)。nil receiver 返回 false。
 func (a *Account) IsCredentialUsableForShadow() bool {
-	if a == nil || !a.IsActive() {
+	if a == nil || !a.IsActive() || a.IsOpenAITiboQualityIsolated() {
 		return false
 	}
 	now := time.Now()
@@ -865,6 +873,12 @@ func resolveRequestedModelInMapping(mapping map[string]string, requestedModel st
 // （isDeepseekServableModel）——未知模型名透传上游只会得到 404/400，并误触发
 // per-(账号,模型) 30 分钟冷却；带 [1m] 上下文后缀的写法先归一化再比对。
 func (a *Account) IsModelSupported(requestedModel string) bool {
+	// BPS model access is decided by the upstream catalog, not by a local whitelist.
+	// A stale model_mapping must not hide or reject models the upstream allows;
+	// the mapping remains an alias table resolved by GetMappedModel.
+	if a.IsOpenAIBPS() {
+		return strings.TrimSpace(requestedModel) != ""
+	}
 	// 透传模式仅替换认证、模型语义完全交由上游决定，因此放行所有模型。
 	// 该短路必须在 model_mapping 判定之前：账号从"白名单模式"切换到透传后，
 	// credentials 里常残留旧的非空 model_mapping，若不在此放行，透传账号会被

@@ -54,6 +54,12 @@ func (s *OpenAIGatewayService) RunCodexNativeDiagnostic(ctx context.Context, acc
 		result.Reason = "upstream_unavailable"
 		return result
 	}
+	probeCtx, releaseProxy, proxyErr := s.beginOpenAIRequestProxy(probeCtx, nil, account)
+	if proxyErr != nil {
+		result.Reason = "proxy_unavailable"
+		return result
+	}
+	defer releaseProxy()
 	token, _, tokenErr := s.GetAccessToken(probeCtx, account)
 	if tokenErr != nil || strings.TrimSpace(token) == "" {
 		result.Reason = "credentials"
@@ -62,7 +68,9 @@ func (s *OpenAIGatewayService) RunCodexNativeDiagnostic(ctx context.Context, acc
 	// 打票代理存在时与打票共用同一出口；没有配置代理时直连，探测不应该
 	// 因为"没开打票代理"而整体不可用。
 	proxyURL := ""
-	if selected, _, proxyErr := s.chooseCodexTicketProxy(probeCtx, accountID, model); proxyErr == nil {
+	if route, ok := openAIRequestProxyFromContext(probeCtx, account.ID); ok {
+		proxyURL = route.proxy
+	} else if selected, _, proxyErr := s.chooseCodexTicketProxy(probeCtx, accountID, model); proxyErr == nil {
 		proxyURL = selected
 	} else if !errors.Is(proxyErr, ErrCodexTicketNoProxy) {
 		result.Reason = "proxy_unavailable"

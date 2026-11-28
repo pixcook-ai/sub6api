@@ -742,6 +742,9 @@ func lockAndMergeAccountProbeExtra(
 	}
 	extra := service.MergeOpenAICodexTicketExtra(copyJSONMap(normalizeJSONMap(account.Extra)), currentExtra)
 	extra = service.MergeOpenAIBPSCredentialStateExtra(account, extra, currentExtra, identityUnchanged)
+	if account.Platform == service.PlatformOpenAI {
+		extra = service.MergeOpenAITiboExtra(extra, currentExtra)
+	}
 	for _, key := range []string{
 		service.UpstreamBillingProbeEnabledExtraKey,
 		service.UpstreamBillingRateSyncEnabledExtraKey,
@@ -2761,12 +2764,6 @@ func (r *accountRepository) UpdateExtra(ctx context.Context, id int64, updates m
 		return nil
 	}
 
-	// 使用 JSONB 合并操作实现原子更新，避免读-改-写的并发丢失更新问题
-	payload, err := json.Marshal(updates)
-	if err != nil {
-		return err
-	}
-
 	clearProbeSnapshot := upstreamBillingProbeExplicitlyDisabled(updates) || upstreamBillingProbeSnapshotClearRequested(updates)
 	durableSchedulerChange := shouldEnqueueSchedulerOutboxForExtraUpdates(updates) || clearProbeSnapshot
 	baseCtx := ctx
@@ -2784,6 +2781,22 @@ func (r *accountRepository) UpdateExtra(ctx context.Context, id int64, updates m
 			ctx = dbent.NewTxContext(ctx, tx)
 			client = tx.Client()
 		}
+	}
+	// Preserve a newer probe history when another process finishes late. This
+	// executes inside the same transaction that publishes the outbox event.
+	if _, ok := updates[service.OpenAIAstraPolicyExtraKey]; ok {
+		var err error
+		updates, err = lockAstraPolicyExtraUpdate(ctx, client, id, updates)
+		if err != nil {
+			return err
+		}
+		if len(updates) == 0 {
+			return nil
+		}
+	}
+	payload, err := json.Marshal(updates)
+	if err != nil {
+		return err
 	}
 	extraExpression := "COALESCE(extra, '{}'::jsonb) || $1::jsonb"
 	if clearProbeSnapshot {

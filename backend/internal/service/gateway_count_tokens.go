@@ -10,6 +10,7 @@ import (
 
 	"github.com/MACOS-DO/sub4api/internal/pkg/claude"
 	"github.com/MACOS-DO/sub4api/internal/pkg/logger"
+	"github.com/MACOS-DO/sub4api/internal/util/responseheaders"
 	"github.com/tidwall/gjson"
 
 	"github.com/gin-gonic/gin"
@@ -173,7 +174,12 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 	// 构建上游请求
 	upstreamReq, wireBody, err := s.buildCountTokensRequest(ctx, c, account, body, token, tokenType, reqModel, shouldMimicClaudeCode)
 	if err != nil {
-		s.countTokensError(c, http.StatusInternalServerError, "api_error", "Failed to build request")
+		var blocked *BetaBlockedError
+		if errors.As(err, &blocked) {
+			s.countTokensError(c, http.StatusBadRequest, "invalid_request_error", blocked.Message)
+		} else {
+			s.countTokensError(c, http.StatusInternalServerError, "api_error", "Failed to build request")
+		}
 		return err
 	}
 	// 先记录首发 wire body；如果后面进入 400 retry，retry 会基于未签名的逻辑 body 重新构建。
@@ -270,15 +276,7 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 			)
 		}
 
-		// 返回简化的错误响应
-		errMsg := "Upstream request failed"
-		switch resp.StatusCode {
-		case 429:
-			errMsg = "Rate limit exceeded"
-		case 529:
-			errMsg = "Service overloaded"
-		}
-		s.countTokensError(c, resp.StatusCode, "upstream_error", errMsg)
+		s.writeCountTokensUpstreamError(c, resp)
 		if upstreamMsg == "" {
 			return fmt.Errorf("upstream error: %d", resp.StatusCode)
 		}
@@ -286,6 +284,9 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 	}
 
 	// 透传成功响应
+	if requestID := responseheaders.FilterHeaders(resp.Header, s.responseHeaderFilter).Get("request-id"); requestID != "" {
+		c.Header("request-id", requestID)
+	}
 	c.Data(resp.StatusCode, "application/json", respBody)
 	return nil
 }
@@ -386,14 +387,7 @@ func (s *GatewayService) forwardCountTokensAnthropicAPIKeyPassthrough(ctx contex
 			Detail:             upstreamDetail,
 		})
 
-		errMsg := "Upstream request failed"
-		switch resp.StatusCode {
-		case 429:
-			errMsg = "Rate limit exceeded"
-		case 529:
-			errMsg = "Service overloaded"
-		}
-		s.countTokensError(c, resp.StatusCode, "upstream_error", errMsg)
+		s.writeCountTokensUpstreamError(c, resp)
 		if upstreamMsg == "" {
 			return fmt.Errorf("upstream error: %d", resp.StatusCode)
 		}
@@ -621,7 +615,10 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 
 	// === 计算最终 anthropic-beta header（先于 body sanitize 与 CCH 签名）===
 	// 顺序约束同 buildUpstreamRequest。
-	ctEffectiveDropSet := mergeDropSets(s.getBetaPolicyFilterSet(ctx, c, account, modelID))
+	ctEffectiveDropSet, err := s.anthropicBetaDropSetForRequest(ctx, c, account, tokenType, mimicClaudeCode, modelID, true)
+	if err != nil {
+		return nil, nil, err
+	}
 	finalBetaHeader, finalBetaShouldSet := s.computeFinalCountTokensAnthropicBeta(
 		tokenType, mimicClaudeCode, modelID, clientHeaders, body, ctEffectiveDropSet,
 	)
@@ -739,13 +736,42 @@ func sanitizeCountTokensRequestBody(body []byte) []byte {
 	return out
 }
 
+func (s *GatewayService) writeCountTokensUpstreamError(c *gin.Context, resp *http.Response) {
+	filtered := responseheaders.FilterHeaders(resp.Header, s.responseHeaderFilter)
+	if requestID := filtered.Get("request-id"); requestID != "" {
+		c.Header("request-id", requestID)
+	}
+	if shouldRetry := filtered.Get("X-Should-Retry"); shouldRetry != "" {
+		c.Header("X-Should-Retry", shouldRetry)
+	}
+	var errType, message string
+	switch resp.StatusCode {
+	case http.StatusTooManyRequests:
+		errType, message = "rate_limit_error", "Rate limit exceeded"
+	case 529:
+		errType, message = "overloaded_error", "Service overloaded"
+	default:
+		s.countTokensError(c, resp.StatusCode, "upstream_error", "Upstream request failed")
+		return
+	}
+
+	if retryAfter := filtered.Get("Retry-After"); retryAfter != "" {
+		c.Header("Retry-After", retryAfter)
+	}
+	s.countTokensError(c, resp.StatusCode, errType, message)
+}
+
 // countTokensError 返回 count_tokens 错误响应
 func (s *GatewayService) countTokensError(c *gin.Context, status int, errType, message string) {
-	c.JSON(status, gin.H{
+	body := gin.H{
 		"type": "error",
 		"error": gin.H{
 			"type":    errType,
 			"message": message,
 		},
-	})
+	}
+	if requestID := c.Writer.Header().Get("request-id"); requestID != "" {
+		body["request_id"] = requestID
+	}
+	c.JSON(status, body)
 }

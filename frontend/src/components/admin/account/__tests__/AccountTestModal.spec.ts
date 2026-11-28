@@ -77,7 +77,11 @@ function mountModal(account: Record<string, unknown> = {
     global: {
       stubs: {
         BaseDialog: { template: '<div><slot /><slot name="footer" /></div>' },
-        Select: { template: '<div class="select-stub"></div>' },
+        Select: {
+          props: ['modelValue', 'options', 'valueKey', 'labelKey'],
+          emits: ['update:modelValue'],
+          template: '<select class="select-stub" :value="modelValue" @change="$emit(\'update:modelValue\', $event.target.value)"><option v-for="option in options" :key="option[valueKey || \'value\']" :value="option[valueKey || \'value\']">{{ option[labelKey || \'label\'] }}</option></select>'
+        },
         TextArea: {
           props: ['modelValue'],
           emits: ['update:modelValue'],
@@ -219,6 +223,87 @@ describe('AccountTestModal', () => {
       prompt: '',
       mode: 'compact'
     })
+  })
+
+  it.each(['openai', 'openai_bps'])('%s 非图片模型在所有测试模式下隐藏生图提示词', async platform => {
+    getAvailableModels.mockResolvedValue([{ id: 'gpt-5.6-luna', display_name: 'GPT-5.6 Luna' }])
+    const wrapper = mountModal({ id: 42, name: 'OAuth', platform, type: 'oauth', status: 'active' })
+    await wrapper.setProps({ show: true })
+    await flushPromises()
+
+    const mode = wrapper.findAll('select')[1]
+    const modes = platform === 'openai_bps' ? ['default', 'compact', 'bps_tools'] : ['default', 'compact']
+    for (const value of modes) {
+      await mode.setValue(value)
+      expect(wrapper.find('textarea.textarea-stub').exists()).toBe(false)
+    }
+    wrapper.unmount()
+  })
+
+  it('普通 OAuth 切换图片与文本模型时同步显示提示词且不发送隐藏的旧提示词', async () => {
+    getAvailableModels.mockResolvedValue([
+      { id: 'gpt-5.6-luna', display_name: 'GPT-5.6 Luna' },
+      { id: 'gpt-image-1', display_name: 'GPT Image 1' }
+    ])
+    const wrapper = mountModal({ id: 42, name: 'OAuth', platform: 'openai', type: 'oauth', status: 'active' })
+    await wrapper.setProps({ show: true })
+    await flushPromises()
+
+    const model = wrapper.find('select')
+    expect(wrapper.find('textarea.textarea-stub').exists()).toBe(false)
+    await model.setValue('gpt-image-1')
+    await flushPromises()
+    expect(wrapper.find('textarea.textarea-stub').exists()).toBe(true)
+    await wrapper.find('textarea.textarea-stub').setValue('draw a cat')
+    await model.setValue('gpt-5.6-luna')
+    expect(wrapper.find('textarea.textarea-stub').exists()).toBe(false)
+    const start = wrapper.findAll('button').find(button => button.text().includes('admin.accounts.startTest'))
+    await start!.trigger('click')
+    await flushPromises()
+
+    const [, request] = (global.fetch as any).mock.calls[0]
+    expect(JSON.parse(request.body)).toEqual({ model_id: 'gpt-5.6-luna', prompt: '', mode: 'default' })
+    wrapper.unmount()
+  })
+
+  it('BPS OAuth 的真实管理弹窗显示工具闭环并提交 bps_tools，保留 completed 事件', async () => {
+    getAvailableModels.mockResolvedValue([{ id: 'gpt-6-astra', display_name: 'GPT-6 Astra' }])
+    global.fetch = vi.fn().mockResolvedValue(createStreamResponse([
+      'data: {"type":"status","text":"BPS tool result continuation verified"}\n\n',
+      'data: {"type":"test_complete","success":true}\n\n'
+    ])) as any
+    const wrapper = mountModal({ id: 83, name: 'BPS Tools', platform: 'openai_bps', type: 'oauth', status: 'active' })
+    await wrapper.setProps({ show: true })
+    await flushPromises()
+
+    const mode = wrapper.findAll('select').find(select => select.find('option[value="bps_tools"]').exists())
+    expect(mode).toBeDefined()
+    expect(wrapper.text()).not.toContain('admin.accounts.bps.toolRoundtripHint')
+    await mode!.setValue('bps_tools')
+    expect(wrapper.text()).toContain('admin.accounts.bps.toolRoundtripHint')
+    const start = wrapper.findAll('button').find(button => button.text().includes('admin.accounts.startTest'))
+    await start!.trigger('click')
+    await flushPromises()
+
+    const [url, request] = (global.fetch as any).mock.calls[0]
+    expect(url).toContain('/admin/accounts/83/test')
+    expect(JSON.parse(request.body)).toEqual({ model_id: 'gpt-6-astra', prompt: '', mode: 'bps_tools' })
+    expect(wrapper.text()).toContain('BPS tool result continuation verified')
+    expect(wrapper.emitted('completed')).toEqual([[83]])
+    wrapper.unmount()
+  })
+
+  it.each([
+    { platform: 'openai', type: 'oauth' },
+    { platform: 'openai_bps', type: 'apikey' },
+    { platform: 'grok', type: 'oauth' }
+  ])('$platform/$type 不提供 BPS 工具模式或提示', async account => {
+    const wrapper = mountModal({ id: 84, name: 'Other', status: 'active', ...account })
+    await wrapper.setProps({ show: true })
+    await flushPromises()
+    expect(wrapper.find('option[value="bps_tools"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('admin.accounts.bps.toolRoundtripHint')
+    wrapper.unmount()
   })
 })
 

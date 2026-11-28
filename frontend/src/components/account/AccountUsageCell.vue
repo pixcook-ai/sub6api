@@ -1,7 +1,70 @@
 <template>
+  <div :aria-busy="loading || activeQueryLoading || batchedUsageLoading">
+    <div v-if="tiboRoutes.length" class="mb-1 space-y-0.5" data-testid="tibo-routes">
+      <TiboRouteSpark
+        v-for="route in tiboRoutes"
+        :key="route.model + ':' + route.route"
+        :model="route.model"
+        :verdict="route.verdict"
+        :samples="route.recent_samples"
+        compact
+      />
+    </div>
   <div ref="rootRef" v-if="showUsageWindows">
     <template v-if="account.platform === 'openai_bps'">
-      <BPSCredentialStatus :state="bpsCredentialState" />
+      <div class="flex items-center gap-1">
+        <BPSCredentialStatus :state="bpsCredentialState" compact />
+        <HelpTooltip v-if="usageInfo" :content="bpsUsageHint" trigger="click">
+          <template #trigger>
+            <button type="button" :aria-label="t('admin.accounts.bps.usageDetails')" class="inline-flex h-4 w-4 items-center justify-center rounded text-[10px] text-gray-400 hover:text-gray-600 dark:hover:text-gray-200">ⓘ</button>
+          </template>
+        </HelpTooltip>
+      </div>
+      <div v-if="loading && !usageInfo" class="mt-1 text-xs text-gray-400">{{ t('common.loading') }}</div>
+      <div v-if="error" class="mt-1 text-xs text-red-500" role="status">{{ error }}</div>
+      <div v-if="usageInfo?.five_hour || usageInfo?.seven_day || usageInfo?.thirty_day" class="mt-1 space-y-1">
+        <UsageProgressBar
+          v-if="usageInfo?.five_hour"
+          label="5h"
+          :utilization="usageInfo.five_hour.utilization"
+          :quota-unknown="usageInfo.five_hour.quota_unknown"
+          :resets-at="usageInfo.five_hour.resets_at"
+          :window-stats="usageInfo.five_hour.window_stats"
+          :show-now-when-idle="true"
+          color="indigo"
+        />
+        <UsageProgressBar
+          v-if="usageInfo?.seven_day"
+          label="7d"
+          :utilization="usageInfo.seven_day.utilization"
+          :quota-unknown="usageInfo.seven_day.quota_unknown"
+          :resets-at="usageInfo.seven_day.resets_at"
+          :window-stats="usageInfo.seven_day.window_stats"
+          :show-now-when-idle="true"
+          color="emerald"
+        />
+        <UsageProgressBar
+          v-if="usageInfo?.thirty_day"
+          label="30d"
+          :utilization="usageInfo.thirty_day.utilization"
+          :quota-unknown="usageInfo.thirty_day.quota_unknown"
+          :resets-at="usageInfo.thirty_day.resets_at"
+          :window-stats="usageInfo.thirty_day.window_stats"
+          color="purple"
+        />
+      </div>
+      <button
+        type="button"
+        data-test="bps-usage-query"
+        class="mt-1 inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-medium text-blue-600 hover:bg-blue-50 dark:text-blue-400 dark:hover:bg-blue-900/30 transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+        :disabled="loading || activeQueryLoading"
+        @click="loadActiveUsage"
+      >
+        <svg class="h-2.5 w-2.5" :class="{ 'animate-spin': activeQueryLoading }" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+        </svg>
+        {{ t('admin.accounts.usageWindow.activeQuery') }}
+      </button>
     </template>
     <!-- Anthropic OAuth and Setup Token accounts: fetch real usage data -->
     <template
@@ -131,6 +194,7 @@
           v-if="usageInfo?.five_hour"
           label="5h"
           :utilization="usageInfo.five_hour.utilization"
+          :quota-unknown="usageInfo.five_hour.quota_unknown"
           :resets-at="usageInfo.five_hour.resets_at"
           :window-stats="usageInfo.five_hour.window_stats"
           :show-now-when-idle="true"
@@ -140,11 +204,21 @@
           v-if="usageInfo?.seven_day"
           label="7d"
           :utilization="usageInfo.seven_day.utilization"
+          :quota-unknown="usageInfo.seven_day.quota_unknown"
           :resets-at="usageInfo.seven_day.resets_at"
           :window-stats="usageInfo.seven_day.window_stats"
           :estimated-total-cost="openAISevenDayEstimatedTotalCost"
           :show-now-when-idle="true"
           color="emerald"
+        />
+        <UsageProgressBar
+          v-if="usageInfo?.thirty_day"
+          label="30d"
+          :utilization="usageInfo.thirty_day.utilization"
+          :quota-unknown="usageInfo.thirty_day.quota_unknown"
+          :resets-at="usageInfo.thirty_day.resets_at"
+          :window-stats="usageInfo.thirty_day.window_stats"
+          color="purple"
         />
         <!--
           Upstream codex /wham/usage quota query + reset. The local active-sampling
@@ -674,10 +748,12 @@
       >-</div>
     </div>
   </div>
+  </div>
 </template>
 
 <script setup lang="ts">
 import BPSCredentialStatus from "./BPSCredentialStatus.vue"
+import HelpTooltip from '@/components/common/HelpTooltip.vue'
 import { useBPSCredentialState } from "@/composables/useBPSCredentialState"
 import { ref, computed, onMounted, onBeforeUnmount, onUnmounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -687,6 +763,7 @@ import { buildOpenAIUsageRefreshKey } from '@/utils/accountUsageRefresh'
 import { enqueueUsageRequest } from '@/utils/usageLoadQueue'
 import { formatCompactNumber } from '@/utils/format'
 import UsageProgressBar from './UsageProgressBar.vue'
+import TiboRouteSpark from './TiboRouteSpark.vue'
 import AccountQuotaInfo from './AccountQuotaInfo.vue'
 import ClaudeResetCreditsCell from './ClaudeResetCreditsCell.vue'
 import OpenAIQuotaResetCell from './OpenAIQuotaResetCell.vue'
@@ -738,6 +815,10 @@ const loading = ref(false)
 const activeQueryLoading = ref(false)
 const error = ref<string | null>(null)
 const usageInfo = ref<AccountUsageInfo | null>(null)
+const bpsUsageHint = computed(() => [
+  usageInfo.value?.error_code === 'quota_unavailable' ? t('admin.accounts.bps.quotaUnavailable') : '',
+  t('admin.accounts.bps.usageSourceHint')
+].filter(Boolean).join('\n'))
 watch(usageInfo, (usage) => {
   if (usage) emit('usage-loaded', usage)
 })
@@ -788,6 +869,9 @@ const shouldFetchUsage = computed(() => {
   if (props.account.platform === 'openai') {
     return props.account.type === 'oauth'
   }
+  if (props.account.platform === 'openai_bps') {
+    return props.account.type === 'oauth'
+  }
   return false
 })
 
@@ -817,9 +901,16 @@ const geminiUsageAvailable = computed(() => {
   )
 })
 
+const tiboRoutes = computed(() => {
+  if (props.account.platform !== 'openai' && !(props.account.platform === 'openai_bps' && props.account.type === 'oauth')) return []
+  return (props.account.tibo_account_statuses ?? []).flatMap(status =>
+    (status.tibo_routes ?? []).map(route => ({ ...route, model: status.model }))
+  )
+})
+
 const hasOpenAIUsageFallback = computed(() => {
   if (props.account.platform !== 'openai' || props.account.type !== 'oauth') return false
-  return !!usageInfo.value?.five_hour || !!usageInfo.value?.seven_day
+  return !!usageInfo.value?.five_hour || !!usageInfo.value?.seven_day || !!usageInfo.value?.thirty_day
 })
 
 const openAISevenDayEstimatedTotalCost = computed(() => {
@@ -827,6 +918,7 @@ const openAISevenDayEstimatedTotalCost = computed(() => {
   const utilization = sevenDay?.utilization
   const currentCost = sevenDay?.window_stats?.cost
   if (
+    sevenDay?.quota_unknown ||
     typeof utilization !== 'number' ||
     typeof currentCost !== 'number' ||
     !Number.isFinite(utilization) ||
@@ -1508,9 +1600,19 @@ const attachVisibilityObserver = () => {
 
 const loadActiveUsage = async () => {
   activeQueryLoading.value = true
+  error.value = null
   try {
-    usageInfo.value = await adminAPI.accounts.getUsage(props.account.id, 'active', true)
+    if (props.account.platform === 'openai_bps' && isBatchManaged.value) {
+      requestParentBatchUsage({ force: true })
+      return
+    }
+    const result = await adminAPI.accounts.getUsage(props.account.id, 'active', true)
+    if (!unmounted.value) {
+      usageInfo.value = result
+      _usageCache.set(props.account.id, { data: result, ts: Date.now() })
+    }
   } catch (e: any) {
+    if (!unmounted.value) error.value = t('common.error')
     console.error('Failed to load active usage:', e)
   } finally {
     activeQueryLoading.value = false

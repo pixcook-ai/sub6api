@@ -203,11 +203,8 @@ func (s *GatewayService) forwardAnthropicAPIKeyPassthroughWithInput(
 					return ""
 				}(),
 			})
-			return nil, &UpstreamFailoverError{
-				StatusCode:             resp.StatusCode,
-				ResponseBody:           respBody,
-				RetryableOnSameAccount: account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode),
-			}
+			retryableOnSameAccount := account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode)
+			return nil, s.upstreamHTTPFailoverError(c, account, resp, respBody, retryableOnSameAccount)
 		}
 		return s.handleRetryExhaustedError(ctx, resp, c, account)
 	}
@@ -239,11 +236,8 @@ func (s *GatewayService) forwardAnthropicAPIKeyPassthroughWithInput(
 				return ""
 			}(),
 		})
-		return nil, &UpstreamFailoverError{
-			StatusCode:             resp.StatusCode,
-			ResponseBody:           respBody,
-			RetryableOnSameAccount: account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode),
-		}
+		retryableOnSameAccount := account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode)
+		return nil, s.upstreamHTTPFailoverError(c, account, resp, respBody, retryableOnSameAccount)
 	}
 
 	if resp.StatusCode >= 400 {
@@ -1002,6 +996,9 @@ func writeAnthropicPassthroughResponseHeaders(dst http.Header, src http.Header, 
 	}
 	if v := strings.TrimSpace(src.Get("Content-Type")); v != "" {
 		dst.Set("Content-Type", v)
+	}
+	if v := strings.TrimSpace(getHeaderRaw(src, "request-id")); v != "" {
+		dst.Set("Request-Id", v)
 	}
 	if v := strings.TrimSpace(src.Get("x-request-id")); v != "" {
 		dst.Set("x-request-id", v)

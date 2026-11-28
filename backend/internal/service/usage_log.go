@@ -120,6 +120,9 @@ type UsageLog struct {
 	// UpstreamModelMismatch is nil when no upstream model was observed. Otherwise
 	// it compares UpstreamResponseModel with the actual model sent upstream.
 	UpstreamModelMismatch *bool
+	// RouteDegraded is nil when Tibo routing did not apply, false for a
+	// healthy/unknown route, and true for a degraded route. Admin-only.
+	RouteDegraded *bool
 	// ChannelID 渠道 ID
 	ChannelID *int64
 	// ModelMappingChain 模型映射链，如 "a→b→c"

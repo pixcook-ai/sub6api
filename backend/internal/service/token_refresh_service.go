@@ -66,6 +66,7 @@ type TokenRefreshService struct {
 	tempUnschedCache TempUnschedCache // 用于清除 Redis 中的临时不可调度缓存
 	refreshAPI       *OAuthRefreshAPI // 统一刷新 API
 	runtimeBlocker   AccountRuntimeBlocker
+	reauthHook       OpenAIReauthHook
 
 	// OpenAI privacy: 刷新成功后检查并设置 training opt-out
 	privacyClientFactory PrivacyClientFactory
@@ -135,6 +136,7 @@ func NewTokenRefreshService(
 	s.registrations = []tokenRefreshRegistration{
 		{platform: PlatformAnthropic, refresher: claudeRefresher, executor: claudeRefresher},
 		{platform: PlatformOpenAI, refresher: openAIRefresher, executor: openAIRefresher},
+		{platform: PlatformOpenAIBPS, refresher: NewOpenAIBPSTokenRefresher(openaiOAuthService), executor: NewOpenAIBPSTokenRefresher(openaiOAuthService)},
 		{platform: PlatformGemini, refresher: geminiRefresher, executor: geminiRefresher},
 		{platform: PlatformAntigravity, refresher: agRefresher, executor: agRefresher},
 		{platform: PlatformGrok, refresher: grokRefresher, executor: grokRefresher},
@@ -183,6 +185,16 @@ func (s *TokenRefreshService) SetRefreshPolicy(policy BackgroundRefreshPolicy) {
 
 func (s *TokenRefreshService) SetAccountRuntimeBlocker(blocker AccountRuntimeBlocker) {
 	s.runtimeBlocker = blocker
+}
+
+// OpenAIReauthHook is notified when an OpenAI account's refresh token failed permanently.
+type OpenAIReauthHook interface {
+	OnRefreshPermanentFailure(account *Account)
+}
+
+// SetOpenAIReauthHook injects the automatic re-authorization hook (optional).
+func (s *TokenRefreshService) SetOpenAIReauthHook(hook OpenAIReauthHook) {
+	s.reauthHook = hook
 }
 
 func (s *TokenRefreshService) notifyAccountSchedulingBlocked(account *Account, until time.Time, reason string) {
@@ -440,6 +452,12 @@ func (p *tokenRefreshProviderState) recordResult(err error) {
 	if errors.Is(err, errRefreshSkipped) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		var attemptTimeoutErr *refreshAttemptTimeoutError
 		if !errors.As(err, &attemptTimeoutErr) {
+			return
+		}
+	}
+	if p.registration.platform == PlatformOpenAIBPS {
+		var localError *openAIBPSAccountRefreshError
+		if errors.As(err, &localError) {
 			return
 		}
 	}
@@ -893,6 +911,8 @@ func (s *TokenRefreshService) refreshWithRetryWithRateGate(
 				credentialsPersisted = result.NewCredentials != nil
 				_ = result.NewCredentials // 统一 API 已设置 _token_version 并更新 DB，无需重复操作
 			}
+		} else if account.IsOpenAIBPS() {
+			err = &providerConfigurationRefreshError{err: errors.New("BPS refresh requires the shared OAuth refresh API")}
 		} else {
 			// 降级：直接调用 refresher（兼容旧路径）
 			releaseRate := func() {}
@@ -983,6 +1003,9 @@ func (s *TokenRefreshService) refreshWithRetryWithRateGate(
 			return &providerConfigurationRefreshError{err: err}
 		}
 
+		if account.IsOpenAIBPS() {
+			return s.handleOpenAIBPSRefreshFailure(ctx, account, err)
+		}
 		// 不可重试错误（invalid_grant/invalid_client 等）直接标记 error 状态并返回
 		if isNonRetryableRefreshError(err) {
 			errorMsg := "Token refresh failed (non-retryable): " + logredact.RedactText(err.Error())
@@ -1040,6 +1063,9 @@ func (s *TokenRefreshService) refreshWithRetryWithRateGate(
 						"error", logredact.RedactText(invalidateErr.Error()),
 					)
 				}
+			}
+			if s.reauthHook != nil && persistentlyBlocked {
+				s.reauthHook.OnRefreshPermanentFailure(account)
 			}
 			return &accountPermanentRefreshError{
 				err:                     err,
@@ -1159,6 +1185,10 @@ func (s *TokenRefreshService) retryBackoff(accountID int64, attempt int) time.Du
 
 // postRefreshActions 刷新成功后的后续动作（清除错误状态、缓存失效、调度器同步等）
 func (s *TokenRefreshService) postRefreshActions(ctx context.Context, account *Account) {
+	if account.IsOpenAIBPS() {
+		s.postRefreshStateSync(ctx, account)
+		return
+	}
 	s.clearAntigravityForceTokenRefresh(ctx, account, "success")
 
 	// Antigravity 账户：如果之前是因为缺少 project_id 而标记为 error，现在成功获取到了，清除错误状态

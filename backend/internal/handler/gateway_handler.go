@@ -1194,6 +1194,18 @@ func (h *GatewayHandler) Models(c *gin.Context) {
 		return
 	}
 
+	// BPS: ask the upstream which models the group's accounts may actually use.
+	if platform == service.PlatformOpenAIBPS && h.openAIGatewayService != nil {
+		if ids, ok := h.openAIGatewayService.OpenAIBPSAvailableModels(c.Request.Context(), groupID); ok {
+			if apiKey != nil && apiKey.Group != nil && apiKey.Group.ModelAllowlistEnabled() {
+				writeAllowlistedModelsList(c, platform, apiKey.Group.ModelAllowlist.FilterForListing(ids))
+				return
+			}
+			writeModelsList(c, platform, ids)
+			return
+		}
+	}
+
 	// Get available models from account configurations for the selected group platform.
 	availableModels := h.gatewayService.GetAvailableModels(c.Request.Context(), groupID, platform)
 	if apiKey != nil && apiKey.Group != nil && apiKey.Group.ModelAllowlistEnabled() {
@@ -1932,6 +1944,10 @@ func (h *GatewayHandler) handleFailoverExhausted(c *gin.Context, failoverErr *se
 		h.handleStreamingAwareError(c, http.StatusBadGateway, "upstream_error", service.OpenAISilentRefusalClientMessage(), streamStarted)
 		return
 	}
+	anthropicMessages := platform == service.PlatformAnthropic && GetInboundEndpoint(c) == EndpointMessages
+	if anthropicMessages && !streamStarted {
+		h.gatewayService.WriteAnthropicMessagesErrorHeaders(c, failoverErr.ResponseHeaders)
+	}
 
 	// 先检查透传规则
 	if h.errorPassthroughService != nil && len(responseBody) > 0 {
@@ -1963,6 +1979,9 @@ func (h *GatewayHandler) handleFailoverExhausted(c *gin.Context, failoverErr *se
 
 	// 使用默认的错误映射
 	status, errType, errMsg := h.mapUpstreamError(statusCode)
+	if anthropicMessages && statusCode == 529 && failoverErr.ClientStatusCode == statusCode {
+		status = statusCode
+	}
 	h.handleStreamingAwareError(c, status, errType, errMsg, streamStarted)
 }
 
@@ -2133,10 +2152,14 @@ func (h *GatewayHandler) errorResponseWithCode(c *gin.Context, status int, errTy
 	if code != "" {
 		errorObject["code"] = code
 	}
-	c.JSON(status, gin.H{
+	body := gin.H{
 		"type":  "error",
 		"error": errorObject,
-	})
+	}
+	if requestID := c.Writer.Header().Get("request-id"); requestID != "" && GetInboundEndpoint(c) == EndpointMessages {
+		body["request_id"] = requestID
+	}
+	c.JSON(status, body)
 }
 
 // CountTokens handles token counting endpoint

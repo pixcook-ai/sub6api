@@ -35,6 +35,10 @@ const messages: Record<string, string> = {
 	'admin.usage.allUpstreamModelAudit': 'All response model states',
 	'admin.usage.upstreamModelMismatchOnly': 'Mismatched only',
 	'admin.usage.upstreamModelMatchedOnly': 'Matched only',
+  'admin.usage.routeDegradedFilter': 'Route degradation',
+  'admin.usage.allRouteDegraded': 'All route states',
+  'admin.usage.routeDegradedOnly': 'Degraded only',
+  'admin.usage.routeNotDegradedOnly': 'Not degraded only',
   'admin.usage.group': 'Group',
   'admin.usage.allGroups': 'All Groups',
   'common.refresh': 'Refresh',
@@ -83,6 +87,7 @@ const defaultFilters = () => ({
   native_compaction_v2: null,
   billing_type: null,
   billing_mode: null,
+  route_degraded: null as boolean | null,
 	upstream_model_mismatch: null,
   group_id: null,
   start_date: '',
@@ -303,5 +308,37 @@ describe('UsageFilters — native compaction filter', () => {
 
     expect(filters.native_compaction_v2).toBe(true)
     expect(wrapper.emitted('change')).toBeTruthy()
+  })
+})
+
+
+describe('UsageFilters — Tibo route degradation', () => {
+  it('emits true and false route states without confusing false with all', async () => {
+    const filters = defaultFilters()
+    const wrapper = mountFilters(filters)
+    const select = wrapper.findAllComponents({ name: 'Select' }).find(component =>
+      component.props('options')?.some((option: { label: string }) => option.label === 'Degraded only')
+    )
+    expect(select).toBeDefined()
+    expect(select!.props('options')).toEqual([
+      { value: null, label: 'All route states' },
+      { value: true, label: 'Degraded only' },
+      { value: false, label: 'Not degraded only' }
+    ])
+    select!.vm.$emit('update:modelValue', false)
+    select!.vm.$emit('change')
+    await wrapper.vm.$nextTick()
+    expect(filters.route_degraded).toBe(false)
+    expect(wrapper.emitted('change')).toHaveLength(1)
+    wrapper.unmount()
+  })
+
+  it.each(['errors', 'ranking', 'cleanup'] as const)('hides the unsupported filter in %s mode', mode => {
+    const wrapper = mount(UsageFilters, {
+      props: { modelValue: defaultFilters(), exporting: false, startDate: '', endDate: '', mode },
+      global: { stubs: { Select: true, Teleport: true } }
+    })
+    expect(wrapper.text()).not.toContain('Route degradation')
+    wrapper.unmount()
   })
 })

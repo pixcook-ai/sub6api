@@ -26,7 +26,9 @@
         <p class="input-hint">{{ t('admin.accounts.notesHint') }}</p>
       </div>
 
-      <OpenAIBPSAccountFields v-if="account.platform === 'openai_bps'" v-model="bpsDraft" editing :expires-at="String(account.credentials?.expires_at ?? '')" :credential-state="account.bps_credential_state" :account-status="account.status" :schedulable="account.schedulable" />
+      <OpenAIBPSAccountFields v-if="account.platform === 'openai_bps'" v-model="bpsDraft" editing :account-id="account.id" :expires-at="String(account.credentials?.expires_at ?? '')" :credential-state="account.bps_credential_state" :account-status="account.status" :schedulable="account.schedulable" />
+
+      <OpenAILoginCredentialNotice v-if="account.type === 'oauth' && (account.platform === 'openai' || account.platform === 'openai_bps')" :account-id="account.id" />
 
       <!-- API Key fields (only for apikey type) -->
       <div v-if="account.type === 'apikey'" class="space-y-4">
@@ -1652,7 +1654,11 @@
           <label class="input-label mb-0">{{ t('admin.accounts.proxy') }}</label>
           <ProxyAdBanner />
         </div>
-        <ProxySelector v-model="form.proxy_id" :proxies="proxies" />
+        <OpenAIProxySettings v-if="openaiProxySupported"
+          v-model:mode="openaiProxyMode" v-model:single-proxy-id="form.proxy_id" v-model:proxy-ids="openaiProxyIds"
+          :proxies="proxies" :loading="proxiesLoading" :load-error="proxiesLoadError" :current-account-id="account.id"
+          :user-id="userId" @retry="emit('retry-proxies')" />
+        <ProxySelector v-else v-model="form.proxy_id" :proxies="proxies" />
       </div>
 
       <UpstreamRequestIdHeaderField
@@ -2393,6 +2399,12 @@
         <div class="flex items-center justify-between gap-3"><label class="input-label mb-0">{{ t('admin.accounts.openai.codexTicketHistory') }}</label><button type="button" class="text-xs font-semibold text-indigo-600 dark:text-indigo-400" @click="emit('codex-tickets')">{{ t('admin.accounts.openai.codexTicketHistory') }} →</button></div>
         <div class="mt-3 grid gap-2 sm:grid-cols-2"><div v-for="ticket in codexTurnTickets" :key="ticket.model" class="rounded-lg border border-gray-200 p-3 text-xs dark:border-dark-600"><div class="flex justify-between gap-2"><span class="break-all font-mono font-semibold">{{ ticket.model }}</span><span :class="ticket.ready ? 'text-emerald-600' : 'text-amber-600'">{{ ticket.ready ? '●' : '○' }} {{ t(ticket.ready ? 'admin.accounts.openai.codexTicketReadyShort' : 'admin.accounts.openai.codexTicketMissingShort') }}</span></div><p class="mt-2 text-gray-500">{{ ticket.length }} bytes · turn-state {{ ticket.turn_state_present ? '✓' : '—' }} · Cookie {{ ticket.cookie_present ? '✓' : '—' }}</p></div></div>
       </div>
+
+      <TiboAccountHealthPanel
+        v-if="account?.platform === 'openai' || (account?.platform === 'openai_bps' && account?.type === 'oauth')"
+        :account="account"
+        @updated="emit('updated', $event)"
+      />
 
       <!-- Codex 指纹收敛模式（仅 OpenAI OAuth） -->
       <div
@@ -3168,6 +3180,7 @@
 
 <script setup lang="ts">
 import OpenAIBPSAccountFields from './OpenAIBPSAccountFields.vue'
+import OpenAILoginCredentialNotice from './OpenAILoginCredentialNotice.vue'
 import { newBPSAccountDraft, bpsCredentials } from '@/utils/openaiBps'
 import { ref, reactive, computed, watch, nextTick, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -3197,8 +3210,10 @@ import HelpTooltip from '@/components/common/HelpTooltip.vue'
 import UpstreamRequestIdHeaderField from '@/components/account/UpstreamRequestIdHeaderField.vue'
 import OpenAIRequestTimezoneField from '@/components/account/OpenAIRequestTimezoneField.vue'
 import Toggle from '@/components/common/Toggle.vue'
+import TiboAccountHealthPanel from '@/components/account/TiboAccountHealthPanel.vue'
 import Icon from '@/components/icons/Icon.vue'
 import ProxySelector from '@/components/common/ProxySelector.vue'
+import OpenAIProxySettings from '@/components/account/OpenAIProxySettings.vue'
 import ProxyAdBanner from '@/components/common/ProxyAdBanner.vue'
 import GroupSelector from '@/components/common/GroupSelector.vue'
 import ModelWhitelistSelector from '@/components/account/ModelWhitelistSelector.vue'
@@ -3272,12 +3287,16 @@ interface Props {
   show: boolean
   account: Account | null
   proxies: Proxy[]
+  proxiesLoading?: boolean
+  proxiesLoadError?: boolean
+  userId?: number | null
   groups: AdminGroup[]
 }
 
 const props = defineProps<Props>()
 const emit = defineEmits<{
   close: []
+  'retry-proxies': []
   test: [account: Account]
   updated: [account: Account]
   'codex-tickets': []
@@ -3301,6 +3320,30 @@ const selectableGroups = computed(() => {
 // Spark 影子账号(parent_account_id 非空):代理恒继承母账号,不可独立编辑(外审 B/P1),
 // 故隐藏代理选择器。
 const isSparkShadow = computed(() => props.account?.parent_account_id != null)
+
+const openaiProxySupported = computed(() => {
+  const account = props.account
+  if (!['openai', 'openai_bps'].includes(account?.platform ?? '') || account?.type !== 'oauth' || isSparkShadow.value) return false
+  const credentials = (account.credentials ?? {}) as Record<string, unknown>
+  const modes = [credentials.auth_mode, credentials.openai_auth_mode].map(mode => String(mode ?? '').trim().toLowerCase())
+  return !modes.some(mode => mode === 'agentidentity' || mode === 'personalaccesstoken' || mode === 'personal_access_token')
+})
+const openaiProxyMode = ref<'single' | 'request'>('single')
+const openaiProxyIds = ref<number[]>([])
+
+function savedOpenAIProxyConfig(account: Account): { mode: 'single' | 'request'; ids: number[] } {
+  const extra = account.extra ?? {}
+  const hasUnifiedMode = Object.prototype.hasOwnProperty.call(extra, 'openai_proxy_mode')
+  const useLegacy = !hasUnifiedMode && account.platform === 'openai_bps'
+  const mode = hasUnifiedMode ? extra.openai_proxy_mode : useLegacy ? extra.openai_excel_bps_proxy_mode : undefined
+  const ids = hasUnifiedMode ? extra.openai_proxy_ids : useLegacy ? extra.openai_excel_bps_proxy_ids : undefined
+  return {
+    mode: mode === 'request' ? 'request' : 'single',
+    ids: Array.isArray(ids)
+      ? [...new Set(ids.filter((id): id is number => typeof id === 'number' && Number.isSafeInteger(id) && id > 0))]
+      : []
+  }
+}
 
 const codexTurnTickets = computed(() => props.account?.codex_turn_tickets ?? [])
 
@@ -4224,6 +4267,9 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   form.name = newAccount.name
   form.notes = newAccount.notes || ''
   form.proxy_id = newAccount.proxy_id
+  const proxyConfig = savedOpenAIProxyConfig(newAccount)
+  openaiProxyMode.value = proxyConfig.mode
+  openaiProxyIds.value = proxyConfig.ids
   form.concurrency = newAccount.concurrency
   form.load_factor = newAccount.load_factor ?? null
   form.priority = newAccount.priority
@@ -5241,6 +5287,22 @@ const submitUpdateAccount = async (accountID: number, updatePayload: Record<stri
 
 const handleSubmit = async () => {
   if (!props.account) return
+  const savedProxyConfig = savedOpenAIProxyConfig(props.account)
+  const proxyRoutingChanged = openaiProxyMode.value !== savedProxyConfig.mode ||
+    openaiProxyIds.value.length !== savedProxyConfig.ids.length ||
+    openaiProxyIds.value.some(id => !savedProxyConfig.ids.includes(id))
+  if (openaiProxySupported.value && openaiProxyMode.value === 'request' && proxyRoutingChanged) {
+    if (openaiProxyIds.value.length === 0) {
+      appStore.showError(t('admin.accounts.openai.proxyRequired'))
+      return
+    }
+    const usable = props.proxies.some(proxy => openaiProxyIds.value.includes(proxy.id) && proxy.status === 'active' &&
+      (!proxy.expires_at || Date.parse(proxy.expires_at) > Date.now()))
+    if (props.proxiesLoading || props.proxiesLoadError || !usable) {
+      appStore.showError(t('admin.accounts.openai.proxyNoUsable'))
+      return
+    }
+  }
   const accountID = props.account.id
 
   if (form.status !== 'active' && form.status !== 'inactive' && form.status !== 'error') {
@@ -5906,6 +5968,14 @@ const handleSubmit = async () => {
       }
 
       updatePayload.extra = newExtra
+    }
+
+    if (openaiProxySupported.value) {
+      updatePayload.extra = {
+        ...((updatePayload.extra ?? props.account.extra ?? {}) as Record<string, unknown>),
+        openai_proxy_mode: openaiProxyMode.value,
+        openai_proxy_ids: [...openaiProxyIds.value],
+      }
     }
 
     // Compose the search override after platform extras so neither overwrites the other.

@@ -1,0 +1,14 @@
+{
+  "name": "tosub2-login",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Minimal protocol-login runtime vendored from toSub2 for sub6api batch OAuth login",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "jsdom": "26.1.0"
+  }
+}

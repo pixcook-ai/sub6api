@@ -88,6 +88,9 @@ func (p *OpenAITokenProvider) RefreshAfterUnauthorized(ctx context.Context, acco
 	executor := &openAIUnauthorizedRefreshExecutor{OAuthRefreshExecutor: p.executor, rejectedToken: rejectedAccessToken, accountID: account.GetCredential("chatgpt_account_id")}
 	result, err := p.refreshAPI.RefreshIfNeeded(withOAuthRefreshRequestPath(ctx), account, executor, 0)
 	if err != nil {
+		if isOpenAIRequestProxyRoutingError(err) {
+			return "", err
+		}
 		var rejection *openai.RefreshTokenError
 		if errors.As(err, &rejection) {
 			return "", rejection

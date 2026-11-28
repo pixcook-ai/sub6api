@@ -53,6 +53,7 @@ type AccountHandler struct {
 	adminService            service.AdminService
 	oauthService            *service.OAuthService
 	openaiOAuthService      *service.OpenAIOAuthService
+	openAIBPSRefreshAPI     *service.OAuthRefreshAPI
 	geminiOAuthService      *service.GeminiOAuthService
 	antigravityOAuthService *service.AntigravityOAuthService
 	grokOAuthService        service.GrokOAuthTokenService
@@ -94,6 +95,10 @@ func (h *AccountHandler) SetCodexTicketSettings(settings *service.SettingService
 func (h *AccountHandler) SetCodexTicketGateway(gateway *service.OpenAIGatewayService) {
 	h.codexTicketGateway = gateway
 	h.codexDiagnostic = gateway
+}
+
+func (h *AccountHandler) SetOpenAIBPSRefreshAPI(api *service.OAuthRefreshAPI) {
+	h.openAIBPSRefreshAPI = api
 }
 
 // NewAccountHandler creates a new admin account handler
@@ -357,6 +362,9 @@ const accountListGroupUngroupedQueryValue = "ungrouped"
 func (h *AccountHandler) accountResponseFromService(account *service.Account) *dto.Account {
 	out := dto.AccountFromService(account)
 	h.enrichCodexTicketStatus(account, out)
+	if out != nil && h != nil && h.accountTestService != nil {
+		out.TiboAccountStatuses = h.accountTestService.OpenAITiboAccountStatuses(account, time.Now())
+	}
 	if h != nil && h.ollamaCloudUsage != nil && out != nil {
 		h.ollamaCloudUsage.EnrichState(out.OllamaCloudUsage)
 	}
@@ -366,6 +374,9 @@ func (h *AccountHandler) accountResponseFromService(account *service.Account) *d
 func (h *AccountHandler) accountListResponseFromService(account *service.Account) *dto.Account {
 	out := dto.AccountFromServiceShallow(account)
 	h.enrichCodexTicketStatus(account, out)
+	if out != nil && h != nil && h.accountTestService != nil {
+		out.TiboAccountStatuses = h.accountTestService.OpenAITiboAccountStatuses(account, time.Now())
+	}
 	if out != nil && account != nil {
 		out.Proxy = dto.ProxyFromService(account.Proxy)
 	}
@@ -1455,7 +1466,8 @@ func (h *AccountHandler) PreviewFromCRS(c *gin.Context) {
 // Returns (updatedAccount, warning, error) where warning is used for Antigravity ProjectIDMissing scenario.
 func (h *AccountHandler) refreshSingleAccount(ctx context.Context, account *service.Account) (*service.Account, string, error) {
 	if account.IsOpenAIBPS() {
-		return nil, "", infraerrors.BadRequest("BPS_MANUAL_TOKEN_ONLY", "Replace access_token in the BPS account settings; automatic refresh is unsupported")
+		updated, err := h.openAIBPSRefreshAPI.RefreshOpenAIBPSAccount(ctx, account, h.openaiOAuthService)
+		return updated, "", err
 	}
 	if !account.IsOAuth() {
 		return nil, "", infraerrors.BadRequest("NOT_OAUTH", "cannot refresh non-OAuth account")
@@ -2863,11 +2875,35 @@ func (h *AccountHandler) GetAvailableModels(c *gin.Context) {
 	}
 
 	if account.IsOpenAIBPS() {
-		ids := service.OpenAIBPSDefaultModels()
-		if mapping := account.GetModelMapping(); len(mapping) > 0 {
-			ids = make([]string, 0, len(mapping))
-			for id := range mapping {
-				ids = append(ids, id)
+		var ids []string
+		fetched := false
+		// The BPS upstream catalog is authoritative; mapping entries only add aliases
+		// whose target the upstream allows.
+		if h.codexTicketGateway != nil {
+			if upstream, fetchErr := h.codexTicketGateway.FetchOpenAIBPSModelIDs(c.Request.Context(), account); fetchErr == nil {
+				fetched = true
+				allowed := make(map[string]struct{}, len(upstream))
+				for _, id := range upstream {
+					allowed[id] = struct{}{}
+				}
+				ids = append(ids, upstream...)
+				for alias, target := range account.GetModelMapping() {
+					if _, ok := allowed[target]; !ok {
+						continue
+					}
+					if _, dup := allowed[alias]; !dup {
+						ids = append(ids, alias)
+					}
+				}
+			}
+		}
+		if !fetched {
+			ids = service.OpenAIBPSDefaultModels()
+			if mapping := account.GetModelMapping(); len(mapping) > 0 {
+				ids = make([]string, 0, len(mapping))
+				for id := range mapping {
+					ids = append(ids, id)
+				}
 			}
 		}
 		sort.Strings(ids)
