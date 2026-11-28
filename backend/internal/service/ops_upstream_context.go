@@ -403,6 +403,9 @@ type OpsUpstreamErrorEvent struct {
 	// Outcome
 	UpstreamStatusCode int    `json:"upstream_status_code,omitempty"`
 	UpstreamRequestID  string `json:"upstream_request_id,omitempty"`
+	UpstreamEvent      string `json:"upstream_event,omitempty"`
+	UpstreamErrorType  string `json:"upstream_error_type,omitempty"`
+	RetryAfterSeconds  int    `json:"retry_after_seconds,omitempty"`
 
 	// UpstreamURL is the actual upstream URL that was called (host + path, query/fragment stripped).
 	// Helps debug 404/routing errors by showing which endpoint was targeted.

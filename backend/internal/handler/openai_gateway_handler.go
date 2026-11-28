@@ -733,7 +733,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 				zap.Int("excluded_account_count", len(failedAccountIDs)),
 			)
 			if requestPlatform == service.PlatformOpenAIBPS && service.OpenAIBPSHasBinding(c.Request.Context()) {
-				service.WriteOpenAIBPSAccountUnavailable(c)
+				h.gatewayService.WriteOpenAIBPSBoundAccountError(c)
 				return
 			}
 			if len(failedAccountIDs) == 0 {

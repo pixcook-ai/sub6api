@@ -119,6 +119,9 @@ func (s *OpenAIGatewayService) bpsRepairTool(
 	var corrected, usage map[string]any
 	pending := map[string]bool{}
 	err = readBPSEvents(upstream, maxSize, func(kind string, payload map[string]any) error {
+		if err := repairCtx.Err(); err != nil {
+			return err
+		}
 		response, _ := payload["response"].(map[string]any)
 		if reported, ok := payload["usage"].(map[string]any); ok {
 			usage = reported
@@ -139,7 +142,7 @@ func (s *OpenAIGatewayService) bpsRepairTool(
 		case "response.completed", "response.done", "response.failed", "response.incomplete", "response.cancelled", "error":
 			corrected = response
 			if kind != "response.completed" && kind != "response.done" {
-				return s.bpsTerminalError(ctx, c, account, kind, payload, r.Model)
+				return s.bpsTerminalError(repairCtx, c, account, kind, payload, r.Model, upstream)
 			}
 		}
 		return nil

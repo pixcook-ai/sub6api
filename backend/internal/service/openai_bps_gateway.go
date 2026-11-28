@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -24,7 +23,7 @@ func WriteOpenAIBPSError(c *gin.Context, err error) {
 	if errors.As(err, &typed) {
 		failure = typed
 	}
-	setOpsUpstreamError(c, failure.Status, failure.Message, "")
+	setOpsUpstreamError(c, c.GetInt("bps_upstream_status"), failure.Message, "")
 	payload := gin.H{"type": "server_error", "code": failure.Code, "message": failure.Message}
 	switch failure.Status {
 	case 400, 409:
@@ -35,9 +34,12 @@ func WriteOpenAIBPSError(c *gin.Context, err error) {
 		payload["type"] = "permission_error"
 	case 429:
 		payload["type"] = "rate_limit_error"
+		if seconds := c.GetInt(bpsRetryAfterKey); seconds > 0 {
+			payload["retry_after_seconds"] = seconds
+		}
 	}
 	if c.Writer.Written() && strings.Contains(c.Writer.Header().Get("Content-Type"), "text/event-stream") {
-		MarkOpsStreamError(c, failure.Code, failure.Message, failure.Status)
+		MarkOpsStreamFailure(c, stringValue(payload["type"]), failure.Code, failure.Message, failure.Status)
 		sequence := c.GetInt("bps_sequence")
 		responseID := c.GetString("bps_response_id")
 		if responseID == "" {
@@ -50,17 +52,19 @@ func WriteOpenAIBPSError(c *gin.Context, err error) {
 		data, _ := json.Marshal(gin.H{"type": "response.failed", "sequence_number": sequence, "response": response})
 		_, _ = fmt.Fprintf(c.Writer, "event: response.failed\ndata: %s\n\n", data)
 		c.Writer.Flush()
+		MarkResponseCommitted(c)
 		return
 	}
 	c.JSON(failure.Status, gin.H{"error": payload})
+	MarkResponseCommitted(c)
 }
 
 // Only explicit provider identifiers may change model or credential health.
 // Free text and unknown identifiers remain a safe generic failure.
-func (s *OpenAIGatewayService) bpsTerminalError(ctx context.Context, c *gin.Context, account *Account, typ string, payload map[string]any, model string) *bpsError {
+func (s *OpenAIGatewayService) bpsTerminalError(ctx context.Context, c *gin.Context, account *Account, typ string, payload map[string]any, model string, upstream *http.Response) *bpsError {
 	failure := &bpsError{502, "bps_response_failed", "BPS failed to complete the response"}
 	if typ == "response.cancelled" {
-		return &bpsError{502, "bps_response_cancelled", "BPS cancelled the response"}
+		failure = &bpsError{502, "bps_response_cancelled", "BPS cancelled the response"}
 	}
 	response, _ := payload["response"].(map[string]any)
 	detail, _ := response["error"].(map[string]any)
@@ -70,23 +74,34 @@ func (s *OpenAIGatewayService) bpsTerminalError(ctx context.Context, c *gin.Cont
 	if detail == nil && typ == "error" {
 		detail = payload
 	}
-	code := stringValue(detail["code"])
-	switch code {
-	case "rate_limit_exceeded":
-		failure = &bpsError{429, "bps_rate_limited", "BPS rate limit was reached"}
+	accessToken := bpsRequestCredentialSnapshot(ctx, account).AccessToken
+	code := bpsDiagnosticIdentifier(stringValue(detail["code"]), accessToken)
+	errorType := bpsDiagnosticIdentifier(stringValue(detail["type"]), accessToken)
+	incomplete, _ := response["incomplete_details"].(map[string]any)
+	classifier := code
+	if classifier == "" {
+		classifier = errorType
+	}
+	switch classifier {
+	case "rate_limit_exceeded", "rate_limit_error", "usage_limit_reached", "insufficient_quota":
+		failure = s.bpsRecordRateLimit(ctx, c, account, upstream.Header, detail)
 	case "model_not_allowed", "basispoints_model_access_changed":
 		failure = &bpsError{403, "bps_model_not_allowed", "BPS model is not permitted"}
 		if s.accountRepo != nil {
-			_ = s.accountRepo.SetModelRateLimit(ctx, account.ID, model, time.Now().Add(30*time.Minute), "BPS model is not permitted: "+code)
+			_ = s.accountRepo.SetModelRateLimit(ctx, account.ID, model, time.Now().Add(30*time.Minute), "BPS model is not permitted: "+classifier)
 		}
 	case "token_expired", "token_revoked", "invalid_api_key":
 		failure = &bpsError{401, "bps_invalid_credentials", "BPS credentials were rejected"}
-		s.recordOpenAIBPSCredentialFailure(ctx, account, code)
-	default:
-		return failure
+		s.recordOpenAIBPSCredentialFailure(ctx, account, classifier)
 	}
 	c.Set("bps_upstream_error_code", code)
-	appendOpsUpstreamError(c, OpsUpstreamErrorEvent{AccountID: account.ID, AccountName: account.Name, Platform: account.Platform, UpstreamStatusCode: c.GetInt("bps_upstream_status"), Kind: "stream_error", Message: failure.Message, Detail: code})
+	appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+		AccountID: account.ID, AccountName: account.Name, Platform: account.Platform,
+		UpstreamStatusCode: upstream.StatusCode, UpstreamRequestID: bpsDiagnosticIdentifier(upstream.Header.Get("x-request-id"), accessToken),
+		Kind: "stream_error", UpstreamEvent: typ, UpstreamErrorType: errorType,
+		Reason:  bpsDiagnosticIdentifier(stringValue(incomplete["reason"]), accessToken),
+		Message: failure.Message, Detail: code, RetryAfterSeconds: c.GetInt(bpsRetryAfterKey),
+	})
 	return failure
 }
 
@@ -159,20 +174,16 @@ func (s *OpenAIGatewayService) bpsHTTPError(ctx context.Context, c *gin.Context,
 			code = "bps_access_denied"
 		}
 	case 429:
-		delay := time.Minute
-		if n, e := strconv.Atoi(resp.Header.Get("Retry-After")); e == nil && n > 0 {
-			delay = time.Duration(n) * time.Second
-		} else if until, e := http.ParseTime(resp.Header.Get("Retry-After")); e == nil && until.After(time.Now()) {
-			delay = time.Until(until)
-		}
-		if s.accountRepo != nil {
-			_ = s.accountRepo.SetRateLimited(ctx, account.ID, time.Now().Add(delay))
-		}
+		var payload map[string]any
+		_ = bpsDecode(data, &payload)
+		detail, _ := payload["error"].(map[string]any)
+		failure := s.bpsRecordRateLimit(ctx, c, account, resp.Header, detail)
+		code, message = failure.Code, failure.Message
 	}
-	if value := resp.Header.Get("Retry-After"); value != "" {
+	if value := resp.Header.Get("Retry-After"); resp.StatusCode != http.StatusTooManyRequests && value != "" && !c.Writer.Written() {
 		c.Header("Retry-After", value)
 	}
-	appendOpsUpstreamError(c, OpsUpstreamErrorEvent{AccountID: account.ID, AccountName: account.Name, Platform: account.Platform, UpstreamStatusCode: resp.StatusCode, Kind: "http_error", Message: message, Detail: diagnosticCode})
+	appendOpsUpstreamError(c, OpsUpstreamErrorEvent{AccountID: account.ID, AccountName: account.Name, Platform: account.Platform, UpstreamStatusCode: resp.StatusCode, Kind: "http_error", Message: message, Detail: diagnosticCode, RetryAfterSeconds: c.GetInt(bpsRetryAfterKey)})
 	if !bpsHasBinding(ctx) && (resp.StatusCode == 429 || resp.StatusCode >= 500) {
 		return &UpstreamFailoverError{StatusCode: resp.StatusCode, ResponseBody: []byte(bpsJSON(map[string]any{"error": map[string]any{"message": message}})), ClientMessage: message}
 	}
@@ -282,6 +293,12 @@ func (s *OpenAIGatewayService) forwardOpenAIBPS(ctx context.Context, c *gin.Cont
 	started := time.Now()
 	defer func() {
 		if err != nil {
+			if c.Request.Context().Err() != nil {
+				if result != nil {
+					result.ClientDisconnect = true
+				}
+				return
+			}
 			var failover *UpstreamFailoverError
 			if !errors.As(err, &failover) {
 				WriteOpenAIBPSError(c, err)
@@ -446,7 +463,7 @@ func (s *OpenAIGatewayService) forwardOpenAIBPS(ctx context.Context, c *gin.Cont
 				result.Usage = bpsReadUsage(payload)
 			}
 			c.Set("bps_failure_usage", result.Usage)
-			return s.bpsTerminalError(ctx, c, account, typ, payload, r.Model)
+			return s.bpsTerminalError(ctx, c, account, typ, payload, r.Model, resp)
 		}
 		if typ == "response.completed" || typ == "response.done" {
 			response, ok := payload["response"].(map[string]any)
