@@ -467,7 +467,26 @@ func (s *OpenAIGatewayService) forwardOpenAIBPS(ctx context.Context, c *gin.Cont
 				return &bpsError{502, "bps_invalid_tool_call", "BPS completed response omitted an original tool item"}
 			}
 			transformed, e := s.bpsTransformResponse(ctx, account, r, response)
+			if index, rejected, raw, ok := bpsRepairableTool(r, response, e); ok {
+				// Release the completed body before submitting the continuation.
+				timer.Stop()
+				_ = resp.Body.Close()
+				corrected, history, usage, repairErr := s.bpsRepairTool(ctx, c, account, r, response, rejected, raw, proxyURL, idle, maxSize)
+				if usage != nil {
+					total, _ := response["usage"].(map[string]any)
+					response["usage"] = bpsAddRepairUsage(total, usage)
+					result.Usage = bpsReadUsage(response)
+				}
+				if repairErr != nil {
+					c.Set("bps_failure_usage", result.Usage)
+					return repairErr
+				}
+				output[index] = corrected
+				r.toolRepairHistory = history
+				transformed, e = s.bpsTransformResponse(ctx, account, r, response)
+			}
 			if e != nil {
+				c.Set("bps_failure_usage", result.Usage)
 				return e
 			}
 			if !r.Stream {

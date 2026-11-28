@@ -32,10 +32,13 @@ type bpsRequest struct {
 	TurnID                       string
 	AgentIteration               int
 	Structured                   *bpsStructuredOutput
+	toolRepairHistory            []any
 }
 type bpsNativeCall struct {
-	Native map[string]any `json:"native"`
-	Client map[string]any `json:"client"`
+	Native        map[string]any `json:"native"`
+	Client        map[string]any `json:"client"`
+	RepairHistory []any          `json:"repair_history,omitempty"`
+	RepairTurnID  string         `json:"repair_turn_id,omitempty"`
 }
 type bpsCompactState struct {
 	Summary        string `json:"summary"`
@@ -274,6 +277,7 @@ func (s *OpenAIGatewayService) prepareOpenAIBPS(ctx context.Context, c *gin.Cont
 	}
 	translated := make([]any, 0, len(input)+3)
 	restoredCalls := map[string]bool{}
+	repairedTurns := map[int]string{}
 	compactIndex := -1
 	compactRef := ""
 	var lastCompact bpsCompactState
@@ -294,6 +298,7 @@ func (s *OpenAIGatewayService) prepareOpenAIBPS(ctx context.Context, c *gin.Cont
 			if e := s.bpsGet(ctx, bpsStateKey(r.Scope, account, "call", id), &saved); e != nil {
 				return nil, e
 			}
+			translated = append(translated, saved.RepairHistory...)
 			translated = append(translated, saved.Native)
 			restoredCalls[id] = true
 		case "function_call_output", "custom_tool_call_output":
@@ -306,8 +311,12 @@ func (s *OpenAIGatewayService) prepareOpenAIBPS(ctx context.Context, c *gin.Cont
 				return nil, e
 			}
 			if !restoredCalls[id] {
+				translated = append(translated, saved.RepairHistory...)
 				translated = append(translated, saved.Native)
 				restoredCalls[id] = true
+			}
+			if saved.RepairTurnID != "" {
+				repairedTurns[index] = saved.RepairTurnID
 			}
 			output := item["output"]
 			if bpsIsNativePlan(stringValue(saved.Native["name"])) && strings.EqualFold(strings.TrimSpace(stringValue(output)), "Plan updated") {
@@ -375,6 +384,11 @@ func (s *OpenAIGatewayService) prepareOpenAIBPS(ctx context.Context, c *gin.Cont
 		translated = append(translated, bpsMessage("user", bpsSummaryPrompt))
 	}
 	r.TurnID, r.AgentIteration = bpsTurnState(r.Scope, input, compactIndex, compactRef, lastCompact)
+	for inputIndex, turnID := range repairedTurns {
+		if inputIndex > compactIndex && turnID == r.TurnID {
+			r.AgentIteration++
+		}
+	}
 	metadata := map[string]any{"task_id": uuid.NewSHA1(uuid.NameSpaceURL, []byte(r.Scope)).String(), "turn_id": r.TurnID, "agent_iteration": fmt.Sprint(r.AgentIteration)}
 	upstream := map[string]any{"model": r.Model, "model_selection": "explicit", "stream": true, "store": false, "input": translated, "reasoning_effort": r.Effort, "metadata": metadata, "prompt_cache_key": bpsDigest(r.Scope)}
 	r.Body, _ = json.Marshal(upstream)
@@ -458,11 +472,14 @@ func bpsConvertTool(native map[string]any, r *bpsRequest) (map[string]any, error
 	if nativeName == "run_officejs" || nativeName == "functions.run_officejs" {
 		var err error
 		envelope, marked, err = bpsCustomTransportEnvelope(args)
-		if err == nil && !marked {
-			envelope, err = bpsDecodeTransportEnvelope(args["code"])
-		}
 		if err != nil {
 			return invalid(err.Error())
+		}
+		if !marked {
+			envelope, err = bpsDecodeTransportEnvelope(args["code"])
+			if err != nil {
+				return nil, &bpsToolEnvelopeError{&bpsError{502, "bps_invalid_tool_call", err.Error()}}
+			}
 		}
 		name, err = bpsEnvelopeName(envelope)
 		if err != nil {
@@ -613,7 +630,11 @@ func (s *OpenAIGatewayService) bpsTransformResponse(ctx context.Context, account
 			if e != nil {
 				return nil, e
 			}
-			if e = s.bpsPut(ctx, bpsStateKey(r.Scope, account, "call", stringValue(item["call_id"])), bpsNativeCall{Native: item, Client: client}); e != nil {
+			saved := bpsNativeCall{Native: item, Client: client}
+			if len(r.toolRepairHistory) > 0 {
+				saved.RepairHistory, saved.RepairTurnID = r.toolRepairHistory, r.TurnID
+			}
+			if e = s.bpsPut(ctx, bpsStateKey(r.Scope, account, "call", stringValue(item["call_id"])), saved); e != nil {
 				return nil, e
 			}
 			output[i] = client
